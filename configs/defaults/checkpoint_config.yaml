@@ -1,0 +1,35 @@
+# Checkpoint configuration for model saving and early stopping
+
+checkpointing:
+  # Saving strategy
+  save_interval: 5        # Save every N epochs
+  save_interval_steps: null  # Or save every N steps (optional)
+  save_last: true         # Always save last checkpoint
+  save_best: true         # Save best model based on metric
+  max_keep_checkpoints: 5  # Keep only last N checkpoints (saves disk space)
+  
+  # Best model selection
+  monitor_metric: "val_loss"  # Metric to monitor for best model
+  # Options: "mAP50", "mAP50-95", "mask_IoU", "val_loss"
+  mode: "min"             # "max" for accuracy metrics, "min" for loss
+  min_delta: 0.001        # Minimum improvement to consider
+  
+  # Checkpoint content
+  save_optimizer: true    # Save optimizer state (needed for resume)
+  save_scheduler: true    # Save LR scheduler state
+  save_scaler: true       # Save AMP scaler state (if using mixed precision)
+  save_rng_state: true    # Save random states for reproducibility
+  
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 15          # Stop if no improvement for N epochs
+    min_delta: 0.001      # Minimum improvement threshold
+    restore_best_weights: true  # Restore best weights after stopping
+  
+  # Checkpoint naming
+  checkpoint_format: "epoch_{epoch:04d}.pth"
+  best_checkpoint_name: "best.pth"
+  last_checkpoint_name: "last.pth"
+
+

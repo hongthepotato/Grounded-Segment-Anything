@@ -21,3 +21,13 @@ yapf
 nltk
 fairscale
 litellm
+
+# Core pipeline dependencies
+peft>=0.7.0  # Parameter-Efficient Fine-Tuning (LoRA)
+ultralytics>=8.0.0  # YOLOv8 for student models
+albumentations>=1.3.0  # Advanced augmentation library
+tensorboard>=2.14.0  # Training visualization
+onnx>=1.14.0  # Model export
+segment-anything  # SAM models
+scikit-learn  # For stratified splitting
+tqdm  # Progress bars

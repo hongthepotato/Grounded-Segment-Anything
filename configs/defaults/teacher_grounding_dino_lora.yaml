@@ -1,0 +1,45 @@
+# Grounding DINO LoRA Fine-tuning Configuration
+# This config contains ONLY Grounding DINO-specific settings.
+# Shared training params are in teacher_training.yaml
+
+# Model configuration
+model:
+  name: "grounding_dino"
+  base_checkpoint: "data/models/pretrained/groundingdino_swint_ogc.pth"
+
+# LoRA Configuration (PEFT) - Grounding DINO specific
+lora:
+  enabled: true
+  r: 16                    # LoRA rank (DINO uses higher rank than SAM)
+  lora_alpha: 32           # LoRA scaling factor (typically 2*r)
+  # vision-focused fine-tuning
+  # "value_proj", "output_proj", "v_proj", "out_v_proj"
+  # text-focused fine-tuning
+  # "out_proj", "l_proj", "out_l_proj"
+  # Focus cross-model fusion
+  # "v_proj", "l_proj", "values_v_proj", "values_l_proj"
+  target_modules:          # Which layers to add LoRA adapters
+    - "value_proj"
+    - "output_proj"
+    - "v_proj"
+    - "out_proj"
+    - "l_proj"
+    - "out_l_proj"
+    - "values_v_proj"
+    - "values_l_proj"
+  lora_dropout: 0.1        # Dropout for LoRA layers
+  bias: "none"
+  task_type: "FEATURE_EXTRACTION"
+
+# Freezing strategy (Partial Freeze + LoRA)
+freeze_backbone: true      # Freeze Swin Transformer
+freeze_bbox_embed: false
+bert_model_path: "data/models/pretrained/bert-base-uncased"
+
+# Model-specific training settings
+learning_rate: 1.0e-4      # DINO-specific LR (can differ from SAM)
+momentum: 0.9              # For SGD (if used instead of AdamW)
+
+# Evaluation metric
+evaluation:
+  metric: "mAP50"          # Primary metric for DINO model selection

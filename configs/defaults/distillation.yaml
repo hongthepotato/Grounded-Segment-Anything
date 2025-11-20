@@ -1,0 +1,80 @@
+# Knowledge Distillation Configuration
+# For training prompt-free student models
+
+distillation:
+  # Class mapping (AUTO-FILLED from COCO dataset)
+  class_mapping: {}  # Platform fills this automatically
+  
+  # Student model selection (AUTO-SELECTED based on data)
+  # Platform chooses:
+  #   - has_boxes + has_masks → yolov8s-seg
+  #   - has_boxes only → yolov8s
+  #   - has_masks only → fastsam-s
+  student_model: null  # Auto-selected
+  student_size: "s"    # Options: n, s, m, l, x
+  
+  # Loss components - weights auto-adjusted based on available data
+  loss_weights:
+    detection: 0.3        # Auto-disabled if no boxes in dataset
+    segmentation: 0.3     # Auto-disabled if no masks in dataset
+    logit: 0.2            # Auto-disabled if no DINO teacher
+    feature: 0.2          # From whichever teachers are loaded
+  
+  # Knowledge distillation parameters
+  temperature: 4.0        # Temperature for soft targets
+  alpha: 0.5              # Balance between KD loss and task loss
+  
+  # Training hyperparameters
+  training:
+    epochs: 300
+    batch_size: 32
+    learning_rate: 1.0e-3
+    optimizer: "SGD"
+    momentum: 0.937
+    weight_decay: 0.0005
+    grad_clip: 10.0
+    num_workers: 4
+  
+  # Learning rate schedule
+  scheduler:
+    type: "cosine"
+    warmup_epochs: 3
+    warmup_lr: 1.0e-5
+    min_lr: 1.0e-5
+  
+  # Data augmentation (more aggressive for student)
+  augmentation:
+    # Characteristic-based augmentation
+    characteristics:
+      - "changes_shape"
+      - "reflective_surface"
+      - "low_contrast"
+    
+    environment:
+      lighting: "variable"
+      camera: "fixed"
+      background: "busy"
+    
+    intensity: "high"  # More aggressive for student
+    
+    # YOLO-specific augmentations
+    mosaic: 0.5          # Combine 4 images into one
+    mixup: 0.1           # Blend two images
+    copy_paste: 0.15     # Paste rare objects into scenes
+    hsv_h: 0.015         # HSV-Hue augmentation
+    hsv_s: 0.7           # HSV-Saturation
+    hsv_v: 0.4           # HSV-Value
+    degrees: 0.0         # Rotation
+    translate: 0.1       # Translation
+    scale: 0.5           # Scale variation
+    shear: 0.0           # Shear
+    flipud: 0.0          # Vertical flip
+    fliplr: 0.5          # Horizontal flip
+  
+  # Evaluation
+  evaluation:
+    interval: 10
+    save_best: true
+    metric: "mAP50"      # Primary metric for student models
+
+

@@ -1,0 +1,38 @@
+# SAM LoRA Fine-tuning Configuration
+# This config contains ONLY SAM-specific settings.
+# Shared training params are in teacher_training.yaml
+
+# Model configuration
+model:
+  name: "sam"
+  base_checkpoint: "data/models/pretrained/sam_vit_h_4b8939.pth"
+  model_type: "vit_h"     # Options: vit_h, vit_l, vit_b
+
+# LoRA Configuration (PEFT) - SAM specific
+lora:
+  enabled: true
+  r: 8                     # Lower rank for SAM decoder (smaller than DINO)
+  lora_alpha: 16           # Scaling factor
+  target_modules:          # Apply LoRA to mask decoder only
+    - "mask_decoder.transformer.layers.*.self_attn.q_proj"
+    - "mask_decoder.transformer.layers.*.self_attn.k_proj"
+    - "mask_decoder.transformer.layers.*.self_attn.v_proj"
+    - "mask_decoder.output_upscaling.*.weight"
+  lora_dropout: 0.05       # Lower dropout for SAM
+  bias: "none"
+
+# Freezing strategy (Partial Freeze + LoRA)
+freeze_image_encoder: true   # Keep ViT backbone frozen (308M params)
+freeze_prompt_encoder: true  # Keep prompt encoder frozen (3.8M params)
+train_mask_decoder: true     # Fine-tune decoder with LoRA (4.1M → 0.4M trainable)
+
+# Model-specific training settings
+learning_rate: 5.0e-4        # SAM-specific LR (higher than DINO)
+
+# Prompt strategy during fine-tuning
+prompt_type: "boxes"         # Use GT boxes as prompts (auto-gen if masks-only)
+multimask_output: true       # Output multiple mask candidates
+
+# Evaluation metric
+evaluation:
+  metric: "mask_IoU"         # Primary metric for SAM model selection

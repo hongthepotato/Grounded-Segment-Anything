@@ -335,17 +335,17 @@ class GroundingDINO(nn.Module):
         )
         out = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord_list[-1]}
 
-        # # for intermediate outputs
-        # if self.aux_loss:
-        #     out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord_list)
+        # for intermediate outputs (auxiliary losses from decoder layers)
+        if self.aux_loss:
+            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord_list)
 
-        # # for encoder output
-        # if hs_enc is not None:
-        #     # prepare intermediate outputs
-        #     interm_coord = ref_enc[-1]
-        #     interm_class = self.transformer.enc_out_class_embed(hs_enc[-1], text_dict)
-        #     out['interm_outputs'] = {'pred_logits': interm_class, 'pred_boxes': interm_coord}
-        #     out['interm_outputs_for_matching_pre'] = {'pred_logits': interm_class, 'pred_boxes': init_box_proposal}
+        # for encoder output (auxiliary loss from encoder)
+        if hs_enc is not None:
+            # prepare intermediate outputs
+            interm_coord = ref_enc[-1]
+            interm_class = self.transformer.enc_out_class_embed(hs_enc[-1], text_dict)
+            out['enc_outputs'] = {'pred_logits': interm_class, 'pred_boxes': interm_coord}
+            # out['interm_outputs_for_matching_pre'] = {'pred_logits': interm_class, 'pred_boxes': init_box_proposal}
 
         return out
 

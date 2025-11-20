@@ -1,0 +1,8 @@
+# Auto-generated experiment configs
+experiments/*/
+
+# Keep defaults
+!defaults/*.yaml
+!defaults/
+
+

@@ -1,0 +1,57 @@
+# Shared Teacher Training Configuration
+# This config contains parameters that MUST be the same for all teacher models
+# because they train in the same loop with the same dataloader.
+#
+# DO NOT duplicate these parameters in model-specific configs!
+
+# Training hyperparameters (shared across all teacher models)
+training:
+  batch_size: 8              # Same dataloader for all models
+  epochs: 50                 # Same training loop
+  num_workers: 4             # Same dataloader workers
+  
+  # Optimizer settings (can be overridden per model if needed)
+  optimizer: "AdamW"
+  weight_decay: 1.0e-4
+  
+  # Learning rate schedule
+  warmup_epochs: 3
+  warmup_ratio: 0.1          # Start from 10% of base LR
+
+# Data augmentation (shared)
+augmentation:
+  enabled: false
+  
+  # When enabled, these settings apply to all teacher models
+  characteristics:
+    - "changes_shape"
+    - "reflective_surface"
+    - "low_contrast"
+  
+  environment:
+    lighting: "variable"     # Options: stable, variable, poor
+    camera: "fixed"          # Options: fixed, moving, shaky
+    background: "busy"       # Options: clean, busy, changing
+    distance: "fixed"        # Options: fixed, variable, close
+  
+  intensity: "medium"        # Options: low, medium, high
+
+# Evaluation settings (shared)
+evaluation:
+  interval: 5                # Validate every N epochs
+  save_predictions: false    # Save prediction visualizations
+
+# Checkpoint settings (shared)
+checkpointing:
+  save_interval: 5           # Save every N epochs
+  max_keep_checkpoints: 5    # Keep only last N checkpoints
+  save_best: true            # Save best model
+  early_stopping:
+    enabled: true
+    patience: 15             # Stop if no improvement for N epochs
+    min_delta: 0.001         # Minimum improvement threshold
+
+# Dataset-specific (AUTO-FILLED by platform - DO NOT EDIT)
+num_classes: null            # Auto-filled from COCO categories
+class_names: []              # Auto-filled from COCO categories
+class_mapping: {}            # Auto-filled from COCO categories
