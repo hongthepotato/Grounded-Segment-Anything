@@ -1,0 +1,54 @@
+# Preprocessing configuration for different model architectures
+# Each model has different input requirements and normalization
+
+preprocessing:
+  # Grounding DINO preprocessing (Swin Transformer backbone)
+  grounding_dino:
+    input_size:
+      min_size: 800        # Resize shortest side to 800
+      max_size: 1333       # Limit longest side to 1333
+    normalization:
+      mean: [0.485, 0.456, 0.406]  # ImageNet statistics
+      std: [0.229, 0.224, 0.225]
+      pixel_range: [0, 1]   # Normalize to [0,1] first, then standardize
+    resize_mode: "keep_aspect_ratio"  # Maintain aspect ratio, pad to max_size
+    padding_value: 0        # Zero padding
+    pixel_format: "RGB"     # NOT BGR!
+  
+  # SAM preprocessing (ViT backbone)
+  # CRITICAL: SAM uses DIFFERENT normalization than ImageNet!
+  sam:
+    input_size:
+      height: 1024          # SAM requires square input
+      width: 1024
+    normalization:
+      mean: [123.675, 116.28, 103.53]   # NOT ImageNet! Pixel-range values
+      std: [58.395, 57.12, 57.375]       # Different from ImageNet!
+      pixel_range: [0, 255]  # SAM expects [0,255] range, NOT [0,1]
+    resize_mode: "resize_longest_side"   # SAM-specific: resize longest to 1024, pad rest
+    padding_value: 0
+    pixel_format: "RGB"
+  
+  # YOLOv8 student preprocessing
+  yolov8:
+    input_size: 640         # Square input
+    normalization:
+      mean: [0.0, 0.0, 0.0]  # YOLO doesn't standardize
+      std: [1.0, 1.0, 1.0]   # Just normalizes to [0,1]
+      pixel_range: [0, 1]    # [0,1] range
+    resize_mode: "letterbox"  # YOLO-specific: maintain aspect, gray padding
+    padding_value: 114      # Gray padding (R=G=B=114)
+    pixel_format: "RGB"
+  
+  # FastSAM preprocessing
+  fastsam:
+    input_size: 1024
+    normalization:
+      mean: [0.0, 0.0, 0.0]
+      std: [1.0, 1.0, 1.0]
+      pixel_range: [0, 1]
+    resize_mode: "letterbox"
+    padding_value: 114
+    pixel_format: "RGB"
+
+

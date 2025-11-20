@@ -1,0 +1,30 @@
+# Training dynamics configuration
+# Controls gradient clipping, mixed precision, and batch normalization
+
+training_dynamics:
+  # Gradient management
+  gradient_clipping:
+    enabled: true
+    max_norm: 0.1        # For LoRA (small gradients). Use 1.0 for full fine-tuning
+    norm_type: 2.0       # L2 norm
+    error_if_nonfinite: true  # Stop training if NaN/Inf gradients
+  
+  # Mixed precision training (FP16)
+  mixed_precision:
+    enabled: true
+    backend: "amp"       # PyTorch Automatic Mixed Precision
+    init_scale: 65536    # 2^16, initial loss scaling
+    growth_factor: 2.0   # Scale multiplier when no overflow
+    backoff_factor: 0.5  # Scale divisor when overflow detected
+    growth_interval: 2000  # Steps between scale increases
+  
+  # Batch normalization strategy
+  normalization:
+    # For LoRA fine-tuning (teacher models)
+    freeze_bn_teacher: true  # Freeze BatchNorm statistics
+    track_running_stats_teacher: false  # Don't update running mean/var
+    
+    # For distillation (student training)
+    student_bn_mode: "train"   # Student BN in train mode
+    teacher_bn_mode: "eval"    # Teacher BN in eval mode (frozen)
+    sync_bn: false  # Don't sync BN across GPUs (not needed for single GPU)
