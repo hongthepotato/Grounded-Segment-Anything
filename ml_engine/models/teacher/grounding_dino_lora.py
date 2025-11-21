@@ -135,10 +135,6 @@ class GroundingDINOLoRA(nn.Module):
         logger.info("Loading config from: %s", config_file)
         args = SLConfig.fromfile(str(config_file))
 
-        print("#" * 60)
-        print("config" * 10)
-        print(self.bert_model_path)
-
         # Configure BERT path (for offline environments)
         if self.bert_model_path:
             bert_path = Path(self.bert_model_path)
