@@ -13,12 +13,12 @@ Models:
 - YOLO: Uses official LetterBox from ultralytics
 """
 
+from typing import Dict, Tuple, List, Optional, Any
+from abc import ABC, abstractmethod
 import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
 import numpy as np
-from typing import Dict, Tuple, List, Optional, Any
-from abc import ABC, abstractmethod
 
 from core.config import load_config
 
@@ -296,20 +296,8 @@ class GroundingDINOPreprocessor(BaseModelPreprocessor):
         transformed_masks = None
 
         if 'boxes' in target:
-            # DINO normalizes boxes to [0,1] in center format (cx, cy, w, h)
-            # We need to convert back to pixel COCO format for consistency
-            h, w = image.shape[-2:]
-            boxes_normalized = target['boxes'].numpy()
-
-            # Denormalize: [0,1] -> pixel coordinates
-            boxes_pixel = boxes_normalized * np.array([w, h, w, h])
-
-            # Convert center format (cx, cy, w, h) to COCO (x, y, w, h)
-            boxes_coco = boxes_pixel.copy()
-            boxes_coco[:, 0] = boxes_pixel[:, 0] - boxes_pixel[:, 2] / 2  # x = cx - w/2
-            boxes_coco[:, 1] = boxes_pixel[:, 1] - boxes_pixel[:, 3] / 2  # y = cy - h/2
-
-            transformed_boxes = boxes_coco
+            boxes_normalized = target['boxes'].numpy()  # [N, 4] in [cx, cy, w, h], range [0, 1]
+            transformed_boxes = boxes_normalized
 
         if 'masks' in target:
             transformed_masks = target['masks'].numpy()
