@@ -7,7 +7,7 @@
 # Training hyperparameters (shared across all teacher models)
 training:
   batch_size: 8              # Same dataloader for all models
-  epochs: 50                 # Same training loop
+  epochs: 5                 # Same training loop
   num_workers: 4             # Same dataloader workers
   
   # Optimizer settings (can be overridden per model if needed)
