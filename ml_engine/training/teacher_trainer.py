@@ -249,10 +249,10 @@ class TeacherTrainer:
                 focal_gamma=2.0
             )
 
-            logger.info(f"✓ Grounding DINO criterion with Hungarian matching initialized")
-            logger.info(f"  - Num classes: {num_classes}")
-            logger.info(f"  - Num decoder layers: {num_decoder_layers}")
-            logger.info(f"  - Auxiliary losses: {num_decoder_layers - 1} intermediate + 1 encoder")
+            logger.info("✓ Grounding DINO criterion with Hungarian matching initialized")
+            logger.info("  - Num classes: %s", num_classes)
+            logger.info("  - Num decoder layers: %s", num_decoder_layers)
+            logger.info("  - Auxiliary losses: %s intermediate + 1 encoder", num_decoder_layers - 1)
 
         if 'sam' in self.models:
             self.losses['segmentation'] = SegmentationLoss().to(self.device)
@@ -261,7 +261,7 @@ class TeacherTrainer:
         """Initialize optimizers for each model."""
         self.optimizers = {}
         self.schedulers = {}
-        
+
         # in default config, `learning_rate` as actually model dependent
         # but leave it as it is for now
         lr = self.config.get('learning_rate', 1e-4)
@@ -302,8 +302,8 @@ class TeacherTrainer:
             )
             self.schedulers[model_name] = scheduler
 
-            logger.info(f"✓ Optimizer and scheduler created for {model_name}")
-    
+            logger.info("✓ Optimizer and scheduler created for %s", model_name)
+
     def _init_training_manager(self):
         """Initialize training managers for each model."""
         self.training_managers = {}
@@ -319,33 +319,33 @@ class TeacherTrainer:
             )
             self.training_managers[model_name] = manager
 
-            logger.info(f"✓ TrainingManager created for {model_name}")
-    
+            logger.info("✓ TrainingManager created for %s", model_name)
+
     def _init_checkpoint_manager(self):
         """Initialize checkpoint managers for each model."""
         self.checkpoint_managers = {}
-        
-        for model_name in self.models.keys():
+
+        for model_name in self.models:
             output_dir = self.output_dir / 'teachers' / f'{model_name}_lora'
             config_path = DEFAULT_CONFIGS_DIR / 'checkpoint_config.yaml'
-            
+
             manager = CheckpointManager(
                 output_dir=str(output_dir),
                 config_path=str(config_path)
             )
             self.checkpoint_managers[model_name] = manager
-            
-            logger.info(f"✓ CheckpointManager created for {model_name}: {output_dir}")
-    
+
+            logger.info("✓ CheckpointManager created for %s: %s", model_name, output_dir)
+
     def _init_loggers(self):
         """Initialize TensorBoard loggers."""
         self.tb_loggers = {}
-        
-        for model_name in self.models.keys():
+
+        for model_name in self.models:
             log_dir = self.output_dir / 'logs' / model_name
             self.tb_loggers[model_name] = TensorBoardLogger(str(log_dir))
-            logger.info(f"✓ TensorBoard logger: {log_dir}")
-    
+            logger.info("✓ TensorBoard logger: %s", log_dir)
+
     def train(self):
         """
         Main training loop.
@@ -354,26 +354,22 @@ class TeacherTrainer:
         """
         epochs = self.config.get('epochs', 50)
         start_epoch = 0
-        
+
         logger.info("=" * 60)
         logger.info("Starting Teacher Model Training")
         logger.info("=" * 60)
         log_config(logger, self.config, "Training Configuration")
-        
+
         for epoch in range(start_epoch, epochs):
-            logger.info(f"\nEpoch {epoch + 1}/{epochs}")
+            logger.info("\nEpoch %s/%s", epoch + 1, epochs)
             logger.info("-" * 60)
-            
-            # Train epoch
+
             train_metrics = self.train_epoch(epoch)
-            
-            # Validate
+
             val_metrics = self.validate(epoch)
-            
-            # Combine metrics
-            all_metrics = {**train_metrics, **val_metrics, 'epoch': epoch}
-            
-            # Save checkpoints
+
+            all_metrics = {**train_metrics, **val_metrics}
+
             for model_name in self.models.keys():
                 self.checkpoint_managers[model_name].save_checkpoint(
                     epoch=epoch,
@@ -387,7 +383,7 @@ class TeacherTrainer:
                 
                 # Check early stopping
                 if self.checkpoint_managers[model_name].should_stop:
-                    logger.info(f"Early stopping triggered for {model_name}")
+                    logger.info("Early stopping triggered for %s", model_name)
                     break
         
         logger.info("=" * 60)
@@ -397,7 +393,7 @@ class TeacherTrainer:
         # Close loggers
         for tb_logger in self.tb_loggers.values():
             tb_logger.close()
-    
+
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """
         Train for one epoch.
@@ -411,18 +407,17 @@ class TeacherTrainer:
         # Set models to train mode
         for model in self.models.values():
             model.train()
-        
+
         # Update epoch in training managers
         for manager in self.training_managers.values():
             manager.set_epoch(epoch)
-        
+
         # Metrics accumulator
-        epoch_losses = {f'{model_name}_loss': [] for model_name in self.models.keys()}
-        
+        epoch_losses = {f'{model_name}_loss': [] for model_name in self.models}
+
         # Training loop
         pbar = tqdm(self.train_loader, desc=f"Train Epoch {epoch + 1}")
         for batch in pbar:
-            # Train each loaded model
             batch_losses = self._train_batch(batch)
             
             # Accumulate losses
@@ -462,13 +457,11 @@ class TeacherTrainer:
             Dictionary of batch losses
         """
         batch_losses = {}
-        
-        # Train Grounding DINO if loaded
+
         if 'grounding_dino' in self.models:
             dino_loss = self._train_grounding_dino_batch(batch)
             batch_losses['grounding_dino_loss'] = dino_loss
-        
-        # Train SAM if loaded
+
         if 'sam' in self.models:
             sam_loss = self._train_sam_batch(batch)
             batch_losses['sam_loss'] = sam_loss
@@ -480,27 +473,102 @@ class TeacherTrainer:
         model = self.models['grounding_dino']
         manager = self.training_managers['grounding_dino']
         criterion = self.losses['detection']
-        
+
         def compute_loss(batch):
             # Get preprocessed DINO data (already transformed by official transforms)
             dino_data = batch['preprocessed']['grounding_dino']
-            images = dino_data['images'].to(self.device)    # [B, 3, H, W] padded
-            boxes = dino_data['boxes'].to(self.device)      # [B, max_objs, 4] already normalized!
+            images = dino_data['images'].to(self.device)    # NestedTensor with .tensors and .mask
+            boxes = dino_data['boxes'].to(self.device)      # [B, max_objs, 4] normalized [cx,cy,w,h]
             labels = dino_data['labels'].to(self.device)    # [B, max_objs]
             
-            # Get batch size
-            batch_size = images.shape['tensors.shape'][0]
-            
+            # Get batch size from labels (simplest and most reliable)
+            batch_size = labels.shape[0]
+
+            # Sanity check: verify we have valid data
+            if batch_size == 0:
+                logger.error("Empty batch received!")
+                return {'loss': torch.tensor(0.0, device=self.device, requires_grad=True)}
+
+            # Debug: check for valid objects
+            total_valid_objs = (labels != -1).sum().item()
+            if total_valid_objs == 0:
+                logger.warning("Batch has no valid objects! Skipping...")
+                return {'loss': torch.tensor(0.0, device=self.device, requires_grad=True)}
+
             # Get class names from class mapping
             class_names = list(self.dataset_info['class_mapping'].values())
-            
+
             # Forward pass - Grounding DINO will format as "class1 . class2 . class3"
             # The model should return auxiliary outputs for DETR-style training
             outputs = model(images, class_names=class_names)
             
+            # Diagnose valid token count
+            print("=" * 80)
+            print("TOKEN DIAGNOSTICS")
+            print("=" * 80)
+            
+            # Get valid token mask from first query (all queries share same text encoding)
+            first_query_logits = outputs['pred_logits'][0, 0, :]  # [num_text_tokens]
+            valid_token_mask = ~torch.isinf(first_query_logits)
+            num_valid_tokens = valid_token_mask.sum().item()
+            total_tokens = first_query_logits.shape[0]
+            
+            print(f"Text caption: '{' . '.join(class_names)}'")
+            print(f"Number of classes: {len(class_names)}")
+            print(f"Total token positions (with padding): {total_tokens}")
+            print(f"Valid tokens (non -inf): {num_valid_tokens}")
+            print(f"Padding tokens (-inf): {total_tokens - num_valid_tokens}")
+            print(f"Valid token positions: {valid_token_mask.nonzero().squeeze().tolist()}")
+            
+            # Show first few logits values
+            print(f"\nFirst 20 logit values (from first query):")
+            for i in range(min(20, total_tokens)):
+                val = first_query_logits[i].item()
+                status = "VALID" if not torch.isinf(first_query_logits[i]) else "-INF"
+                print(f"  Token {i:3d}: {val:8.4f}  [{status}]")
+            
+            # Show what token ranges each class should occupy
+            if num_valid_tokens > 0:
+                tokens_per_class = max(1, num_valid_tokens // len(class_names))
+                print(f"\nRecommended token mapping (equally distributed):")
+                for class_id, class_name in enumerate(class_names):
+                    start_idx = class_id * tokens_per_class
+                    end_idx = min(start_idx + tokens_per_class, num_valid_tokens)
+                    print(f"  Class {class_id} '{class_name}': tokens [{start_idx}:{end_idx}] (total: {end_idx - start_idx})")
+            
+            print("=" * 80)
+            
             # Ensure model returns auxiliary outputs
             if 'aux_outputs' not in outputs:
                 logger.warning("Model not returning auxiliary outputs! Training may be suboptimal.")
+            
+            # Debug: check model outputs
+            if torch.isnan(outputs['pred_logits']).any():
+                logger.error("NaN detected in pred_logits!")
+            if torch.isnan(outputs['pred_boxes']).any():
+                logger.error("NaN detected in pred_boxes!")
+            
+            # Create token mapping based on VALID tokens only (exclude -inf padding)
+            # Key insight: pred_logits contains -inf for padding positions
+            # We must only assign token_labels to valid (non -inf) positions
+            
+            # Get valid token mask from first query (all queries share same text encoding)
+            valid_token_mask = ~torch.isinf(outputs['pred_logits'][0, 0, :])
+            num_valid_tokens = valid_token_mask.sum().item()
+            
+            print(f"\nUSING VALID TOKEN RANGE: [0:{num_valid_tokens}] (excluding {outputs['pred_logits'].shape[-1] - num_valid_tokens} padding tokens)")
+            
+            # Divide valid token space equally among classes
+            simple_token_map = {}
+            num_classes = len(class_names)
+            tokens_per_class = max(1, num_valid_tokens // num_classes)
+            
+            for class_id in range(num_classes):
+                start_idx = class_id * tokens_per_class
+                # Ensure end_idx doesn't exceed valid token range
+                end_idx = min(start_idx + tokens_per_class, num_valid_tokens)
+                simple_token_map[class_id] = (start_idx, end_idx)
+                print(f"  Actual mapping: Class {class_id} '{class_names[class_id]}' → tokens [{start_idx}:{end_idx}]")
             
             # Prepare targets in DETR format: list of dicts (one per batch element)
             targets = []
@@ -510,11 +578,55 @@ class TeacherTrainer:
                 valid_labels = labels[b][valid_mask]  # [num_valid_objs]
                 valid_boxes = boxes[b][valid_mask]    # [num_valid_objs, 4]
                 
+                # Sanity check boxes (should be normalized [0, 1])
+                if len(valid_boxes) > 0:
+                    if (valid_boxes < 0).any() or (valid_boxes > 1).any():
+                        logger.warning(f"Batch {b}: boxes not normalized! Range: [{valid_boxes.min():.3f}, {valid_boxes.max():.3f}]")
+                
+                # Create token labels for each valid object
+                # token_labels[i, j] = 1 if text token j is relevant for object i's class, else 0
+                # Shape: [num_valid_objs, total_token_positions] (includes padding, will be 0 for -inf positions)
+                total_token_positions = outputs['pred_logits'].shape[-1]  # 256 (with padding)
+                token_labels = torch.zeros(len(valid_labels), total_token_positions, dtype=torch.float32, device=self.device)
+                
+                for obj_idx, class_id in enumerate(valid_labels):
+                    class_id_int = int(class_id.item())
+                    if class_id_int in simple_token_map:
+                        # Set the token span for this class to 1
+                        start_idx, end_idx = simple_token_map[class_id_int]
+                        token_labels[obj_idx, start_idx:end_idx] = 1.0
+                    else:
+                        # Fallback: if class_id out of range, mark all tokens uniformly
+                        # This shouldn't happen with valid data
+                        logger.warning(f"Class ID {class_id_int} not in token map (num_classes={num_classes})")
+                        token_labels[obj_idx, :] = 1.0 / num_text_tokens  # Uniform distribution
+                
                 # Create target dict for this batch element
                 targets.append({
-                    'labels': valid_labels,  # [num_valid_objs]
-                    'boxes': valid_boxes,    # [num_valid_objs, 4] in [cx, cy, w, h] format
+                    'labels': valid_labels,        # [num_valid_objs] - class IDs
+                    'boxes': valid_boxes,          # [num_valid_objs, 4] in normalized [cx, cy, w, h]
+                    'token_labels': token_labels,  # [num_valid_objs, num_tokens] - multi-hot token labels
                 })
+            
+            # DEBUG: Print target structure before loss computation
+            print("\n" + "=" * 80)
+            print("TARGET STRUCTURE DEBUG")
+            print("=" * 80)
+            print(f"Number of targets (batch elements): {len(targets)}")
+            for batch_idx, target in enumerate(targets):
+                print(f"\nBatch {batch_idx}:")
+                print(f"  - num_objects: {len(target['labels'])}")
+                print(f"  - labels: {target['labels']}")
+                print(f"  - boxes shape: {target['boxes'].shape}")
+                print(f"  - token_labels shape: {target['token_labels'].shape}")
+                print(f"  - token_labels nonzero count: {(target['token_labels'] > 0).sum().item()}")
+                
+                # Show token_labels for first object
+                if len(target['labels']) > 0:
+                    first_obj_tokens = target['token_labels'][0]
+                    nonzero_positions = (first_obj_tokens > 0).nonzero().squeeze()
+                    print(f"  - First object token_labels nonzero at: {nonzero_positions.tolist() if nonzero_positions.numel() > 0 else 'none'}")
+            print("=" * 80)
             
             # Compute loss with Hungarian matching and auxiliary losses
             # Returns dict with keys like:
@@ -524,10 +636,23 @@ class TeacherTrainer:
             # - 'loss_ce_enc', 'loss_bbox_enc', 'loss_giou_enc' (encoder)
             loss_dict = criterion(outputs, targets)
             
+            # Debug: check for NaN in loss components
+            for k, v in loss_dict.items():
+                if torch.isnan(v).any():
+                    logger.error(f"NaN detected in {k}: {v}")
+            
             # Compute total weighted loss
             total_loss = sum(loss_dict[k] * criterion.weight_dict[k] 
                            for k in loss_dict.keys() 
                            if k in criterion.weight_dict)
+            
+            # Final NaN check
+            if torch.isnan(total_loss):
+                logger.error("NaN in total_loss!")
+                logger.error(f"Loss components: {loss_dict}")
+                logger.error(f"Valid objects: {total_valid_objs}")
+                logger.error(f"Pred logits range: [{outputs['pred_logits'].min():.3f}, {outputs['pred_logits'].max():.3f}]")
+                logger.error(f"Pred boxes range: [{outputs['pred_boxes'].min():.3f}, {outputs['pred_boxes'].max():.3f}]")
             
             # Return dict with total loss and components for logging
             result = {'loss': total_loss}
@@ -636,7 +761,7 @@ class TeacherTrainer:
             boxes = dino_data['boxes'].to(self.device)
             labels = dino_data['labels'].to(self.device)
             
-            batch_size = images.shape[0]
+            batch_size = images.shape['tensors.shape'][0]
             class_names = list(self.dataset_info['class_mapping'].values())
             criterion = self.losses['detection']
             

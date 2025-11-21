@@ -274,6 +274,44 @@ class GroundingDINOCriterion(nn.Module):
         # Extract matched predictions
         src_logits_matched = src_logits[idx]  # [num_matched, num_tokens]
         
+        # DEBUG: Diagnose focal loss inputs
+        print("\n" + "=" * 80)
+        print("FOCAL LOSS INPUT DIAGNOSTICS")
+        print("=" * 80)
+        print(f"Number of matched pairs: {src_logits_matched.shape[0]}")
+        print(f"Token dimension: {src_logits_matched.shape[1]}")
+        print(f"target_token_labels shape: {target_token_labels.shape}")
+        
+        # Check for -inf in matched logits
+        has_inf = torch.isinf(src_logits_matched).any()
+        num_inf = torch.isinf(src_logits_matched).sum().item()
+        print(f"Matched logits contain -inf: {has_inf}")
+        if has_inf:
+            print(f"  Number of -inf values: {num_inf} / {src_logits_matched.numel()}")
+            print(f"  Percentage: {100 * num_inf / src_logits_matched.numel():.1f}%")
+        
+        # Check target_token_labels
+        print(f"target_token_labels nonzero count: {(target_token_labels > 0).sum().item()}")
+        print(f"target_token_labels max value: {target_token_labels.max().item()}")
+        
+        # Check overlap between -inf positions and positive targets
+        if has_inf and (target_token_labels > 0).any():
+            inf_mask = torch.isinf(src_logits_matched)
+            positive_mask = target_token_labels > 0
+            overlap = (inf_mask & positive_mask).sum().item()
+            print(f"Overlap (-inf positions with target=1): {overlap}")
+            if overlap > 0:
+                print("  ⚠️  WARNING: Targets marked as positive at -inf positions!")
+                print("  This will cause NaN in focal loss!")
+        
+        # Show first matched pair details
+        if src_logits_matched.shape[0] > 0:
+            print(f"\nFirst matched pair:")
+            print(f"  Logits range: [{src_logits_matched[0].min().item():.4f}, {src_logits_matched[0].max().item():.4f}]")
+            print(f"  Logits contain -inf: {torch.isinf(src_logits_matched[0]).any()}")
+            print(f"  Target nonzero positions: {(target_token_labels[0] > 0).nonzero().squeeze().tolist()}")
+        print("=" * 80)
+        
         # Compute focal loss on matched pairs
         loss_ce = sigmoid_focal_loss(
             src_logits_matched, 
@@ -283,7 +321,48 @@ class GroundingDINOCriterion(nn.Module):
             gamma=self.focal_gamma
         ) * src_logits.shape[1]  # Scale by num_queries
         
-        losses = {'loss_ce': loss_ce}
+        print(f"Computed loss_ce (with -inf): {loss_ce.item() if not torch.isnan(loss_ce) else 'NaN'}")
+        
+        # CRITICAL FIX: Filter out -inf positions completely
+        # Grounding DINO pads text tokens to 256 with -inf
+        # We must only compute loss on valid (non -inf) token positions
+        
+        valid_mask = ~torch.isinf(src_logits_matched)  # [num_matched, num_tokens]
+        num_valid = valid_mask.sum().item()
+        
+        print(f"\nFiltering -inf positions:")
+        print(f"  Valid token positions: {num_valid} / {valid_mask.numel()}")
+        print(f"  Padding (-inf) positions: {valid_mask.numel() - num_valid}")
+        
+        # Extract only valid positions
+        # This requires flattening and indexing
+        src_logits_valid = src_logits_matched[valid_mask]  # [num_valid_positions]
+        target_labels_valid = target_token_labels[valid_mask]  # [num_valid_positions]
+        
+        print(f"  Valid logits shape: {src_logits_valid.shape}")
+        print(f"  Valid targets shape: {target_labels_valid.shape}")
+        print(f"  Valid targets nonzero: {(target_labels_valid > 0).sum().item()}")
+        
+        # Compute focal loss only on valid positions
+        if num_valid > 0:
+            # Reshape to [1, num_valid] to match focal loss expected input
+            loss_ce_valid = sigmoid_focal_loss(
+                src_logits_valid.unsqueeze(0),  # [1, num_valid]
+                target_labels_valid.unsqueeze(0),  # [1, num_valid]
+                num_boxes,
+                alpha=self.focal_alpha,
+                gamma=self.focal_gamma
+            ) * src_logits.shape[1]  # Scale by num_queries
+            
+            print(f"Computed loss_ce (valid positions only): {loss_ce_valid.item() if not torch.isnan(loss_ce_valid) else 'NaN'}")
+        else:
+            # No valid positions (shouldn't happen)
+            loss_ce_valid = torch.tensor(0.0, device=src_logits.device)
+            print(f"WARNING: No valid positions found, loss_ce = 0")
+        
+        print("=" * 80)
+        
+        losses = {'loss_ce': loss_ce_valid}
 
         if log:
             # Compute classification accuracy for logging
