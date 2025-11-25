@@ -6,6 +6,20 @@ This module handles:
 - Auto-generation of missing bbox from segmentation masks
 - Auto-computation of area from masks
 - Data quality checks
+
+ID Design Rules (for consistency and simplicity):
+- All IDs are non-negative integers (>= 0)
+- Image IDs: Can be any non-negative int (e.g., 0, 1, 2, 5, 100, ...)
+- Annotation IDs: Can be any non-negative int (e.g., 0, 1, 2, 5, 100, ...)
+- Category IDs: MUST satisfy categories[i]['id'] == i
+  
+Why categories are special:
+  Categories must be ordered: categories[0].id=0, categories[1].id=1, etc.
+  This enables direct indexing:
+    predicted_class = 2
+    category_name = categories[predicted_class]['name']  # No lookup/mapping needed!
+  
+  This eliminates ID→Index remapping throughout the ML pipeline.
 """
 
 import copy
@@ -22,6 +36,11 @@ def validate_coco_format(coco_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """
     Validate that data conforms to COCO format.
     
+    ID Requirements:
+        - All IDs must be non-negative integers (>= 0)
+        - Categories must satisfy: categories[i]['id'] == i (order matters!)
+        - Image/Annotation IDs can be arbitrary non-negative integers
+    
     Args:
         coco_data: Dictionary with COCO format data
     
@@ -36,7 +55,6 @@ def validate_coco_format(coco_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """
     errors = []
 
-    # Check required top-level keys
     errors.extend(_validate_top_level_keys(coco_data))
     if errors:
         return False, errors
@@ -73,12 +91,41 @@ def _validate_images(images: List[Dict]) -> List[str]:
         errors.append("No images found in dataset")
         return errors
 
-    required_keys = ['id', 'file_name']
+    required_keys = ['id', 'width', 'height', 'file_name']
     for idx, img in enumerate(images):
-        for key in required_keys:
-            if key not in img:
-                errors.append(f"Image {idx}: missing required key '{key}'")
-                break
+        # Check required keys exist
+        missing_keys = [key for key in required_keys if key not in img]
+        if missing_keys:
+            errors.append(f"Image {idx}: missing required keys: {missing_keys}")
+            continue
+
+        # ID: must be non-negative int
+        img_id = img['id']
+        if not isinstance(img_id, int):
+            errors.append(f"Image {idx}: `id` must be an integer, got {type(img_id).__name__}")
+        elif img_id < 0:
+            errors.append(f"Image {idx}: `id` must be >= 0, got {img_id}")
+
+        # Width: must be positive integer number
+        width = img['width']
+        if not isinstance(width, int):
+            errors.append(f"Image {idx}: `width` must be an integer, got {type(width).__name__}")
+        elif width <= 0:
+            errors.append(f"Image {idx}: `width` must be > 0, got {width}")
+
+        # Height: must be positive integer number
+        height = img['height']
+        if not isinstance(height, int):
+            errors.append(f"Image {idx}: `height` must be an integer, got {type(height).__name__}")
+        elif height <= 0:
+            errors.append(f"Image {idx}: `height` must be > 0, got {height}")
+
+        # File name: must be non-empty string
+        file_name = img['file_name']
+        if not isinstance(file_name, str):
+            errors.append(f"Image {idx}: `file_name` must be a string, got {type(file_name).__name__}")
+        elif not file_name.strip():
+            errors.append(f"Image {idx}: `file_name` cannot be empty")
 
     return errors
 
@@ -93,11 +140,31 @@ def _validate_annotations(annotations: List[Dict]) -> List[str]:
     required_keys = ['id', 'image_id', 'category_id']
 
     for idx, ann in enumerate(annotations):
-        # Check required keys
-        for key in required_keys:
-            if key not in ann:
-                errors.append(f"Annotation {idx}: missing required key '{key}'")
-                break
+        missing_keys = [key for key in required_keys if key not in ann]
+        if missing_keys:
+            errors.append(f"Annotation {idx}: missing required keys: {missing_keys}")
+            continue
+
+        # ID: must be non-negative int
+        ann_id = ann['id']
+        if not isinstance(ann_id, int):
+            errors.append(f"Annotation {idx}: `id` must be an integer, got {type(ann_id).__name__}")
+        elif ann_id < 0:
+            errors.append(f"Annotation {idx}: `id` must be >= 0, got {ann_id}")
+
+        # Image ID: must be non-negative int (references image.id)
+        image_id = ann['image_id']
+        if not isinstance(image_id, int):
+            errors.append(f"Annotation {idx}: `image_id` must be an integer, got {type(image_id).__name__}")
+        elif image_id < 0:
+            errors.append(f"Annotation {idx}: `image_id` must be >= 0, got {image_id}")
+
+        # Category ID: must be non-negative int
+        category_id = ann['category_id']
+        if not isinstance(category_id, int):
+            errors.append(f"Annotation {idx}: `category_id` must be an integer, got {type(category_id).__name__}")
+        elif category_id < 0:
+            errors.append(f"Annotation {idx}: `category_id` must be >= 0, got {category_id}")
 
         # Check that at least one annotation type exists
         if not any(k in ann for k in ['bbox', 'segmentation']):
@@ -152,8 +219,8 @@ def _validate_bbox(bbox: Any, annotation: Dict, ann_idx: int) -> List[str]:
         return errors
 
     # Check all elements are numbers
-    if not all(isinstance(x, (int, float)) for x in bbox):
-        errors.append(f"Annotation {ann_idx}: `bbox` elements must be numbers (int or float)")
+    if not all(isinstance(x, int) for x in bbox):
+        errors.append(f"Annotation {ann_idx}: `bbox` elements must be integer")
         return errors
 
     # Check width and height are positive
@@ -174,8 +241,22 @@ def _validate_categories(categories: List[Dict]) -> List[str]:
     """
     Validate categories section.
     
-    Enforces sequential category IDs starting from 0.
-    This simplifies the codebase by eliminating ID→Index remapping.
+    CRITICAL: Enforces categories[i]['id'] == i (order and IDs must match).
+    
+    Valid example:
+        categories[0] = {'id': 0, 'name': 'person'}   ✓
+        categories[1] = {'id': 1, 'name': 'car'}      ✓
+        categories[2] = {'id': 2, 'name': 'dog'}      ✓
+    
+    Invalid examples:
+        categories[0] = {'id': 1, ...}  ✗ (id should be 0, not 1)
+        categories[2] = {'id': 0, ...}  ✗ (id should be 2, not 0)
+    
+    Why enforce order?
+    - Direct indexing: categories[predicted_class_id] gives correct category
+    - No ID→Index mapping needed anywhere in the codebase
+    - No sorting required before use
+    - Eliminates entire class of bugs from index mismatches
     """
     errors = []
 
@@ -185,22 +266,40 @@ def _validate_categories(categories: List[Dict]) -> List[str]:
 
     required_keys = ['id', 'name']
     for idx, cat in enumerate(categories):
-        for key in required_keys:
-            if key not in cat:
-                errors.append(f"Category {idx}: missing required key '{key}'")
-                break
+        # Check required keys exist
+        missing_keys = [key for key in required_keys if key not in cat]
+        if missing_keys:
+            errors.append(f"Category {idx}: missing required keys: {missing_keys}")
+            continue
+        
+        # ID: must be int
+        cat_id = cat['id']
+        if not isinstance(cat_id, int):
+            errors.append(f"Category {idx}: `id` must be int, got {type(cat_id).__name__}")
+        
+        # Name: must be non-empty string
+        name = cat['name']
+        if not isinstance(name, str):
+            errors.append(f"Category {idx}: `name` must be a string, got {type(name).__name__}")
+        elif not name.strip():
+            errors.append(f"Category {idx}: `name` cannot be empty")
     
-    # Enforce sequential IDs starting from 0
-    # This eliminates the need for ID→Index remapping throughout the codebase
-    category_ids = sorted([cat['id'] for cat in categories])
-    expected_ids = list(range(len(categories)))
-    
-    if category_ids != expected_ids:
-        errors.append(
-            f"Category IDs must be sequential starting from 0. "
-            f"Expected: {expected_ids}, got: {category_ids}. "
-            f"Please renumber your categories in the annotation file."
-        )
+    # Enforce: categories[i]['id'] == i
+    # This ensures direct array indexing: categories[predicted_class] gives correct category
+    for idx, cat in enumerate(categories):
+        if 'id' not in cat:
+            continue
+        
+        cat_id = cat['id']
+        if not isinstance(cat_id, int):
+            continue
+        
+        if cat_id != idx:
+            errors.append(
+                f"Category at index {idx} has id={cat_id}, but must have id={idx}. "
+                f"Categories must be ordered sequentially: categories[0].id=0, categories[1].id=1, etc. "
+                f"Please reorder your categories in the annotation file."
+            )
 
     return errors
 
