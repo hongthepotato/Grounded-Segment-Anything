@@ -98,6 +98,15 @@ class DataManager:
         logger.info("Initializing DataManager")
         logger.info("=" * 60)
 
+        if not self.data_path.exists():
+            raise FileNotFoundError(f"Dataset file not found: {self.data_path}")
+
+        if not self.image_dir.exists():
+            raise FileNotFoundError(f"Image directory not found: {self.image_dir}")
+
+        if not self.image_dir.is_dir():
+            raise NotADirectoryError(f"Image path is not a directory: {self.image_dir}")
+
         # Step 1: Load JSON
         logger.info("Loading dataset: %s", self.data_path)
         self.raw_data = load_json(str(self.data_path))
@@ -178,10 +187,9 @@ class DataManager:
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
 
         directory_images = set()
-        if self.image_dir.exists() and self.image_dir.is_dir():
-            for file_path in self.image_dir.iterdir():
-                if file_path.is_file() and file_path.suffix.lower() in image_extensions:
-                    directory_images.add(file_path.name)
+        for file_path in self.image_dir.iterdir():
+            if file_path.is_file() and file_path.suffix.lower() in image_extensions:
+                directory_images.add(file_path.name)
 
         extra_images = directory_images - annotated_filenames
 
