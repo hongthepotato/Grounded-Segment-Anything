@@ -100,16 +100,17 @@ class HungarianMatcher(nn.Module):
         tokenizer=None
     ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
         """
-        Perform Hungarian matching.
+        Perform Hungarian matching with proper -inf filtering.
         
         Args:
             outputs: Dict with:
                 - 'pred_logits': [B, N, num_tokens] token-level similarities
                 - 'pred_boxes': [B, N, 4] predicted boxes in [cx, cy, w, h] format
+                - 'text_token_mask': [B, num_valid_tokens] optional mask
             targets: List of dicts (len=B), each with:
                 - 'labels': [M] class labels (0-indexed)
                 - 'boxes': [M, 4] boxes in [cx, cy, w, h] format
-                - 'token_labels': [M, num_tokens] (optional) token-level targets
+                - 'token_labels': [M, num_tokens] token-level targets
             tokenizer: Optional tokenizer for token-to-class mapping
         
         Returns:
@@ -118,47 +119,52 @@ class HungarianMatcher(nn.Module):
         bs, num_queries = outputs["pred_logits"].shape[:2]
         
         # Flatten batch dimension for cost computation
-        # [B, N, num_tokens] -> [B*N, num_tokens]
-        out_logits = outputs["pred_logits"].flatten(0, 1)
+        out_logits = outputs["pred_logits"].flatten(0, 1)  # [B*N, num_tokens]
         out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [B*N, 4]
 
         # Concatenate targets across batch
         tgt_ids = torch.cat([v["labels"] for v in targets])  # [total_targets]
         tgt_bbox = torch.cat([v["boxes"] for v in targets])  # [total_targets, 4]
         
-        # Get token-level targets if available
-        if "token_labels" in targets[0]:
-            tgt_token_labels = torch.cat([v["token_labels"] for v in targets])  # [total_targets, num_tokens]
-        else:
-            # Fallback: create one-hot-like token labels
-            # This is simplified - proper implementation needs tokenizer
-            num_tokens = out_logits.shape[-1]
-            tgt_token_labels = torch.zeros(len(tgt_ids), num_tokens, device=out_logits.device)
-            # Simple strategy: assume uniform token distribution per class
-            # In practice, you'd map class labels to their token spans
+        # Get token-level targets
+        assert "token_labels" in targets[0], "token_labels required for matching!"
+        tgt_token_labels = torch.cat([v["token_labels"] for v in targets])  # [total_targets, num_tokens]
 
         # Classification cost using focal loss
         if self.use_focal:
+            # Filter valid token positions only
+            text_token_mask = outputs.get('text_token_mask', None)
+            if text_token_mask is not None:
+                # Create mask [B*N, num_tokens]
+                B, num_valid = text_token_mask.shape
+                num_tokens = out_logits.shape[-1]
+                text_mask = torch.zeros((B, num_tokens), dtype=torch.bool, device=out_logits.device)
+                text_mask[:, :num_valid] = text_token_mask
+                text_mask = text_mask.unsqueeze(1).repeat(1, num_queries, 1).flatten(0, 1)  # [B*N, num_tokens]
+            else:
+                # Fallback: use -inf detection
+                text_mask = ~torch.isinf(out_logits)
+            
+            # Only compute focal cost on valid positions
             out_prob = out_logits.sigmoid()  # [B*N, num_tokens]
             
-            # Focal loss cost computation
             alpha = 0.25
             gamma = 2.0
             neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
             pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
             
+            # Mask out invalid positions (set cost to 0 for padded tokens)
+            neg_cost_class = neg_cost_class * text_mask.float()
+            pos_cost_class = pos_cost_class * text_mask.float()
+            
             # Compute cost for each query-target pair
-            # We need to expand targets to compute cost matrix
-            # cost_class: [B*N, total_targets]
             cost_class = []
             for token_label in tgt_token_labels:
-                # token_label: [num_tokens]
                 pos_cost = (pos_cost_class * token_label.unsqueeze(0)).sum(-1)  # [B*N]
                 neg_cost = (neg_cost_class * (1 - token_label.unsqueeze(0))).sum(-1)  # [B*N]
                 cost_class.append(pos_cost - neg_cost)
             cost_class = torch.stack(cost_class, dim=1)  # [B*N, total_targets]
         else:
-            # Softmax-based cost (not used in Grounding DINO)
             out_prob = out_logits.softmax(-1)
             cost_class = -out_prob[:, tgt_ids]
 
@@ -245,9 +251,14 @@ class GroundingDINOCriterion(nn.Module):
         """
         Token-level classification loss using focal loss.
         
+        Based on MMDetection's approach: filter out padded tokens (-inf) BEFORE 
+        passing to loss function using torch.masked_select.
+        
         Args:
-            outputs: Model outputs with 'pred_logits' [B, N, num_tokens]
-            targets: List of target dicts
+            outputs: Model outputs with:
+                - 'pred_logits': [B, N, num_tokens]
+                - 'text_token_mask': [B, num_valid_tokens] boolean mask
+            targets: List of target dicts with 'token_labels'
             indices: Matching indices from Hungarian matcher
             num_boxes: Number of boxes for normalization
             log: Whether to log metrics
@@ -257,119 +268,65 @@ class GroundingDINOCriterion(nn.Module):
         """
         assert 'pred_logits' in outputs
         src_logits = outputs['pred_logits']  # [B, N, num_tokens]
+        
+        # Get text_token_mask to filter padding
+        text_token_mask = outputs.get('text_token_mask', None)
 
         # Get matched predictions
         idx = self._get_src_permutation_idx(indices)
         
         # Get target token labels for matched boxes
-        if "token_labels" in targets[0]:
-            target_token_labels = torch.cat([t["token_labels"][J] for t, (_, J) in zip(targets, indices)])
-        else:
-            # Fallback: create token labels from class labels
-            target_classes = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
-            # Simplified: would need proper token mapping here
-            num_tokens = src_logits.shape[-1]
-            target_token_labels = torch.zeros(len(target_classes), num_tokens, device=src_logits.device)
+        assert "token_labels" in targets[0], "token_labels must be provided!"
+        target_token_labels = torch.cat([t["token_labels"][J] for t, (_, J) in zip(targets, indices)])
 
         # Extract matched predictions
         src_logits_matched = src_logits[idx]  # [num_matched, num_tokens]
         
-        # DEBUG: Diagnose focal loss inputs
-        print("\n" + "=" * 80)
-        print("FOCAL LOSS INPUT DIAGNOSTICS")
-        print("=" * 80)
-        print(f"Number of matched pairs: {src_logits_matched.shape[0]}")
-        print(f"Token dimension: {src_logits_matched.shape[1]}")
-        print(f"target_token_labels shape: {target_token_labels.shape}")
+        # ===== CRITICAL: Filter out padded tokens BEFORE loss (MMDetection approach) =====
+        if text_token_mask is not None:
+            B = src_logits.shape[0]
+            max_text_len = src_logits.shape[-1]
+            
+            # Pad text_token_mask to max_text_len
+            text_masks = torch.zeros((B, max_text_len), dtype=torch.bool, device=src_logits.device)
+            text_masks[:, :text_token_mask.shape[1]] = text_token_mask
+            
+            # Create mask for matched queries: [num_matched, max_text_len]
+            text_mask = text_masks[idx[0]]
+            
+            # Filter using torch.masked_select (flattens to 1D)
+            src_logits_valid = torch.masked_select(src_logits_matched, text_mask).contiguous()
+            target_labels_valid = torch.masked_select(target_token_labels, text_mask).contiguous()
+        else:
+            # Fallback: filter using -inf detection
+            valid_mask = ~torch.isinf(src_logits_matched)
+            src_logits_valid = torch.masked_select(src_logits_matched, valid_mask).contiguous()
+            target_labels_valid = torch.masked_select(target_token_labels, valid_mask).contiguous()
         
-        # Check for -inf in matched logits
-        has_inf = torch.isinf(src_logits_matched).any()
-        num_inf = torch.isinf(src_logits_matched).sum().item()
-        print(f"Matched logits contain -inf: {has_inf}")
-        if has_inf:
-            print(f"  Number of -inf values: {num_inf} / {src_logits_matched.numel()}")
-            print(f"  Percentage: {100 * num_inf / src_logits_matched.numel():.1f}%")
-        
-        # Check target_token_labels
-        print(f"target_token_labels nonzero count: {(target_token_labels > 0).sum().item()}")
-        print(f"target_token_labels max value: {target_token_labels.max().item()}")
-        
-        # Check overlap between -inf positions and positive targets
-        if has_inf and (target_token_labels > 0).any():
-            inf_mask = torch.isinf(src_logits_matched)
-            positive_mask = target_token_labels > 0
-            overlap = (inf_mask & positive_mask).sum().item()
-            print(f"Overlap (-inf positions with target=1): {overlap}")
-            if overlap > 0:
-                print("  ⚠️  WARNING: Targets marked as positive at -inf positions!")
-                print("  This will cause NaN in focal loss!")
-        
-        # Show first matched pair details
-        if src_logits_matched.shape[0] > 0:
-            print(f"\nFirst matched pair:")
-            print(f"  Logits range: [{src_logits_matched[0].min().item():.4f}, {src_logits_matched[0].max().item():.4f}]")
-            print(f"  Logits contain -inf: {torch.isinf(src_logits_matched[0]).any()}")
-            print(f"  Target nonzero positions: {(target_token_labels[0] > 0).nonzero().squeeze().tolist()}")
-        print("=" * 80)
-        
-        # Compute focal loss on matched pairs
-        loss_ce = sigmoid_focal_loss(
-            src_logits_matched, 
-            target_token_labels, 
-            num_boxes,
-            alpha=self.focal_alpha,
-            gamma=self.focal_gamma
-        ) * src_logits.shape[1]  # Scale by num_queries
-        
-        print(f"Computed loss_ce (with -inf): {loss_ce.item() if not torch.isnan(loss_ce) else 'NaN'}")
-        
-        # CRITICAL FIX: Filter out -inf positions completely
-        # Grounding DINO pads text tokens to 256 with -inf
-        # We must only compute loss on valid (non -inf) token positions
-        
-        valid_mask = ~torch.isinf(src_logits_matched)  # [num_matched, num_tokens]
-        num_valid = valid_mask.sum().item()
-        
-        print(f"\nFiltering -inf positions:")
-        print(f"  Valid token positions: {num_valid} / {valid_mask.numel()}")
-        print(f"  Padding (-inf) positions: {valid_mask.numel() - num_valid}")
-        
-        # Extract only valid positions
-        # This requires flattening and indexing
-        src_logits_valid = src_logits_matched[valid_mask]  # [num_valid_positions]
-        target_labels_valid = target_token_labels[valid_mask]  # [num_valid_positions]
-        
-        print(f"  Valid logits shape: {src_logits_valid.shape}")
-        print(f"  Valid targets shape: {target_labels_valid.shape}")
-        print(f"  Valid targets nonzero: {(target_labels_valid > 0).sum().item()}")
-        
-        # Compute focal loss only on valid positions
-        if num_valid > 0:
-            # Reshape to [1, num_valid] to match focal loss expected input
-            loss_ce_valid = sigmoid_focal_loss(
-                src_logits_valid.unsqueeze(0),  # [1, num_valid]
-                target_labels_valid.unsqueeze(0),  # [1, num_valid]
+        # Compute focal loss on VALID positions only (no -inf!)
+        if src_logits_valid.numel() > 0:
+            # Reshape to 2D for focal loss: [num_matched, num_valid_tokens_per_query]
+            # But since we flattened with masked_select, we need to treat it as [1, total_valid]
+            loss_ce = sigmoid_focal_loss(
+                src_logits_valid.unsqueeze(0),  # [1, total_valid_positions]
+                target_labels_valid.unsqueeze(0),  # [1, total_valid_positions]
                 num_boxes,
                 alpha=self.focal_alpha,
                 gamma=self.focal_gamma
-            ) * src_logits.shape[1]  # Scale by num_queries
-            
-            print(f"Computed loss_ce (valid positions only): {loss_ce_valid.item() if not torch.isnan(loss_ce_valid) else 'NaN'}")
+            )
+            # NO scaling needed - sigmoid_focal_loss already normalizes by num_boxes
         else:
-            # No valid positions (shouldn't happen)
-            loss_ce_valid = torch.tensor(0.0, device=src_logits.device)
-            print(f"WARNING: No valid positions found, loss_ce = 0")
+            loss_ce = torch.tensor(0.0, device=src_logits.device)
         
-        print("=" * 80)
-        
-        losses = {'loss_ce': loss_ce_valid}
+        losses = {'loss_ce': loss_ce}
 
         if log:
-            # Compute classification accuracy for logging
-            # Take max prob token as prediction
-            pred_classes = src_logits_matched.sigmoid().max(-1)[1]
-            tgt_classes = target_token_labels.max(-1)[1]
-            losses['class_error'] = 100 - (pred_classes == tgt_classes).float().mean() * 100
+            # Compute classification accuracy on valid positions
+            if src_logits_valid.numel() > 0:
+                pred_binary = (src_logits_valid.sigmoid() > 0.5).float()
+                losses['class_error'] = 100 - (pred_binary == target_labels_valid).float().mean() * 100
+            else:
+                losses['class_error'] = torch.tensor(100.0, device=src_logits.device)
 
         return losses
 
@@ -498,8 +455,10 @@ class GroundingDINOCriterion(nn.Module):
         if 'enc_outputs' in outputs:
             enc_outputs = outputs['enc_outputs']
             # For encoder, use binary targets (objectness)
+            # Keep token_labels from original targets for matching
             bin_targets = [{'labels': torch.zeros_like(t['labels']), 
-                           'boxes': t['boxes']} for t in targets]
+                           'boxes': t['boxes'],
+                           'token_labels': t['token_labels']} for t in targets]
             indices = self.matcher(enc_outputs, bin_targets)
             for loss in self.losses:
                 kwargs = {'log': False} if loss == 'labels' else {}
