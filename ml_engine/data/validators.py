@@ -224,17 +224,17 @@ def _validate_bbox(bbox: Any, annotation: Dict, ann_idx: int) -> List[str]:
         errors.append(f"Annotation {ann_idx}: `bbox` must have 4 elements [x, y, width, height], got {len(bbox)}")
         return errors
 
-    # Check all elements are numbers
-    if not all(isinstance(x, int) for x in bbox):
-        errors.append(f"Annotation {ann_idx}: `bbox` elements must be integer")
+    # Check all elements are numbers (int or float, per COCO spec)
+    if not all(isinstance(x, (int, float)) for x in bbox):
+        errors.append(f"Annotation {ann_idx}: `bbox` elements must be numbers (int or float)")
         return errors
 
     # Check width and height are positive
     x, y, width, height = bbox
-    if width <= 0:
-        errors.append(f"Annotation {ann_idx}: `bbox` width must be > 0, got {width}")
-    if height <= 0:
-        errors.append(f"Annotation {ann_idx}: `bbox` height must be > 0, got {height}")
+    if width < 0:
+        errors.append(f"Annotation {ann_idx}: `bbox` width must be >= 0, got {width}")
+    if height < 0:
+        errors.append(f"Annotation {ann_idx}: `bbox` height must be >= 0, got {height}")
 
     # Optional: warn about suspicious values
     if x < 0 or y < 0:
@@ -318,11 +318,11 @@ def _validate_segmentation(segmentation: Any, ann_idx: int) -> List[str]:
             )
             continue
 
-        # All coordinates must be numbers
-        if not all(isinstance(coord, int) for coord in polygon):
+        # All coordinates must be numbers (int or float, per COCO spec)
+        if not all(isinstance(coord, (int, float)) for coord in polygon):
             errors.append(
                 f"Annotation {ann_idx}, polygon {poly_idx}: "
-                f"all coordinates must be integers"
+                f"all coordinates must be numbers (int or float)"
             )
 
     return errors
