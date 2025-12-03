@@ -29,6 +29,7 @@ from .preprocessing import (
     YOLOPreprocessor,
     create_preprocessor_from_models
 )
+from .dataset_factory import DatasetFactory
 
 __all__ = [
     # Inspection
@@ -49,6 +50,8 @@ __all__ = [
     'TeacherDataset',
     'collate_fn',
     'create_dataloader',
+    # Dataset Factory
+    'DatasetFactory',
     # Preprocessing
     'MultiModelPreprocessor',
     'BaseModelPreprocessor',

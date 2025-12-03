@@ -158,10 +158,6 @@ class COCODataset(Dataset):
 
                 sample['masks'].append(mask)
 
-        # Apply transforms if specified (legacy support)
-        # if self.transforms is not None:
-        #     sample = self.transforms(sample)
-
         return sample
 
     def _polygon_to_mask(self, segmentation: List, height: int, width: int) -> np.ndarray:
@@ -338,11 +334,10 @@ class TeacherDataset(COCODataset):
                 'metadata': metadata
             }
 
-        # Return only metadata + preprocessed data (no raw data needed)
         return {
             'image_id': sample['image_id'],
             'file_name': sample['file_name'],
-            'image_size': sample['image_size'],
+            # 'image_size': sample['image_size'],
             'preprocessed': preprocessed_data
         }
 

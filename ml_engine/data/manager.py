@@ -1,16 +1,16 @@
 """
-Data Manager - Single Source of Truth for Dataset Operations.
+Data Manager - Single Source of Truth for DATA operations.
 
-This module owns ALL dataset operations:
-- Load raw data once
-- Inspect once
-- Validate and preprocess once
+This module owns ALL data operations:
+- Load raw COCO data once
+- Validate and preprocess data
+- Inspect dataset metadata
 - Split into train/val/test
-- Create PyTorch datasets
 - Cache all results
+- Expose data through accessors
 
 No other module should directly load COCO JSON files.
-Everyone gets data FROM this manager.
+Everyone gets DATA from this manager.
 """
 
 import logging
@@ -25,51 +25,42 @@ from ml_engine.data.validators import (
     split_dataset,
     check_data_quality
 )
-from ml_engine.data.loaders import TeacherDataset
 
 logger = logging.getLogger(__name__)
 
 
 class DataManager:
     """
-    Central orchestrator for all dataset operations.
+    Central orchestrator for all DATA operations.
     
     Responsibilities:
     - Load COCO JSON once (single source of truth)
-    - Inspect dataset once (cache results)
     - Validate and auto-fix data (bbox from masks, etc.)
+    - Inspect dataset once (cache results)
     - Split train/val/test (if needed)
-    - Provide clean interfaces to get data
-    - Create PyTorch datasets (pass data to loaders, don't let them load)
+    - Expose data through clean accessors
     
     Design principles:
     - Data is loaded ONCE in __init__
     - All operations are cached
     - Pure functions are called from here
-    - PyTorch datasets receive data, never load files
+    - Expose data
     
     Example:
-        >>> # Create manager (loads and inspects once)
+        >>> from ml_engine.data.manager import DataManager
+        >>> from ml_engine.data.dataset_factory import DatasetFactory
+        >>> 
+        >>> # Create manager (loads and validates once)
         >>> manager = DataManager(
         >>>     data_path='data/raw/annotations.json',
         >>>     image_dir='data/raw/images',
         >>>     split_config={'train': 0.7, 'val': 0.2, 'test': 0.1}
         >>> )
         >>> 
-        >>> # Get inspection results (cached)
-        >>> info = manager.get_dataset_info()
-        >>> print(info['has_boxes'], info['has_masks'])
-        >>> 
-        >>> # Get required models based on data
-        >>> models = manager.get_required_models()
-        >>> # ['grounding_dino', 'sam']
-        >>> 
-        >>> # Create PyTorch dataset (receives pre-loaded data)
-        >>> train_dataset = manager.create_pytorch_dataset(
-        >>>     split='train',
-        >>>     preprocessor=preprocessor,
-        >>>     augmentation_pipeline=aug_pipeline
-        >>> )
+        >>> # Get data and metadata
+        >>> train_data = manager.get_split('train')
+        >>> dataset_info = manager.get_dataset_info()
+        >>> required_models = manager.get_required_models()
     """
 
     def __init__(
@@ -97,6 +88,15 @@ class DataManager:
         logger.info("=" * 60)
         logger.info("Initializing DataManager")
         logger.info("=" * 60)
+
+        if not self.data_path.exists():
+            raise FileNotFoundError(f"Dataset file not found: {self.data_path}")
+
+        if not self.image_dir.exists():
+            raise FileNotFoundError(f"Image directory not found: {self.image_dir}")
+
+        if not self.image_dir.is_dir():
+            raise NotADirectoryError(f"Image path is not a directory: {self.image_dir}")
 
         # Step 1: Load JSON
         logger.info("Loading dataset: %s", self.data_path)
@@ -178,10 +178,9 @@ class DataManager:
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
 
         directory_images = set()
-        if self.image_dir.exists() and self.image_dir.is_dir():
-            for file_path in self.image_dir.iterdir():
-                if file_path.is_file() and file_path.suffix.lower() in image_extensions:
-                    directory_images.add(file_path.name)
+        for file_path in self.image_dir.iterdir():
+            if file_path.is_file() and file_path.suffix.lower() in image_extensions:
+                directory_images.add(file_path.name)
 
         extra_images = directory_images - annotated_filenames
 
@@ -264,49 +263,6 @@ class DataManager:
     #     """Get list of available split names."""
     #     return list(self.splits.keys())
 
-    def create_pytorch_dataset(
-        self,
-        split: str,
-        preprocessor=None,
-        augmentation_pipeline=None
-    ):
-        """
-        Create a PyTorch Dataset for a specific split.
-        
-        This is the ONLY way to create datasets - they receive pre-loaded data
-        from the manager and never load JSON files themselves.
-        
-        Args:
-            split: Split name ('train', 'val', 'test', or 'all')
-            preprocessor: Optional MultiModelPreprocessor instance
-            augmentation_pipeline: Optional augmentation pipeline
-        
-        Returns:
-            TeacherDataset instance with pre-loaded data
-        
-        Example:
-            >>> train_dataset = manager.create_pytorch_dataset(
-            >>>     split='train',
-            >>>     preprocessor=preprocessor,
-            >>>     augmentation_pipeline=aug_pipeline
-            >>> )
-        """
-        # Get split data (already loaded and cached)
-        split_data = self.get_split(split)
-
-        # Create dataset with pre-loaded data (NO file loading in dataset!)
-        dataset = TeacherDataset(
-            coco_data=split_data,
-            image_dir=str(self.image_dir),
-            preprocessor=preprocessor,
-            augmentation_pipeline=augmentation_pipeline,
-            return_boxes=self.dataset_info['has_boxes'],
-            return_masks=self.dataset_info['has_masks']
-        )
-
-        logger.info("Created PyTorch dataset for split '%s': %d samples", split, len(dataset))
-        return dataset
-    
     def save_splits(self, output_dir: str) -> None:
         """
         Save all splits to separate JSON files.

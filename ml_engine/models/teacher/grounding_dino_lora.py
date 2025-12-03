@@ -135,10 +135,6 @@ class GroundingDINOLoRA(nn.Module):
         logger.info("Loading config from: %s", config_file)
         args = SLConfig.fromfile(str(config_file))
 
-        print("#" * 60)
-        print("config" * 10)
-        print(self.bert_model_path)
-
         # Configure BERT path (for offline environments)
         if self.bert_model_path:
             bert_path = Path(self.bert_model_path)
@@ -287,6 +283,7 @@ class GroundingDINOLoRA(nn.Module):
             Dict with:
                 - pred_logits: [B, N, num_tokens] - similarity scores with text tokens
                 - pred_boxes: [B, N, 4] - normalized boxes in [cx, cy, w, h] format
+                - text_token_mask: [B, num_valid_tokens] - boolean mask for valid tokens
                 - features: Optional intermediate features
         
         Note:
@@ -308,10 +305,32 @@ class GroundingDINOLoRA(nn.Module):
         # Must use 'samples' parameter name to match original GroundingDINO signature
         outputs = self.model(samples=images, captions=captions)
         
+        # Add text_token_mask for loss computation (needed to filter -inf padding)
+        # Get tokenizer and tokenize captions to extract mask
+        base_model = self.model.base_model.model if hasattr(self.model, 'base_model') else self.model
+        tokenized = base_model.tokenizer(captions, padding='longest', return_tensors='pt')
+        text_token_mask = tokenized.attention_mask.bool()  # [B, num_valid_tokens]
+        
+        # Move to same device as outputs
+        text_token_mask = text_token_mask.to(outputs['pred_logits'].device)
+        outputs['text_token_mask'] = text_token_mask
+        
         if return_features and hasattr(self.model, 'get_features'):
             outputs['features'] = self.model.get_features()
         
         return outputs
+    
+    @property
+    def tokenizer(self):
+        """
+        Access the BERT tokenizer from the wrapped GroundingDINO model.
+        
+        Returns:
+            The BERT tokenizer used by Grounding DINO
+        """
+        # Access the base model through PEFT wrapper
+        base_model = self.model.base_model.model if hasattr(self.model, 'base_model') else self.model
+        return base_model.tokenizer
     
     def get_trainable_parameters(self) -> List[nn.Parameter]:
         """Get list of trainable parameters (LoRA adapters only)."""

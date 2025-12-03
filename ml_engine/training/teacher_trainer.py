@@ -18,8 +18,8 @@ import torch
 from tqdm import tqdm
 
 from ml_engine.data.loaders import create_dataloader
-from ml_engine.data.preprocessing import create_preprocessor_from_models
 from ml_engine.data.manager import DataManager
+from ml_engine.data.dataset_factory import DatasetFactory
 from ml_engine.models.teacher.grounding_dino_lora import load_grounding_dino_with_lora
 from ml_engine.models.teacher.sam_lora import load_sam_with_lora
 from ml_engine.training.losses import build_criterion, SegmentationLoss
@@ -27,7 +27,11 @@ from ml_engine.training.training_manager import TrainingManager
 from ml_engine.training.checkpoint_manager import CheckpointManager
 from core.logger import TensorBoardLogger, log_config, log_metrics
 from core.constants import DEFAULT_CONFIGS_DIR
-from augmentation import get_augmentation_registry
+
+# Import official Grounding DINO utilities for proper token mapping
+# import sys
+# sys.path.insert(0, str(Path(__file__).parent.parent.parent / "GroundingDINO"))
+from groundingdino.util.vl_utils import build_captions_and_token_span, create_positive_map_from_span
 
 logger = logging.getLogger(__name__)
 
@@ -113,13 +117,10 @@ class TeacherTrainer:
         logger.info("Dataset has masks: %s", self.dataset_info['has_masks'])
         logger.info("Num classes: %s", self.dataset_info['num_classes'])
 
-        # Determine which models to load (DATA-DRIVEN!)
         self.required_models = data_manager.get_required_models()
         logger.info("Required teacher models: %s", self.required_models)
 
         # Initialize components
-        self._init_augmentation()
-        self._init_preprocessor()
         self._init_datasets()
         self._init_models()
         self._init_losses()
@@ -132,44 +133,37 @@ class TeacherTrainer:
         if resume_from:
             self._resume_from_checkpoint(resume_from)
 
-    def _init_augmentation(self):
-        """Initialize augmentation pipeline."""
-        aug_config = self.config['augmentation']
-
-        if aug_config['enabled']:
-            registry = get_augmentation_registry()
-
-            self.augmentation_pipeline = registry.get_pipeline(
-                characteristics=aug_config['characteristics'],
-                environment=aug_config['environment'],
-                intensity=aug_config['intensity']
-            )
-            logger.info("✓ Augmentation pipeline created")
-        else:
-            self.augmentation_pipeline = None
-            logger.info("Augmentation disabled")
-
-    def _init_preprocessor(self):
-        """Initialize multi-model preprocessor."""
-        self.preprocessor = create_preprocessor_from_models(
-            model_names=self.required_models
-        )
-        logger.info("✓ Preprocessor initialized for: %s", self.required_models)
-
     def _init_datasets(self):
-        """Initialize datasets and dataloaders using DataManager."""
-        # Training dataset - use 'train' split from manager
-        self.train_dataset = self.data_manager.create_pytorch_dataset(
-            split='train',
-            preprocessor=self.preprocessor,
-            augmentation_pipeline=self.augmentation_pipeline
+        """
+        Initialize datasets and dataloaders using DatasetFactory.
+
+        DatasetFactory handles:
+        - Preprocessor creation (based on required_models)
+        - Augmentation pipeline creation (based on config)
+        - TeacherDataset instantiation
+        """
+        # Get data and metadata from DataManager
+        train_data = self.data_manager.get_split('train')
+        val_data = self.data_manager.get_split('val')
+
+        # Create training dataset with augmentation
+        self.train_dataset = DatasetFactory.create_dataset(
+            coco_data=train_data,
+            image_dir=str(self.data_manager.image_dir),
+            dataset_info=self.dataset_info,
+            model_names=self.required_models,
+            augmentation_config=self.config['augmentation'],
+            is_training=True
         )
 
-        # Validation dataset - use 'val' split (no augmentation)
-        self.val_dataset = self.data_manager.create_pytorch_dataset(
-            split='val',  # Platform-created val split
-            preprocessor=self.preprocessor,
-            augmentation_pipeline=None  # No augmentation for validation
+        # Create validation dataset without augmentation
+        self.val_dataset = DatasetFactory.create_dataset(
+            coco_data=val_data,
+            image_dir=str(self.data_manager.image_dir),
+            dataset_info=self.dataset_info,
+            model_names=self.required_models,
+            augmentation_config=None,  # No augmentation for validation
+            is_training=False
         )
 
         # Create dataloaders
@@ -249,10 +243,10 @@ class TeacherTrainer:
                 focal_gamma=2.0
             )
 
-            logger.info(f"✓ Grounding DINO criterion with Hungarian matching initialized")
-            logger.info(f"  - Num classes: {num_classes}")
-            logger.info(f"  - Num decoder layers: {num_decoder_layers}")
-            logger.info(f"  - Auxiliary losses: {num_decoder_layers - 1} intermediate + 1 encoder")
+            logger.info("✓ Grounding DINO criterion with Hungarian matching initialized")
+            logger.info("  - Num classes: %s", num_classes)
+            logger.info("  - Num decoder layers: %s", num_decoder_layers)
+            logger.info("  - Auxiliary losses: %s intermediate + 1 encoder", num_decoder_layers - 1)
 
         if 'sam' in self.models:
             self.losses['segmentation'] = SegmentationLoss().to(self.device)
@@ -261,7 +255,7 @@ class TeacherTrainer:
         """Initialize optimizers for each model."""
         self.optimizers = {}
         self.schedulers = {}
-        
+
         # in default config, `learning_rate` as actually model dependent
         # but leave it as it is for now
         lr = self.config.get('learning_rate', 1e-4)
@@ -302,8 +296,8 @@ class TeacherTrainer:
             )
             self.schedulers[model_name] = scheduler
 
-            logger.info(f"✓ Optimizer and scheduler created for {model_name}")
-    
+            logger.info("✓ Optimizer and scheduler created for %s", model_name)
+
     def _init_training_manager(self):
         """Initialize training managers for each model."""
         self.training_managers = {}
@@ -319,33 +313,33 @@ class TeacherTrainer:
             )
             self.training_managers[model_name] = manager
 
-            logger.info(f"✓ TrainingManager created for {model_name}")
-    
+            logger.info("✓ TrainingManager created for %s", model_name)
+
     def _init_checkpoint_manager(self):
         """Initialize checkpoint managers for each model."""
         self.checkpoint_managers = {}
-        
-        for model_name in self.models.keys():
+
+        for model_name in self.models:
             output_dir = self.output_dir / 'teachers' / f'{model_name}_lora'
             config_path = DEFAULT_CONFIGS_DIR / 'checkpoint_config.yaml'
-            
+
             manager = CheckpointManager(
                 output_dir=str(output_dir),
                 config_path=str(config_path)
             )
             self.checkpoint_managers[model_name] = manager
-            
-            logger.info(f"✓ CheckpointManager created for {model_name}: {output_dir}")
-    
+
+            logger.info("✓ CheckpointManager created for %s: %s", model_name, output_dir)
+
     def _init_loggers(self):
         """Initialize TensorBoard loggers."""
         self.tb_loggers = {}
-        
-        for model_name in self.models.keys():
+
+        for model_name in self.models:
             log_dir = self.output_dir / 'logs' / model_name
             self.tb_loggers[model_name] = TensorBoardLogger(str(log_dir))
-            logger.info(f"✓ TensorBoard logger: {log_dir}")
-    
+            logger.info("✓ TensorBoard logger: %s", log_dir)
+
     def train(self):
         """
         Main training loop.
@@ -354,26 +348,22 @@ class TeacherTrainer:
         """
         epochs = self.config.get('epochs', 50)
         start_epoch = 0
-        
+
         logger.info("=" * 60)
         logger.info("Starting Teacher Model Training")
         logger.info("=" * 60)
         log_config(logger, self.config, "Training Configuration")
-        
+
         for epoch in range(start_epoch, epochs):
-            logger.info(f"\nEpoch {epoch + 1}/{epochs}")
+            logger.info("\nEpoch %s/%s", epoch + 1, epochs)
             logger.info("-" * 60)
-            
-            # Train epoch
+
             train_metrics = self.train_epoch(epoch)
-            
-            # Validate
+
             val_metrics = self.validate(epoch)
-            
-            # Combine metrics
-            all_metrics = {**train_metrics, **val_metrics, 'epoch': epoch}
-            
-            # Save checkpoints
+
+            all_metrics = {**train_metrics, **val_metrics}
+
             for model_name in self.models.keys():
                 self.checkpoint_managers[model_name].save_checkpoint(
                     epoch=epoch,
@@ -387,7 +377,7 @@ class TeacherTrainer:
                 
                 # Check early stopping
                 if self.checkpoint_managers[model_name].should_stop:
-                    logger.info(f"Early stopping triggered for {model_name}")
+                    logger.info("Early stopping triggered for %s", model_name)
                     break
         
         logger.info("=" * 60)
@@ -397,7 +387,7 @@ class TeacherTrainer:
         # Close loggers
         for tb_logger in self.tb_loggers.values():
             tb_logger.close()
-    
+
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """
         Train for one epoch.
@@ -411,27 +401,33 @@ class TeacherTrainer:
         # Set models to train mode
         for model in self.models.values():
             model.train()
-        
+
         # Update epoch in training managers
         for manager in self.training_managers.values():
             manager.set_epoch(epoch)
-        
-        # Metrics accumulator
-        epoch_losses = {f'{model_name}_loss': [] for model_name in self.models.keys()}
-        
+
+        # Metrics accumulator (dynamic keys)
+        epoch_losses = {}
+
         # Training loop
         pbar = tqdm(self.train_loader, desc=f"Train Epoch {epoch + 1}")
         for batch in pbar:
-            # Train each loaded model
             batch_losses = self._train_batch(batch)
             
-            # Accumulate losses
+            # Accumulate losses (dynamically add new keys)
             for key, value in batch_losses.items():
-                if key in epoch_losses:
-                    epoch_losses[key].append(value)
+                if key not in epoch_losses:
+                    epoch_losses[key] = []
+                epoch_losses[key].append(value)
             
-            # Update progress bar
-            pbar.set_postfix({k: f"{v[-1]:.4f}" for k, v in epoch_losses.items() if v})
+            # Update progress bar - show main loss and components
+            postfix = {}
+            for key, values in epoch_losses.items():
+                if values:
+                    # Show only main losses and key components in progress bar
+                    if 'total_loss' in key or key in ['grounding_dino_loss_ce', 'grounding_dino_loss_bbox', 'grounding_dino_loss_giou']:
+                        postfix[key] = f"{values[-1]:.4f}"
+            pbar.set_postfix(postfix)
         
         # Compute average metrics
         train_metrics = {}
@@ -463,12 +459,12 @@ class TeacherTrainer:
         """
         batch_losses = {}
         
-        # Train Grounding DINO if loaded
         if 'grounding_dino' in self.models:
-            dino_loss = self._train_grounding_dino_batch(batch)
-            batch_losses['grounding_dino_loss'] = dino_loss
-        
-        # Train SAM if loaded
+            dino_losses = self._train_grounding_dino_batch(batch)
+            # Add all GroundingDINO loss components with prefix
+            for key, value in dino_losses.items():
+                batch_losses[f'grounding_dino_{key}'] = value
+
         if 'sam' in self.models:
             sam_loss = self._train_sam_batch(batch)
             batch_losses['sam_loss'] = sam_loss
@@ -480,27 +476,134 @@ class TeacherTrainer:
         model = self.models['grounding_dino']
         manager = self.training_managers['grounding_dino']
         criterion = self.losses['detection']
-        
+
         def compute_loss(batch):
             # Get preprocessed DINO data (already transformed by official transforms)
             dino_data = batch['preprocessed']['grounding_dino']
-            images = dino_data['images'].to(self.device)    # [B, 3, H, W] padded
-            boxes = dino_data['boxes'].to(self.device)      # [B, max_objs, 4] already normalized!
+            images = dino_data['images'].to(self.device)    # NestedTensor with .tensors and .mask
+            boxes = dino_data['boxes'].to(self.device)      # [B, max_objs, 4] normalized [cx,cy,w,h]
             labels = dino_data['labels'].to(self.device)    # [B, max_objs]
             
-            # Get batch size
-            batch_size = images.shape['tensors.shape'][0]
-            
+            # Get batch size from labels (simplest and most reliable)
+            batch_size = labels.shape[0]
+
+            # Sanity check: verify we have valid data
+            if batch_size == 0:
+                logger.error("Empty batch received!")
+                return {'loss': torch.tensor(0.0, device=self.device, requires_grad=True)}
+
+            # Debug: check for valid objects
+            total_valid_objs = (labels != -1).sum().item()
+            if total_valid_objs == 0:
+                logger.warning("Batch has no valid objects! Skipping...")
+                return {'loss': torch.tensor(0.0, device=self.device, requires_grad=True)}
+
             # Get class names from class mapping
             class_names = list(self.dataset_info['class_mapping'].values())
-            
+
             # Forward pass - Grounding DINO will format as "class1 . class2 . class3"
             # The model should return auxiliary outputs for DETR-style training
             outputs = model(images, class_names=class_names)
             
+            # Diagnose valid token count
+            print("=" * 80)
+            print("TOKEN DIAGNOSTICS")
+            print("=" * 80)
+            
+            # Get valid token mask from first query (all queries share same text encoding)
+            first_query_logits = outputs['pred_logits'][0, 0, :]  # [num_text_tokens]
+            valid_token_mask = ~torch.isinf(first_query_logits)
+            num_valid_tokens = valid_token_mask.sum().item()
+            total_tokens = first_query_logits.shape[0]
+            
+            print(f"Text caption: '{' . '.join(class_names)}'")
+            print(f"Number of classes: {len(class_names)}")
+            print(f"Total token positions (with padding): {total_tokens}")
+            print(f"Valid tokens (non -inf): {num_valid_tokens}")
+            print(f"Padding tokens (-inf): {total_tokens - num_valid_tokens}")
+            print(f"Valid token positions: {valid_token_mask.nonzero().squeeze().tolist()}")
+            
+            # Show first few logits values
+            print(f"\nFirst 20 logit values (from first query):")
+            for i in range(min(20, total_tokens)):
+                val = first_query_logits[i].item()
+                status = "VALID" if not torch.isinf(first_query_logits[i]) else "-INF"
+                print(f"  Token {i:3d}: {val:8.4f}  [{status}]")
+            
+            # Show what token ranges each class should occupy
+            if num_valid_tokens > 0:
+                tokens_per_class = max(1, num_valid_tokens // len(class_names))
+                print(f"\nRecommended token mapping (equally distributed):")
+                for class_id, class_name in enumerate(class_names):
+                    start_idx = class_id * tokens_per_class
+                    end_idx = min(start_idx + tokens_per_class, num_valid_tokens)
+                    print(f"  Class {class_id} '{class_name}': tokens [{start_idx}:{end_idx}] (total: {end_idx - start_idx})")
+            
+            print("=" * 80)
+            
             # Ensure model returns auxiliary outputs
             if 'aux_outputs' not in outputs:
                 logger.warning("Model not returning auxiliary outputs! Training may be suboptimal.")
+            
+            # Debug: check model outputs
+            if torch.isnan(outputs['pred_logits']).any():
+                logger.error("NaN detected in pred_logits!")
+            if torch.isnan(outputs['pred_boxes']).any():
+                logger.error("NaN detected in pred_boxes!")
+            
+            # ============================================================
+            # OFFICIAL TOKEN MAPPING: Use Grounding DINO's built-in utilities
+            # ============================================================
+            
+            # Step 1: Build caption and character-level token spans using official utility
+            # This formats the caption exactly as Grounding DINO expects: "class1 . class2 . class3"
+            caption, cat2tokenspan = build_captions_and_token_span(
+                class_names, 
+                force_lowercase=False
+            )
+            
+            print(f"\nOFFICIAL TOKEN MAPPING:")
+            print(f"  Caption: '{caption}'")
+            print(f"  Character spans per category:")
+            for cat_name, spans in cat2tokenspan.items():
+                print(f"    '{cat_name}': {spans}")
+            
+            # Step 2: Tokenize using the model's tokenizer (same as model uses internally)
+            tokenized = model.tokenizer(
+                caption, 
+                padding="longest", 
+                return_tensors="pt"
+            ).to(self.device)
+            
+            print(f"  Tokenized input_ids: {tokenized['input_ids'][0].tolist()}")
+            print(f"  Tokenized length: {tokenized['input_ids'].shape[1]}")
+            
+            # Step 3: Build class_id -> token_span mapping
+            # Map from class_id (integer) to character spans
+            class_id_to_name = {i: name for i, name in enumerate(class_names)}
+            token_span_per_class = []
+            for class_id in range(len(class_names)):
+                class_name = class_id_to_name[class_id]
+                if class_name in cat2tokenspan:
+                    token_span_per_class.append(cat2tokenspan[class_name])
+                else:
+                    logger.warning(f"Class '{class_name}' not found in cat2tokenspan!")
+                    token_span_per_class.append([])  # Empty span as fallback
+            
+            # Step 4: Create positive map using official utility
+            # This converts character spans to actual BERT token positions
+            # Returns: [num_classes, max_text_len] with 1.0 at relevant token positions
+            positive_map = create_positive_map_from_span(
+                tokenized, 
+                token_span_per_class,
+                max_text_len=outputs['pred_logits'].shape[-1]  # 256
+            ).to(self.device)
+            
+            print(f"  Positive map shape: {positive_map.shape}")
+            for class_id, class_name in enumerate(class_names):
+                active_tokens = (positive_map[class_id] > 0).nonzero().squeeze()
+                print(f"  Class {class_id} '{class_name}' → tokens {active_tokens.tolist()}")
+            print("=" * 80)
             
             # Prepare targets in DETR format: list of dicts (one per batch element)
             targets = []
@@ -510,11 +613,55 @@ class TeacherTrainer:
                 valid_labels = labels[b][valid_mask]  # [num_valid_objs]
                 valid_boxes = boxes[b][valid_mask]    # [num_valid_objs, 4]
                 
+                # Sanity check boxes (should be normalized [0, 1])
+                if len(valid_boxes) > 0:
+                    if (valid_boxes < 0).any() or (valid_boxes > 1).any():
+                        logger.warning(f"Batch {b}: boxes not normalized! Range: [{valid_boxes.min():.3f}, {valid_boxes.max():.3f}]")
+                
+                # Create token labels for each valid object using the positive map
+                # token_labels[i, j] = positive_map[class_id, j]
+                # Shape: [num_valid_objs, max_text_len]
+                token_labels = torch.zeros(
+                    len(valid_labels), 
+                    positive_map.shape[1],  # max_text_len (256)
+                    dtype=torch.float32, 
+                    device=self.device
+                )
+                
+                for obj_idx, class_id in enumerate(valid_labels):
+                    class_id_int = int(class_id.item())
+                    if class_id_int < len(class_names):
+                        # Use the official positive map for this class
+                        token_labels[obj_idx] = positive_map[class_id_int]
+                    else:
+                        logger.warning(f"Class ID {class_id_int} out of range (num_classes={len(class_names)})")
+                
                 # Create target dict for this batch element
                 targets.append({
-                    'labels': valid_labels,  # [num_valid_objs]
-                    'boxes': valid_boxes,    # [num_valid_objs, 4] in [cx, cy, w, h] format
+                    'labels': valid_labels,        # [num_valid_objs] - class IDs
+                    'boxes': valid_boxes,          # [num_valid_objs, 4] in normalized [cx, cy, w, h]
+                    'token_labels': token_labels,  # [num_valid_objs, max_text_len] - proper token labels
                 })
+            
+            # DEBUG: Print target structure before loss computation
+            print("\n" + "=" * 80)
+            print("TARGET STRUCTURE DEBUG")
+            print("=" * 80)
+            print(f"Number of targets (batch elements): {len(targets)}")
+            for batch_idx, target in enumerate(targets):
+                print(f"\nBatch {batch_idx}:")
+                print(f"  - num_objects: {len(target['labels'])}")
+                print(f"  - labels: {target['labels']}")
+                print(f"  - boxes shape: {target['boxes'].shape}")
+                print(f"  - token_labels shape: {target['token_labels'].shape}")
+                print(f"  - token_labels nonzero count: {(target['token_labels'] > 0).sum().item()}")
+                
+                # Show token_labels for first object
+                if len(target['labels']) > 0:
+                    first_obj_tokens = target['token_labels'][0]
+                    nonzero_positions = (first_obj_tokens > 0).nonzero().squeeze()
+                    print(f"  - First object token_labels nonzero at: {nonzero_positions.tolist() if nonzero_positions.numel() > 0 else 'none'}")
+            print("=" * 80)
             
             # Compute loss with Hungarian matching and auxiliary losses
             # Returns dict with keys like:
@@ -524,10 +671,23 @@ class TeacherTrainer:
             # - 'loss_ce_enc', 'loss_bbox_enc', 'loss_giou_enc' (encoder)
             loss_dict = criterion(outputs, targets)
             
+            # Debug: check for NaN in loss components
+            for k, v in loss_dict.items():
+                if torch.isnan(v).any():
+                    logger.error(f"NaN detected in {k}: {v}")
+            
             # Compute total weighted loss
             total_loss = sum(loss_dict[k] * criterion.weight_dict[k] 
                            for k in loss_dict.keys() 
                            if k in criterion.weight_dict)
+            
+            # Final NaN check
+            if torch.isnan(total_loss):
+                logger.error("NaN in total_loss!")
+                logger.error(f"Loss components: {loss_dict}")
+                logger.error(f"Valid objects: {total_valid_objs}")
+                logger.error(f"Pred logits range: [{outputs['pred_logits'].min():.3f}, {outputs['pred_logits'].max():.3f}]")
+                logger.error(f"Pred boxes range: [{outputs['pred_boxes'].min():.3f}, {outputs['pred_boxes'].max():.3f}]")
             
             # Return dict with total loss and components for logging
             result = {'loss': total_loss}
@@ -538,7 +698,15 @@ class TeacherTrainer:
         # Training step with gradient management
         loss_dict = manager.training_step(batch, compute_loss)
         
-        return loss_dict['loss'].item()
+        # Return all loss components for logging (convert to Dict[str, float])
+        result = {'total_loss': loss_dict['loss'].item()}
+        
+        # Add individual components (detached, already on CPU from result dict)
+        for key, value in loss_dict.items():
+            if key != 'loss':
+                result[key] = value.item() if torch.is_tensor(value) else value
+        
+        return result
     
     def _train_sam_batch(self, batch: Dict[str, Any]) -> float:
         """Train SAM on a batch."""
@@ -589,7 +757,7 @@ class TeacherTrainer:
         for model in self.models.values():
             model.eval()
         
-        val_losses = {f'{model_name}_loss': [] for model_name in self.models.keys()}
+        val_losses = {}  # Dynamic keys
         
         pbar = tqdm(self.val_loader, desc=f"Val Epoch {epoch + 1}")
         for batch in pbar:
@@ -597,10 +765,18 @@ class TeacherTrainer:
             batch_losses = self._validate_batch(batch)
             
             for key, value in batch_losses.items():
-                if key in val_losses:
-                    val_losses[key].append(value)
+                if key not in val_losses:
+                    val_losses[key] = []
+                val_losses[key].append(value)
             
-            pbar.set_postfix({k: f"{v[-1]:.4f}" for k, v in val_losses.items() if v})
+            # Update progress bar - show main loss and components
+            postfix = {}
+            for key, values in val_losses.items():
+                if values:
+                    # Show only main losses and key components
+                    if 'total_loss' in key or key in ['grounding_dino_loss_ce', 'grounding_dino_loss_bbox', 'grounding_dino_loss_giou']:
+                        postfix[key] = f"{values[-1]:.4f}"
+            pbar.set_postfix(postfix)
         
         # Compute average metrics
         val_metrics = {}
@@ -636,11 +812,39 @@ class TeacherTrainer:
             boxes = dino_data['boxes'].to(self.device)
             labels = dino_data['labels'].to(self.device)
             
-            batch_size = images.shape[0]
+            batch_size = labels.shape[0]
             class_names = list(self.dataset_info['class_mapping'].values())
             criterion = self.losses['detection']
+            model = self.models['grounding_dino']
             
-            outputs = self.models['grounding_dino'](images, class_names=class_names)
+            outputs = model(images, class_names=class_names)
+            
+            # Use official Grounding DINO token mapping (same as training)
+            caption, cat2tokenspan = build_captions_and_token_span(
+                class_names, 
+                force_lowercase=False
+            )
+            
+            tokenized = model.tokenizer(
+                caption, 
+                padding="longest", 
+                return_tensors="pt"
+            ).to(self.device)
+            
+            class_id_to_name = {i: name for i, name in enumerate(class_names)}
+            token_span_per_class = []
+            for class_id in range(len(class_names)):
+                class_name = class_id_to_name[class_id]
+                if class_name in cat2tokenspan:
+                    token_span_per_class.append(cat2tokenspan[class_name])
+                else:
+                    token_span_per_class.append([])
+            
+            positive_map = create_positive_map_from_span(
+                tokenized, 
+                token_span_per_class,
+                max_text_len=outputs['pred_logits'].shape[-1]
+            ).to(self.device)
             
             # Prepare targets in DETR format: list of dicts
             targets = []
@@ -649,9 +853,23 @@ class TeacherTrainer:
                 valid_labels = labels[b][valid_mask]
                 valid_boxes = boxes[b][valid_mask]
                 
+                # Create token labels using official positive map
+                token_labels = torch.zeros(
+                    len(valid_labels), 
+                    positive_map.shape[1],
+                    dtype=torch.float32, 
+                    device=self.device
+                )
+                
+                for obj_idx, class_id in enumerate(valid_labels):
+                    class_id_int = int(class_id.item())
+                    if class_id_int < len(class_names):
+                        token_labels[obj_idx] = positive_map[class_id_int]
+                
                 targets.append({
                     'labels': valid_labels,
                     'boxes': valid_boxes,
+                    'token_labels': token_labels,
                 })
             
             # Compute loss with auxiliary losses
@@ -662,7 +880,10 @@ class TeacherTrainer:
                            for k in loss_dict.keys() 
                            if k in criterion.weight_dict)
             
-            batch_losses['grounding_dino_loss'] = total_loss.item()
+            # Add all loss components with prefix
+            batch_losses['grounding_dino_total_loss'] = total_loss.item()
+            for key, value in loss_dict.items():
+                batch_losses[f'grounding_dino_{key}'] = value.item() if torch.is_tensor(value) else value
         
         # Validate SAM if loaded
         if 'sam' in self.models:

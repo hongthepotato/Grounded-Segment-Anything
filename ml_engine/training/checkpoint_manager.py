@@ -55,7 +55,7 @@ class CheckpointManager:
         >>>     if manager.should_stop:
         >>>         break
     """
-    
+
     def __init__(self, output_dir: str, config_path: str):
         """
         Args:

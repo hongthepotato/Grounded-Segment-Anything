@@ -219,12 +219,15 @@ def main():
     # Load shared teacher training config
     logger.info("  Loading shared training config...")
     shared_config_path = DEFAULT_CONFIGS_DIR / 'teacher_training.yaml'
-    if not shared_config_path.exists():
+    try:
+        shared_config = load_config(str(shared_config_path))
+        logger.info("  Loaded shared training config")
+    except FileNotFoundError:
         logger.error("Shared teacher training config not found: %s", shared_config_path)
         sys.exit(1)
-
-    shared_config = load_config(str(shared_config_path))
-    logger.info("  Loaded shared training config")
+    except Exception as e:
+        logger.error("Error loading shared training config: %s", e)
+        sys.exit(1)
 
     logger.info("  Loading model-specific configs...")
     required_models = data_manager.get_required_models()
@@ -236,20 +239,26 @@ def main():
 
     if 'grounding_dino' in required_models:
         dino_config_path = DEFAULT_CONFIGS_DIR / 'teacher_grounding_dino_lora.yaml'
-        if dino_config_path.exists():
+        try:
             model_configs['grounding_dino'] = load_config(str(dino_config_path))
             logger.info("  Loaded Grounding DINO config")
-        else:
+        except FileNotFoundError:
             logger.error("Grounding DINO config not found: %s", dino_config_path)
+            sys.exit(1)
+        except Exception as e:
+            logger.error("Error loading Grounding DINO config: %s", e)
             sys.exit(1)
 
     if 'sam' in required_models:
         sam_config_path = DEFAULT_CONFIGS_DIR / 'teacher_sam_lora.yaml'
-        if sam_config_path.exists():
+        try:
             model_configs['sam'] = load_config(str(sam_config_path))
             logger.info("  Loaded SAM config")
-        else:
+        except FileNotFoundError:
             logger.error("SAM config not found: %s", sam_config_path)
+            sys.exit(1)
+        except Exception as e:
+            logger.error("Error loading SAM config: %s", e)
             sys.exit(1)
 
     if not model_configs:
@@ -259,24 +268,13 @@ def main():
     logger.info("  Merging configs...")
 
     config = {
-        # Shared training hyperparameters (from teacher_training.yaml)
         **shared_config['training'],
-
-        # Dataset info (auto-filled from COCO dataset)
         'num_classes': dataset_info['num_classes'],
         'class_names': list(dataset_info['class_mapping'].values()),
         'class_mapping': dataset_info['class_mapping'],
-
-        # Augmentation (from shared config, can be overridden by CLI)
-        'augmentation': shared_config.get('augmentation', {}),
-
-        # Evaluation (from shared config)
-        'evaluation': shared_config.get('evaluation', {}),
-
-        # Checkpointing (from shared config)
-        'checkpointing': shared_config.get('checkpointing', {}),
-
-        # Model-specific configs (LoRA settings, checkpoints, learning rates)
+        'augmentation': shared_config.get('augmentation'),
+        'evaluation': shared_config.get('evaluation'),
+        'checkpointing': shared_config.get('checkpointing'),
         'models': model_configs
     }
 
@@ -310,26 +308,6 @@ def main():
     logger.info("\n Step 4: Initializing trainer...")
 
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
-    # import torch
-
-    # if torch.cuda.is_available():
-    #     num_gpus = torch.cuda.device_count()
-    #     if args.gpu >= num_gpus:
-    #         logger.error("GPU %d not available. Available GPUs: 0-%d", args.gpu, num_gpus - 1)
-    #         sys.exit(1)
-
-    #     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
-    #     logger.info("✓ Using GPU %d: %s", args.gpu, torch.cuda.get_device_name(args.gpu))
-    # else:
-    #     logger.warning("⚠️  CUDA not available. Training will run on CPU (VERY slow!)")
-    #     logger.warning("For GPU training, ensure:")
-    #     logger.warning("  1. NVIDIA GPU is installed")
-    #     logger.warning("  2. CUDA toolkit is installed")
-    #     logger.warning("  3. PyTorch with CUDA support is installed")
-
-    #     # Don't proceed with CPU training for teacher models - too slow!
-    #     logger.error("Teacher model training requires GPU. Cannot proceed.")
-    #     sys.exit(1)
 
     trainer = TeacherTrainer(
         data_manager=data_manager,

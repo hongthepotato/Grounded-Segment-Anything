@@ -13,14 +13,16 @@ Models:
 - YOLO: Uses official LetterBox from ultralytics
 """
 
+from typing import Dict, Tuple, List, Optional, Any
+from abc import ABC, abstractmethod
 import torch
 import torchvision.transforms.functional as TF
 from PIL import Image
 import numpy as np
-from typing import Dict, Tuple, List, Optional, Any
-from abc import ABC, abstractmethod
 
 from core.config import load_config
+from groundingdino.datasets.transforms import resize
+from groundingdino.datasets import transforms as T
 
 
 class BaseModelPreprocessor(ABC):
@@ -55,7 +57,7 @@ class BaseModelPreprocessor(ABC):
             Tuple of (preprocessed_image_tensor, metadata_dict)
             
             metadata_dict must contain:
-                - 'original_size': (width, height) of input image
+                - 'original_size': (height, width) of input image
                 - 'final_size': (height, width) of output tensor
                 - 'model_name': str
                 - Any model-specific transformation info
@@ -139,7 +141,7 @@ class SAMPreprocessor(BaseModelPreprocessor):
         image_tensor = self._pad_to_square(image_tensor)
 
         metadata = {
-            'original_size': (orig_width, orig_height),
+            'original_size': (orig_height, orig_width),   # (H, W)
             'final_size': tuple(image_tensor.shape[-2:]),  # (H, W)
             'model_name': self.model_name,
             'sam_transformer': self.sam_transformer  # Store for coordinate transforms!
@@ -190,10 +192,10 @@ class SAMPreprocessor(BaseModelPreprocessor):
 
         # Use SAM's official transformation!
         sam_transformer = metadata['sam_transformer']
-        orig_size = metadata['original_size']  # (W, H)
+        orig_h, orig_w = metadata['original_size']  # (H, W)
         transformed_xyxy = sam_transformer.apply_boxes(
             boxes_xyxy, 
-            original_size=(orig_size[1], orig_size[0])  # SAM expects (H, W)
+            original_size=(orig_h, orig_w)
         )
 
         # Convert back to COCO format
@@ -217,8 +219,7 @@ class SAMPreprocessor(BaseModelPreprocessor):
 
         # Get transformation parameters from SAM
         sam_transformer = metadata['sam_transformer']
-        orig_size = metadata['original_size']  # (W, H)
-        orig_h, orig_w = orig_size[1], orig_size[0]
+        orig_h, orig_w = metadata['original_size']  # (H, W)
 
         # Calculate target size after resize (before padding)
         scale = sam_transformer.target_length / max(orig_h, orig_w)
@@ -253,8 +254,6 @@ class GroundingDINOPreprocessor(BaseModelPreprocessor):
     def __init__(self, model_name: str, config: Dict[str, Any]):
         super().__init__(model_name, config)
 
-        from groundingdino.datasets import transforms as T
-
         self.dino_totensor = T.ToTensor()
         self.dino_normalize = T.Normalize(
             mean=config['normalization']['mean'],
@@ -271,7 +270,6 @@ class GroundingDINOPreprocessor(BaseModelPreprocessor):
         masks: Optional[np.ndarray] = None
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """Preprocess using Grounding DINO's official transforms."""
-        from groundingdino.datasets.transforms import resize
 
         orig_width, orig_height = image.size
 
@@ -287,39 +285,26 @@ class GroundingDINOPreprocessor(BaseModelPreprocessor):
         if masks is not None and len(masks) > 0:
             target['masks'] = torch.from_numpy(masks)
 
-        image, target = resize(image, target, self.min_size, self.max_size)  # Deterministic!
+        image, target = resize(image, target, self.min_size, self.max_size)
         image, target = self.dino_totensor(image, target)
         image, target = self.dino_normalize(image, target)
 
-        # Extract transformed annotations
         transformed_boxes = None
         transformed_masks = None
 
         if 'boxes' in target:
-            # DINO normalizes boxes to [0,1] in center format (cx, cy, w, h)
-            # We need to convert back to pixel COCO format for consistency
-            h, w = image.shape[-2:]
-            boxes_normalized = target['boxes'].numpy()
-
-            # Denormalize: [0,1] -> pixel coordinates
-            boxes_pixel = boxes_normalized * np.array([w, h, w, h])
-
-            # Convert center format (cx, cy, w, h) to COCO (x, y, w, h)
-            boxes_coco = boxes_pixel.copy()
-            boxes_coco[:, 0] = boxes_pixel[:, 0] - boxes_pixel[:, 2] / 2  # x = cx - w/2
-            boxes_coco[:, 1] = boxes_pixel[:, 1] - boxes_pixel[:, 3] / 2  # y = cy - h/2
-
-            transformed_boxes = boxes_coco
+            boxes_normalized = target['boxes'].numpy()  # [N, 4] in [cx, cy, w, h], range [0, 1]
+            transformed_boxes = boxes_normalized
 
         if 'masks' in target:
             transformed_masks = target['masks'].numpy()
 
         metadata = {
-            'original_size': (orig_width, orig_height),
-            'final_size': tuple(image.shape[-2:]),  # (H, W)
+            'original_size': (orig_height, orig_width),  # (H, W)
+            'final_size': tuple(image.shape[-2:]),       # (H, W)
             'model_name': self.model_name,
-            'transformed_boxes': transformed_boxes,  # Store transformed annotations
-            'transformed_masks': transformed_masks,
+            'transformed_boxes': transformed_boxes,
+            'transformed_masks': transformed_masks,      # (N, H, W)
         }
 
         return image, metadata
@@ -413,8 +398,8 @@ class YOLOPreprocessor(BaseModelPreprocessor):
         pad_left = pad_w // 2
         
         metadata = {
-            'original_size': (orig_width, orig_height),
-            'final_size': tuple(image_tensor.shape[-2:]),  # (H, W)
+            'original_size': (orig_height, orig_width),     # (H, W)
+            'final_size': tuple(image_tensor.shape[-2:]),   # (H, W)
             'model_name': self.model_name,
             'scale': scale,
             'pad_left': pad_left,
@@ -635,7 +620,6 @@ def create_preprocessor_from_models(
         >>> )
     """
     if config_path is None:
-        # Use default config
         from core.constants import DEFAULT_CONFIGS_DIR
         config_path = str(DEFAULT_CONFIGS_DIR / 'preprocessing.yaml')
 

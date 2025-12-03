@@ -39,22 +39,22 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
         >>> print(info['has_boxes'])  # True
         >>> print(info['class_mapping'])  # {0: 'ear', 1: 'defect', ...}
     """
-    annotations = coco_data.get('annotations', [])
-    categories = coco_data.get('categories', [])
-    images = coco_data.get('images', [])
+    annotations = coco_data.get('annotations')
+    categories = coco_data.get('categories')
+    images = coco_data.get('images')
 
-    # Validate minimum required fields
-    if not annotations:
-        raise ValueError("Dataset has no annotations!")
-    if not categories:
-        raise ValueError("Dataset has no categories defined!")
-    if not images:
-        raise ValueError("Dataset has no images defined!")
-
-    # Check for annotation types by inspecting actual data
-    has_boxes = any('bbox' in ann for ann in annotations)
-    has_masks = any('segmentation' in ann for ann in annotations)
-    # has_keypoints = any('keypoints' in ann for ann in annotations)
+    has_boxes = any(
+        'bbox' in ann and 
+        ann['bbox'] is not None and 
+        ann['bbox'] != []
+        for ann in annotations
+    )
+    has_masks = any(
+        'segmentation' in ann and 
+        ann['segmentation'] is not None and 
+        ann['segmentation'] != []
+        for ann in annotations
+    )
 
     # Extract class information
     num_classes = len(categories)
