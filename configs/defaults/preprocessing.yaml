@@ -50,5 +50,3 @@ preprocessing:
     resize_mode: "letterbox"
     padding_value: 114
     pixel_format: "RGB"
-
-
