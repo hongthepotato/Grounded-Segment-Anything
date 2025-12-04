@@ -7,19 +7,16 @@ This module handles:
 - Auto-computation of area from masks
 - Data quality checks
 
-ID Design Rules (for consistency and simplicity):
+ID Design Rules:
 - All IDs are non-negative integers (>= 0)
 - Image IDs: Can be any non-negative int (e.g., 0, 1, 2, 5, 100, ...)
 - Annotation IDs: Can be any non-negative int (e.g., 0, 1, 2, 5, 100, ...)
-- Category IDs: MUST satisfy categories[i]['id'] == i
+- Category IDs: Can be any non-negative int, but must be UNIQUE
   
-Why categories are special:
-  Categories must be ordered: categories[0].id=0, categories[1].id=1, etc.
-  This enables direct indexing:
-    predicted_class = 2
-    category_name = categories[predicted_class]['name']  # No lookup/mapping needed!
-  
-  This eliminates ID→Index remapping throughout the ML pipeline.
+Category ID Handling:
+  The training pipeline builds a cat_id → index mapping internally:
+    class_mapping = {cat['id']: idx for idx, cat in enumerate(categories)}
+
 """
 
 import copy
@@ -39,8 +36,8 @@ def validate_coco_format(coco_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     
     ID Requirements:
         - All IDs must be non-negative integers (>= 0)
-        - Categories must satisfy: categories[i]['id'] == i (order matters!)
-        - Image/Annotation IDs can be arbitrary non-negative integers
+        - Category IDs must be unique
+        - Image/Annotation IDs must be unique non-negative integers
     
     Args:
         coco_data: Dictionary with COCO format data
@@ -332,22 +329,27 @@ def _validate_categories(categories: List[Dict]) -> List[str]:
     """
     Validate categories section.
     
-    CRITICAL: Enforces categories[i]['id'] == i (order and IDs must match).
+    Requirements:
+    - Each category must have 'id' (non-negative int) and 'name' (non-empty string)
+    - Category IDs must be unique
     
-    Valid example:
-        categories[0] = {'id': 0, 'name': 'person'}   ✓
-        categories[1] = {'id': 1, 'name': 'car'}      ✓
-        categories[2] = {'id': 2, 'name': 'dog'}      ✓
+    Valid examples:
+        categories = [
+            {'id': 0, 'name': 'cat'}, 
+            {'id': 1, 'name': 'dog'},
+            {'id': 2, 'name': 'bird'}
+        ]  ✓ Sequential
+        categories = [
+            {'id': 1, 'name': 'person'},
+            {'id': 90, 'name': 'toothbrush'},
+            {'id': 91, 'name': 'toothpaste'}
+        ]  ✓ Sparse
     
     Invalid examples:
-        categories[0] = {'id': 1, ...}  ✗ (id should be 0, not 1)
-        categories[2] = {'id': 0, ...}  ✗ (id should be 2, not 0)
+        categories = [{'id': 1, 'name': 'cat'}, {'id': 1, 'name': 'dog'}]  ✗ Duplicate IDs
+        categories = [{'id': -1, 'name': 'cat'}]  ✗ Negative ID
     
-    Why enforce order?
-    - Direct indexing: categories[predicted_class_id] gives correct category
-    - No ID→Index mapping needed anywhere in the codebase
-    - No sorting required before use
-    - Eliminates entire class of bugs from index mismatches
+    Note: The training pipeline will build a cat_id → index mapping internally
     """
     errors = []
 
@@ -356,41 +358,29 @@ def _validate_categories(categories: List[Dict]) -> List[str]:
         return errors
 
     required_keys = ['id', 'name']
+    seen_ids = set()
+
     for idx, cat in enumerate(categories):
-        # Check required keys exist
         missing_keys = [key for key in required_keys if key not in cat]
         if missing_keys:
             errors.append(f"Category {idx}: missing required keys: {missing_keys}")
             continue
-        
-        # ID: must be int
+
         cat_id = cat['id']
         if not isinstance(cat_id, int):
             errors.append(f"Category {idx}: `id` must be int, got {type(cat_id).__name__}")
-        
-        # Name: must be non-empty string
+        elif cat_id < 0:
+            errors.append(f"Category {idx}: `id` must be >= 0, got {cat_id}")
+        else:
+            if cat_id in seen_ids:
+                errors.append(f"Category {idx}: duplicate id={cat_id} (already used by another category)")
+            seen_ids.add(cat_id)
+
         name = cat['name']
         if not isinstance(name, str):
             errors.append(f"Category {idx}: `name` must be a string, got {type(name).__name__}")
         elif not name.strip():
             errors.append(f"Category {idx}: `name` cannot be empty")
-    
-    # Enforce: categories[i]['id'] == i
-    # This ensures direct array indexing: categories[predicted_class] gives correct category
-    for idx, cat in enumerate(categories):
-        if 'id' not in cat:
-            continue
-        
-        cat_id = cat['id']
-        if not isinstance(cat_id, int):
-            continue
-        
-        if cat_id != idx:
-            errors.append(
-                f"Category at index {idx} has id={cat_id}, but must have id={idx}. "
-                f"Categories must be ordered sequentially: categories[0].id=0, categories[1].id=1, etc. "
-                f"Please reorder your categories in the annotation file."
-            )
 
     return errors
 
