@@ -31,3 +31,4 @@ onnx>=1.14.0  # Model export
 segment-anything  # SAM models
 scikit-learn  # For stratified splitting
 tqdm  # Progress bars
+redis

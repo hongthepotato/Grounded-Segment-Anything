@@ -12,10 +12,15 @@ Key features:
 """
 
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Callable
 from pathlib import Path
 import torch
 from tqdm import tqdm
+
+
+class TrainingCancelledException(Exception):
+    """Raised when training is cancelled by user request."""
+    pass
 
 from ml_engine.data.loaders import create_dataloader
 from ml_engine.data.manager import DataManager
@@ -64,7 +69,9 @@ class TeacherTrainer:
         data_manager: DataManager,
         output_dir: str,
         config: Dict[str, Any],
-        resume_from: Optional[str] = None
+        resume_from: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None
     ):
         """
         Initialize TeacherTrainer with DataManager.
@@ -74,6 +81,10 @@ class TeacherTrainer:
             output_dir: Output directory for checkpoints and logs
             config: Training configuration
             resume_from: Optional checkpoint path to resume from
+            progress_callback: Optional callback function called after each epoch
+                              with progress dict containing epoch, metrics, etc.
+            cancel_check: Optional function that returns True if training should
+                         be cancelled. Checked at start of each batch.
         
         Design philosophy:
         - User provides ONE dataset file
@@ -103,6 +114,10 @@ class TeacherTrainer:
         self.config = config
         self.resume_from = resume_from
 
+        # Job manager integration - callbacks for progress reporting and cancellation
+        self.progress_callback = progress_callback
+        self.cancel_check = cancel_check
+
         # Create output directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
         (self.output_dir / 'teachers').mkdir(exist_ok=True)
@@ -128,6 +143,7 @@ class TeacherTrainer:
         self._init_training_manager()
         self._init_checkpoint_manager()
         self._init_loggers()
+        self._init_visualizer()
 
         # Resume from checkpoint if provided
         if resume_from:
@@ -323,13 +339,19 @@ class TeacherTrainer:
             output_dir = self.output_dir / 'teachers' / f'{model_name}_lora'
             config_path = DEFAULT_CONFIGS_DIR / 'checkpoint_config.yaml'
 
+            # Dynamic monitor metric based on model name
+            monitor_metric = f"val_{model_name}_total_loss"
+
             manager = CheckpointManager(
                 output_dir=str(output_dir),
-                config_path=str(config_path)
+                config_path=str(config_path),
+                monitor_metric=monitor_metric,
+                mode='min'  # Loss should be minimized
             )
             self.checkpoint_managers[model_name] = manager
 
             logger.info("✓ CheckpointManager created for %s: %s", model_name, output_dir)
+            logger.info("  Monitoring: %s (mode=min)", monitor_metric)
 
     def _init_loggers(self):
         """Initialize TensorBoard loggers."""
@@ -340,11 +362,29 @@ class TeacherTrainer:
             self.tb_loggers[model_name] = TensorBoardLogger(str(log_dir))
             logger.info("✓ TensorBoard logger: %s", log_dir)
 
+    def _init_visualizer(self):
+        """Initialize prediction visualizer for debugging."""
+        save_predictions = self.config.get('evaluation', {}).get('save_predictions', False)
+        
+        if save_predictions:
+            from ml_engine.evaluation import PredictionVisualizer
+            self.visualizer = PredictionVisualizer(
+                output_dir=str(self.output_dir / 'predictions'),
+                max_samples_per_epoch=8,
+                enabled=True
+            )
+            logger.info("✓ Prediction visualizer enabled: %s", self.output_dir / 'predictions')
+        else:
+            self.visualizer = None
+
     def train(self):
         """
         Main training loop.
         
         Trains all loaded models (data-driven).
+        
+        Raises:
+            TrainingCancelledException: If cancel_check returns True
         """
         epochs = self.config.get('epochs', 50)
         start_epoch = 0
@@ -354,39 +394,62 @@ class TeacherTrainer:
         logger.info("=" * 60)
         log_config(logger, self.config, "Training Configuration")
 
-        for epoch in range(start_epoch, epochs):
-            logger.info("\nEpoch %s/%s", epoch + 1, epochs)
-            logger.info("-" * 60)
-
-            train_metrics = self.train_epoch(epoch)
-
-            val_metrics = self.validate(epoch)
-
-            all_metrics = {**train_metrics, **val_metrics}
-
-            for model_name in self.models.keys():
-                self.checkpoint_managers[model_name].save_checkpoint(
-                    epoch=epoch,
-                    model=self.models[model_name],
-                    optimizer=self.optimizers[model_name],
-                    metrics=all_metrics,
-                    scheduler=self.schedulers.get(model_name),
-                    scaler=self.training_managers[model_name].scaler,
-                    extra_info={'config': self.config}
-                )
+        try:
+            for epoch in range(start_epoch, epochs):
+                # Check for cancellation at epoch start
+                if self.cancel_check and self.cancel_check():
+                    logger.info("Training cancelled by user request")
+                    raise TrainingCancelledException("Training cancelled by user")
                 
-                # Check early stopping
-                if self.checkpoint_managers[model_name].should_stop:
-                    logger.info("Early stopping triggered for %s", model_name)
-                    break
+                logger.info("\nEpoch %s/%s", epoch + 1, epochs)
+                logger.info("-" * 60)
+
+                train_metrics = self.train_epoch(epoch)
+
+                # Only validate at specified interval
+                eval_interval = self.config.get('evaluation', {}).get('interval', 1)
+                if (epoch + 1) % eval_interval == 0:
+                    val_metrics = self.validate(epoch)
+                else:
+                    val_metrics = {}
+
+                all_metrics = {**train_metrics, **val_metrics}
+
+                for model_name in self.models.keys():
+                    self.checkpoint_managers[model_name].save_checkpoint(
+                        epoch=epoch,
+                        model=self.models[model_name],
+                        optimizer=self.optimizers[model_name],
+                        metrics=all_metrics,
+                        scheduler=self.schedulers.get(model_name),
+                        scaler=self.training_managers[model_name].scaler,
+                        extra_info={'config': self.config}
+                    )
+                    
+                    # Check early stopping
+                    if self.checkpoint_managers[model_name].should_stop:
+                        logger.info("Early stopping triggered for %s", model_name)
+                        break
+                
+                # Report progress after each epoch (outside inner for loop)
+                if self.progress_callback:
+                    progress_info = {
+                        'current_epoch': epoch + 1,
+                        'total_epochs': epochs,
+                        'train_metrics': train_metrics,
+                        'val_metrics': val_metrics,
+                        'message': f"Completed epoch {epoch + 1}/{epochs}"
+                    }
+                    self.progress_callback(progress_info)
+            
+            logger.info("=" * 60)
+            logger.info("Training Completed!")
+            logger.info("=" * 60)
         
-        logger.info("=" * 60)
-        logger.info("Training Completed!")
-        logger.info("=" * 60)
-        
-        # Close loggers
-        for tb_logger in self.tb_loggers.values():
-            tb_logger.close()
+        finally:
+            # Always close loggers
+            for tb_logger in self.tb_loggers.values():
+                tb_logger.close()
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """
@@ -397,6 +460,9 @@ class TeacherTrainer:
         
         Returns:
             Dictionary of training metrics
+            
+        Raises:
+            TrainingCancelledException: If cancel_check returns True
         """
         # Set models to train mode
         for model in self.models.values():
@@ -408,10 +474,16 @@ class TeacherTrainer:
 
         # Metrics accumulator (dynamic keys)
         epoch_losses = {}
+        total_steps = len(self.train_loader)
 
         # Training loop
         pbar = tqdm(self.train_loader, desc=f"Train Epoch {epoch + 1}")
-        for batch in pbar:
+        for step, batch in enumerate(pbar):
+            # Check for cancellation at each batch
+            if self.cancel_check and self.cancel_check():
+                logger.info("Training cancelled during epoch %d, step %d", epoch + 1, step)
+                raise TrainingCancelledException("Training cancelled by user")
+            
             batch_losses = self._train_batch(batch)
             
             # Accumulate losses (dynamically add new keys)
@@ -428,6 +500,20 @@ class TeacherTrainer:
                     if 'total_loss' in key or key in ['grounding_dino_loss_ce', 'grounding_dino_loss_bbox', 'grounding_dino_loss_giou']:
                         postfix[key] = f"{values[-1]:.4f}"
             pbar.set_postfix(postfix)
+            
+            # Report step progress periodically (every 10% of epoch)
+            if self.progress_callback and total_steps > 0:
+                report_interval = max(1, total_steps // 10)
+                if step % report_interval == 0:
+                    avg_loss = sum(epoch_losses.get('grounding_dino_total_loss', [0])) / max(1, len(epoch_losses.get('grounding_dino_total_loss', [0])))
+                    self.progress_callback({
+                        'current_epoch': epoch,
+                        'total_epochs': self.config.get('epochs', 50),
+                        'current_step': step + 1,
+                        'total_steps': total_steps,
+                        'metrics': {'avg_loss': avg_loss},
+                        'message': f"Epoch {epoch + 1}, Step {step + 1}/{total_steps}"
+                    })
         
         # Compute average metrics
         train_metrics = {}
@@ -628,13 +714,15 @@ class TeacherTrainer:
                     device=self.device
                 )
                 
+                # Use category_id_to_index mapping to handle sparse COCO-style IDs
+                cat_id_to_idx = self.dataset_info['category_id_to_index']
                 for obj_idx, class_id in enumerate(valid_labels):
-                    class_id_int = int(class_id.item())
-                    if class_id_int < len(class_names):
-                        # Use the official positive map for this class
-                        token_labels[obj_idx] = positive_map[class_id_int]
+                    cat_id = int(class_id.item())  # Original category_id from annotation
+                    if cat_id in cat_id_to_idx:
+                        class_idx = cat_id_to_idx[cat_id]  # Convert to 0-based index
+                        token_labels[obj_idx] = positive_map[class_idx]
                     else:
-                        logger.warning(f"Class ID {class_id_int} out of range (num_classes={len(class_names)})")
+                        logger.warning(f"Unknown category_id {cat_id} not in category_id_to_index mapping")
                 
                 # Create target dict for this batch element
                 targets.append({
@@ -760,9 +848,16 @@ class TeacherTrainer:
         val_losses = {}  # Dynamic keys
         
         pbar = tqdm(self.val_loader, desc=f"Val Epoch {epoch + 1}")
+        visualized = False
+        
         for batch in pbar:
             # Validate each model
             batch_losses = self._validate_batch(batch)
+            
+            # Visualize first batch only (for debugging)
+            if self.visualizer and not visualized:
+                self._visualize_batch(batch, epoch)
+                visualized = True
             
             for key, value in batch_losses.items():
                 if key not in val_losses:
@@ -861,10 +956,13 @@ class TeacherTrainer:
                     device=self.device
                 )
                 
+                # Use category_id_to_index mapping to handle sparse COCO-style IDs
+                cat_id_to_idx = self.dataset_info['category_id_to_index']
                 for obj_idx, class_id in enumerate(valid_labels):
-                    class_id_int = int(class_id.item())
-                    if class_id_int < len(class_names):
-                        token_labels[obj_idx] = positive_map[class_id_int]
+                    cat_id = int(class_id.item())
+                    if cat_id in cat_id_to_idx:
+                        class_idx = cat_id_to_idx[cat_id]
+                        token_labels[obj_idx] = positive_map[class_idx]
                 
                 targets.append({
                     'labels': valid_labels,
@@ -907,6 +1005,192 @@ class TeacherTrainer:
             batch_losses['sam_loss'] = loss_dict['loss'].item()
         
         return batch_losses
+    
+    def _visualize_batch(self, batch: Dict[str, Any], epoch: int):
+        """
+        Visualize predictions for debugging.
+        
+        Loads original images and draws GT vs predicted bounding boxes.
+        """
+        import numpy as np
+        from PIL import Image
+        
+        if 'grounding_dino' not in self.models:
+            return
+        
+        try:
+            # Get batch info
+            file_names = batch['file_names']
+            image_sizes = batch['image_sizes']  # List of (width, height)
+            
+            # Get preprocessed data
+            dino_data = batch['preprocessed']['grounding_dino']
+            images_tensor = dino_data['images'].to(self.device)
+            gt_boxes = dino_data['boxes'].to(self.device)  # [B, max_obj, 4] normalized cxcywh
+            labels = dino_data['labels'].to(self.device)   # [B, max_obj]
+            
+            # Get predictions
+            class_names = list(self.dataset_info['class_mapping'].values())
+            model = self.models['grounding_dino']
+            outputs = model(images_tensor, class_names=class_names)
+            
+            pred_boxes = outputs['pred_boxes']  # [B, num_queries, 4] normalized cxcywh
+            pred_logits = outputs['pred_logits']  # [B, num_queries, num_tokens]
+            
+            batch_size = len(file_names)
+            images_list = []
+            predictions_list = {'boxes': [], 'labels': []}
+            targets_list = {'boxes': [], 'labels': []}
+            
+            for b in range(min(batch_size, 8)):  # Max 8 samples
+                # Load original image
+                img_path = self.data_manager.image_dir / file_names[b]
+                if not img_path.exists():
+                    continue
+                    
+                img = Image.open(img_path).convert('RGB')
+                img_array = np.array(img)
+                img_w, img_h = img.size
+                
+                # Convert GT boxes: cxcywh normalized -> xyxy pixel
+                valid_mask = labels[b] != -1
+                gt_box = gt_boxes[b][valid_mask].cpu().numpy()  # [N, 4]
+                gt_label = labels[b][valid_mask].cpu().numpy()  # [N]
+                
+                # Debug: print raw normalized GT boxes
+                print(f"\nGround Truth boxes (raw normalized cxcywh):")
+                for i, box in enumerate(gt_box[:5]):
+                    print(f"  GT Box {i}: cxcywh={box}, class={gt_label[i]}")
+                
+                if len(gt_box) > 0:
+                    # cxcywh to xyxy
+                    cx, cy, w, h = gt_box[:, 0], gt_box[:, 1], gt_box[:, 2], gt_box[:, 3]
+                    gt_box_xyxy = np.stack([
+                        (cx - w/2) * img_w,
+                        (cy - h/2) * img_h,
+                        (cx + w/2) * img_w,
+                        (cy + h/2) * img_h
+                    ], axis=1)
+                else:
+                    gt_box_xyxy = np.array([])
+                    gt_label = np.array([])
+                
+                # Convert pred boxes: take top-k by confidence
+                # Note: pred_logits is [num_queries, num_tokens], not [num_queries, num_classes]
+                # Need to map token probabilities to class probabilities
+                pred_box = pred_boxes[b].cpu().numpy()  # [num_queries, 4]
+                pred_logit = pred_logits[b].sigmoid()  # [num_queries, num_tokens]
+                
+                # Build positive_map for token->class mapping
+                from groundingdino.util.vl_utils import build_captions_and_token_span, create_positive_map_from_span
+                caption, cat2tokenspan = build_captions_and_token_span(class_names, force_lowercase=False)
+                tokenized = model.tokenizer(caption, padding="longest", return_tensors="pt").to(self.device)
+                
+                token_span_per_class = []
+                for class_id in range(len(class_names)):
+                    class_name = class_names[class_id]
+                    if class_name in cat2tokenspan:
+                        token_span_per_class.append(cat2tokenspan[class_name])
+                    else:
+                        token_span_per_class.append([])
+                
+                positive_map = create_positive_map_from_span(
+                    tokenized, token_span_per_class, max_text_len=pred_logit.shape[-1]
+                ).to(self.device)  # [num_classes, num_tokens]
+                
+                # For each query, compute class score as MEAN of token probs for that class
+                # This matches mmdetection's convert_grounding_to_cls_scores approach
+                num_classes = positive_map.shape[0]
+                class_probs = torch.zeros(pred_logit.shape[0], num_classes, device=self.device)
+                for c in range(num_classes):
+                    token_mask = positive_map[c] > 0  # which tokens belong to class c
+                    if token_mask.sum() > 0:
+                        class_probs[:, c] = pred_logit[:, token_mask].mean(dim=-1)
+                
+                pred_score = class_probs.max(dim=-1)[0].cpu().numpy()  # [num_queries]
+                pred_class = class_probs.max(dim=-1)[1].cpu().numpy()  # [num_queries] - actual class IDs
+                
+                # Get metadata for size comparison
+                metadata = dino_data['metadata'][b] if 'metadata' in dino_data else {}
+                final_size = metadata.get('final_size', 'N/A')
+                original_size = metadata.get('original_size', 'N/A')
+                
+                # Debug: print prediction info
+                print(f"\n{'='*60}")
+                print(f"[DEBUG] Visualization - Sample {b}")
+                print(f"{'='*60}")
+                print(f"Image: {file_names[b]}")
+                print(f"Original image size (from file): {img_w}x{img_h}")
+                print(f"Metadata original_size (H,W): {original_size}")
+                print(f"Metadata final_size (H,W): {final_size}")
+                print(f"Class names: {class_names}")
+                print(f"Num queries: {pred_box.shape[0]}, Num classes: {num_classes}")
+                print(f"\nTop 5 predictions (before threshold):")
+                top5_indices = np.argsort(pred_score)[-5:][::-1]
+                for rank, idx in enumerate(top5_indices):
+                    cls_id = pred_class[idx]
+                    cls_name = class_names[cls_id] if cls_id < len(class_names) else f'unk_{cls_id}'
+                    box = pred_box[idx]  # normalized cxcywh
+                    print(f"  #{rank+1}: class={cls_id}({cls_name}), score={pred_score[idx]:.4f}, box_cxcywh={box}")
+                
+                # Filter by confidence threshold
+                conf_thresh = 0.3
+                keep = pred_score > conf_thresh
+                num_kept = keep.sum()
+                print(f"Confidence threshold: {conf_thresh}")
+                print(f"Boxes kept: {num_kept} / {len(pred_score)}")
+                
+                pred_box = pred_box[keep]
+                pred_label = pred_class[keep]
+                pred_score_kept = pred_score[keep]
+                
+                if len(pred_box) > 0:
+                    print(f"\nKept boxes (normalized cxcywh):")
+                    for i, (box, score, lbl) in enumerate(zip(pred_box[:5], pred_score_kept[:5], pred_label[:5])):
+                        print(f"  Box {i}: cxcywh={box}, score={score:.4f}, class={lbl}")
+                    
+                    # cxcywh to xyxy
+                    cx, cy, w, h = pred_box[:, 0], pred_box[:, 1], pred_box[:, 2], pred_box[:, 3]
+                    pred_box_xyxy = np.stack([
+                        (cx - w/2) * img_w,
+                        (cy - h/2) * img_h,
+                        (cx + w/2) * img_w,
+                        (cy + h/2) * img_h
+                    ], axis=1)
+                    
+                    print(f"\nConverted boxes (pixel xyxy):")
+                    for i, box in enumerate(pred_box_xyxy[:5]):
+                        print(f"  Box {i}: xyxy={box}")
+                else:
+                    pred_box_xyxy = np.array([])
+                    pred_label = np.array([])
+                    print("No boxes passed threshold!")
+                
+                # Also print GT for comparison
+                print(f"\nGround Truth boxes: {len(gt_box_xyxy)}")
+                if len(gt_box_xyxy) > 0:
+                    for i, (box, lbl) in enumerate(zip(gt_box_xyxy[:5], gt_label[:5])):
+                        print(f"  GT Box {i}: xyxy={box}, class={lbl}")
+                print(f"{'='*60}\n")
+                
+                images_list.append(img_array)
+                predictions_list['boxes'].append(pred_box_xyxy)
+                predictions_list['labels'].append(pred_label)
+                targets_list['boxes'].append(gt_box_xyxy)
+                targets_list['labels'].append(gt_label)
+            
+            if images_list:
+                self.visualizer.save_batch(
+                    epoch=epoch,
+                    images=images_list,
+                    predictions=predictions_list,
+                    targets=targets_list,
+                    class_names=class_names,
+                    image_ids=list(range(len(images_list)))
+                )
+                
+        except Exception as e:
+            logger.warning(f"Visualization failed: {e}")
     
     def _resume_from_checkpoint(self, checkpoint_path: str):
         """Resume training from checkpoint."""

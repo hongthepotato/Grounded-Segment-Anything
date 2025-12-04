@@ -1,30 +1,89 @@
-FROM pytorch/pytorch:1.13.1-cuda11.6-cudnn8-devel
+# Multi-stage Dockerfile for Training Job Manager
+#
+# Targets:
+#   - api: FastAPI server
+#   - worker: Training worker with GPU support
+#
+# Build:
+#   docker build --target api -t training-api .
+#   docker build --target worker -t training-worker .
 
-# Arguments to build Docker Image using CUDA
-ARG USE_CUDA=0
-ARG TORCH_ARCH=
+# Base image with Python and system dependencies
+FROM python:3.10-slim as base
 
-ENV AM_I_DOCKER True
-ENV BUILD_WITH_CUDA "${USE_CUDA}"
-ENV TORCH_CUDA_ARCH_LIST "${TORCH_ARCH}"
-ENV CUDA_HOME /usr/local/cuda-11.6/
+WORKDIR /app
 
-RUN mkdir -p /home/appuser/Grounded-Segment-Anything
-COPY . /home/appuser/Grounded-Segment-Anything/
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install --no-install-recommends wget ffmpeg=7:* \
-    libsm6=2:* libxext6=2:* git=1:* nano=2.* \
-    vim=2:* -y \
-    && apt-get clean && apt-get autoremove && rm -rf /var/lib/apt/lists/*
+# Copy requirements
+COPY requirements.txt .
 
-WORKDIR /home/appuser/Grounded-Segment-Anything
-RUN python -m pip install --no-cache-dir -e segment_anything
+# Install base Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# When using build isolation, PyTorch with newer CUDA is installed and can't compile GroundingDINO
-RUN python -m pip install --no-cache-dir wheel
-RUN python -m pip install --no-cache-dir --no-build-isolation -e GroundingDINO
+# Install additional dependencies for job manager
+RUN pip install --no-cache-dir \
+    redis>=4.5.0 \
+    fastapi>=0.100.0 \
+    uvicorn[standard]>=0.22.0 \
+    pydantic>=2.0.0 \
+    websockets>=11.0
 
-WORKDIR /home/appuser
-RUN pip install --no-cache-dir diffusers[torch]==0.15.1 opencv-python==4.7.0.72 \
-    pycocotools==2.0.6 matplotlib==3.5.3 \
-    onnxruntime==1.14.1 onnx==1.13.1 ipykernel==6.16.2 scipy gradio openai
+# Copy source code
+COPY . .
+
+# =====================================================================
+# API Server target
+# =====================================================================
+FROM base as api
+
+# Expose API port
+EXPOSE 8000
+
+# Default command
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# =====================================================================
+# Worker target (with GPU support)
+# =====================================================================
+FROM nvidia/cuda:11.8-runtime-ubuntu22.04 as worker-base
+
+WORKDIR /app
+
+# Install Python and system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make python3 default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies (including PyTorch with CUDA)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install job manager dependencies
+RUN pip install --no-cache-dir \
+    redis>=4.5.0 \
+    fastapi>=0.100.0 \
+    pydantic>=2.0.0
+
+# Copy source code
+COPY . .
+
+FROM worker-base as worker
+
+# Default command
+CMD ["python", "-m", "ml_engine.jobs", "--gpu", "0"]
