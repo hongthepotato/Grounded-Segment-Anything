@@ -181,7 +181,6 @@ class RedisJobStore:
                 self.redis.lpush(self.JOB_QUEUE_KEY, job_id)
             else:
                 self.redis.rpush(self.JOB_QUEUE_KEY, job_id)
-            
             # Update job status back to pending
             self.update_job(job_id, status=JobStatus.PENDING, worker_id=None)
             logger.info("Requeued job %s (front=%s)", job_id[:8], to_front)
@@ -189,18 +188,18 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to requeue job %s: %s", job_id[:8], e)
             return False
-    
+
     def get_queue_length(self) -> int:
         """Get number of jobs in queue."""
         try:
             return self.redis.llen(self.JOB_QUEUE_KEY)
         except RedisError:
             return 0
-    
+
     # =========================================================================
     # Job State Operations
     # =========================================================================
-    
+
     def get_job(self, job_id: str) -> Optional[Job]:
         """
         Get job by ID.
@@ -220,7 +219,7 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to get job %s: %s", job_id[:8], e)
             return None
-    
+
     def update_job(self, job_id: str, **updates) -> bool:
         """
         Update job fields.
@@ -233,7 +232,7 @@ class RedisJobStore:
             True if successful
         """
         job_key = f"{self.JOB_PREFIX}{job_id}"
-        
+
         try:
             # Convert updates to Redis-compatible format
             redis_updates = {}
@@ -244,16 +243,16 @@ class RedisJobStore:
                     redis_updates[key] = json.dumps(value.to_dict())
                 elif isinstance(value, datetime):
                     redis_updates[key] = value.isoformat()
-                elif isinstance(value, dict):
+                elif isinstance(value, (dict, list)):
                     redis_updates[key] = json.dumps(value)
                 elif value is None:
                     redis_updates[key] = ""
                 else:
                     redis_updates[key] = str(value)
-            
+
             if redis_updates:
                 self.redis.hset(job_key, mapping=redis_updates)
-                
+
                 # Publish update event
                 self.publish_event(job_id, {
                     "type": "job_updated",
@@ -270,7 +269,7 @@ class RedisJobStore:
             return False
     
     def list_jobs(
-        self, 
+        self,
         status: Optional[JobStatus] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
