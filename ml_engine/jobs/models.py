@@ -71,12 +71,12 @@ class JobProgress:
         if not data:
             return cls()
         return cls(
-            current_epoch=data.get("current_epoch"),
-            total_epochs=data.get("total_epochs"),
-            current_step=data.get("current_step"),
-            total_steps=data.get("total_steps"),
-            metrics=data.get("metrics"),
-            message=data.get("message",)
+            current_epoch=data.get("current_epoch", 0),
+            total_epochs=data.get("total_epochs", 0),
+            current_step=data.get("current_step", 0),
+            total_steps=data.get("total_steps", 0),
+            metrics=data.get("metrics", {}),
+            message=data.get("message", "")
         )
 
     @property
@@ -134,7 +134,7 @@ class Job:
     def __post_init__(self):
         """Set defaults after initialization."""
         if self.created_at is None:
-            self.created_at = datetime.utcnow()
+            self.created_at = datetime.now()
         if self.output_dir is None:
             short_id = self.id[:8]
             self.output_dir = f"experiments/{self.type}_{short_id}"
@@ -242,7 +242,7 @@ class Job:
         """Get job duration in seconds (if started)."""
         if not self.started_at:
             return None
-        end_time = self.finished_at or datetime.utcnow()
+        end_time = self.finished_at or datetime.now()
         return (end_time - self.started_at).total_seconds()
 
     def __repr__(self) -> str:

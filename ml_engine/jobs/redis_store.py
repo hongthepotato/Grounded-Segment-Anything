@@ -48,13 +48,13 @@ class RedisJobStore:
         >>> job = store.get_job(job_id)
         >>> store.update_job(job_id, status=JobStatus.RUNNING)
     """
-    
+
     # Redis key prefixes
     JOB_QUEUE_KEY = "job_queue"
     JOB_PREFIX = "job:"
     WORKERS_KEY = "workers"
     WORKER_PREFIX = "worker:"
-    
+
     def __init__(self, redis_url: str = "redis://localhost:6379", db: int = 0):
         """
         Initialize Redis connection.
@@ -65,7 +65,7 @@ class RedisJobStore:
         """
         self.redis_url = redis_url
         self.db = db
-        
+
         # Create connection pool for thread safety
         self.pool = redis.ConnectionPool.from_url(
             redis_url,
@@ -74,11 +74,11 @@ class RedisJobStore:
             max_connections=20
         )
         self.redis = redis.Redis(connection_pool=self.pool)
-        
+
         # Pub/sub client (separate connection)
         self._pubsub_lock = threading.Lock()
         self._pubsub: Optional[redis.client.PubSub] = None
-        
+
         # Test connection
         try:
             self.redis.ping()
@@ -86,18 +86,18 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to connect to Redis: %s", e)
             raise
-    
+
     def close(self):
         """Close Redis connections."""
         if self._pubsub:
             self._pubsub.close()
         self.pool.disconnect()
         logger.info("Redis connections closed")
-    
+
     # =========================================================================
     # Queue Operations
     # =========================================================================
-    
+
     def enqueue_job(self, job: Job) -> None:
         """
         Add job to queue and store job state.
@@ -110,40 +110,37 @@ class RedisJobStore:
             job: Job to enqueue
         """
         job_key = f"{self.JOB_PREFIX}{job.id}"
-        
+
         # Use pipeline for atomic operation
         pipe = self.redis.pipeline()
         try:
             # Store job state
             job_data = job.to_dict()
             # Convert all values to strings for Redis HSET
-            job_data_str = {k: str(v) if not isinstance(v, str) else v 
+            job_data_str = {k: str(v) if not isinstance(v, str) else v
                           for k, v in job_data.items()}
             pipe.hset(job_key, mapping=job_data_str)
-            
-            # Add to queue (RPUSH for FIFO)
-            # Use priority score: higher priority = earlier in queue
-            # We use LPUSH for high priority, RPUSH for normal
+
             if job.priority > 0:
                 pipe.lpush(self.JOB_QUEUE_KEY, job.id)
             else:
                 pipe.rpush(self.JOB_QUEUE_KEY, job.id)
-            
+
             pipe.execute()
             logger.info("Enqueued job %s (priority=%d)", job.id[:8], job.priority)
-            
+
             # Publish enqueue event
             self.publish_event(job.id, {
                 "type": "job_enqueued",
                 "job_id": job.id,
                 "status": job.status.value,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now().isoformat()
             })
-            
+
         except RedisError as e:
             logger.error("Failed to enqueue job %s: %s", job.id[:8], e)
             raise
-    
+
     def dequeue_job(self, timeout: int = 1) -> Optional[str]:
         """
         Dequeue next job from queue (blocking).
@@ -167,7 +164,7 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to dequeue job: %s", e)
             return None
-    
+
     def requeue_job(self, job_id: str, to_front: bool = True) -> bool:
         """
         Put job back in queue (e.g., after worker failure).
@@ -262,7 +259,7 @@ class RedisJobStore:
                     "type": "job_updated",
                     "job_id": job_id,
                     "updates": {k: str(v) for k, v in updates.items()},
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now().isoformat()
                 })
                 
                 logger.debug("Updated job %s: %s", job_id[:8], list(updates.keys()))
