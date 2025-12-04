@@ -29,6 +29,8 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
             - has_masks (bool): Whether segmentation masks are present
             - num_classes (int): Number of classes
             - class_mapping (Dict[int, str]): Mapping from category ID to name
+            - category_id_to_index (Dict[int, int]): Mapping from category ID to 0-based index
+            - index_to_category_id (Dict[int, int]): Mapping from 0-based index to category ID
             - num_images (int): Total number of images
             - num_annotations (int): Total number of annotations
             - annotation_mode (str): Detected mode (for reporting only)
@@ -58,7 +60,12 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Extract class information
     num_classes = len(categories)
+    # class_mapping: category_id -> category_name (for display/logging)
     class_mapping = {cat['id']: cat['name'] for cat in categories}
+    # category_id_to_index: category_id -> 0-based index (for model training)
+    category_id_to_index = {cat['id']: idx for idx, cat in enumerate(categories)}
+    # index_to_category_id: 0-based index -> category_id (for prediction decoding)
+    index_to_category_id = {idx: cat['id'] for idx, cat in enumerate(categories)}
 
     # Determine annotation mode (for reporting purposes only)
     if has_boxes and has_masks:
@@ -85,7 +92,9 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
         'has_boxes': has_boxes,
         'has_masks': has_masks,
         'num_classes': num_classes,
-        'class_mapping': class_mapping,
+        'class_mapping': class_mapping,  # category_id -> name
+        'category_id_to_index': category_id_to_index,  # category_id -> 0-based index
+        'index_to_category_id': index_to_category_id,  # 0-based index -> category_id
         'num_images': num_images,
         'num_annotations': num_annotations,
         'annotation_mode': annotation_mode,
