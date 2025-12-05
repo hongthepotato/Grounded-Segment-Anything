@@ -425,8 +425,8 @@ class RedisJobStore:
             pubsub.close()
 
     def subscribe_to_job_async(
-        self, 
-        job_id: str, 
+        self,
+        job_id: str,
         callback: Callable[[Dict[str, Any]], None],
         stop_event: Optional[threading.Event] = None
     ) -> threading.Thread:
@@ -444,36 +444,28 @@ class RedisJobStore:
         def subscriber():
             channel = f"{self.JOB_PREFIX}{job_id}:events"
             pubsub = self.redis.pubsub()
-            
             try:
                 pubsub.subscribe(channel)
-                
                 while stop_event is None or not stop_event.is_set():
                     message = pubsub.get_message(timeout=1.0)
-                    if message and message["type"] == "message":
-                        try:
-                            data = message["data"]
-                            if isinstance(data, bytes):
-                                data = data.decode()
-                            event = json.loads(data)
+                    if message:
+                        event = self._parse_pubsub_message(message)
+                        if event:
                             callback(event)
-                        except (json.JSONDecodeError, Exception) as e:
-                            logger.warning("Error processing event: %s", e)
-                            
             except RedisError as e:
                 logger.error("Async pub/sub error: %s", e)
             finally:
                 pubsub.unsubscribe(channel)
                 pubsub.close()
-        
+
         thread = threading.Thread(target=subscriber, daemon=True)
         thread.start()
         return thread
-    
+
     # =========================================================================
     # Worker Registry Operations
     # =========================================================================
-    
+
     def register_worker(self, worker: WorkerInfo) -> bool:
         """
         Register a worker.
@@ -493,7 +485,7 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to register worker %s: %s", worker.id, e)
             return False
-    
+
     def unregister_worker(self, worker_id: str) -> bool:
         """
         Unregister a worker.
@@ -515,7 +507,7 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to unregister worker %s: %s", worker_id, e)
             return False
-    
+
     def update_worker_heartbeat(self, worker_id: str) -> bool:
         """
         Update worker heartbeat timestamp.
@@ -528,11 +520,11 @@ class RedisJobStore:
         """
         worker_key = f"{self.WORKER_PREFIX}{worker_id}"
         try:
-            self.redis.hset(worker_key, "last_heartbeat", datetime.utcnow().isoformat())
+            self.redis.hset(worker_key, "last_heartbeat", datetime.now().isoformat())
             return True
         except RedisError:
             return False
-    
+
     def update_worker_status(
         self,
         worker_id: str,
@@ -555,14 +547,14 @@ class RedisJobStore:
             updates = {
                 "status": status,
                 "current_job_id": current_job_id or "",
-                "last_heartbeat": datetime.utcnow().isoformat()
+                "last_heartbeat": datetime.now().isoformat()
             }
             self.redis.hset(worker_key, mapping=updates)
             return True
         except RedisError as e:
             logger.error("Failed to update worker %s status: %s", worker_id, e)
             return False
-    
+
     def get_worker(self, worker_id: str) -> Optional[WorkerInfo]:
         """
         Get worker info.
@@ -581,7 +573,7 @@ class RedisJobStore:
             return WorkerInfo.from_dict(data)
         except RedisError:
             return None
-    
+
     def list_workers(self, status: Optional[str] = None) -> List[WorkerInfo]:
         """
         List all registered workers.
@@ -595,19 +587,19 @@ class RedisJobStore:
         try:
             worker_ids = self.redis.hkeys(self.WORKERS_KEY)
             workers = []
-            
+
             for worker_id in worker_ids:
                 worker_id_str = worker_id.decode() if isinstance(worker_id, bytes) else worker_id
                 worker = self.get_worker(worker_id_str)
                 if worker:
                     if status is None or worker.status == status:
                         workers.append(worker)
-            
+
             return workers
         except RedisError as e:
             logger.error("Failed to list workers: %s", e)
             return []
-    
+
     def cleanup_stale_workers(self, timeout_seconds: int = 60) -> int:
         """
         Remove workers that haven't sent heartbeat.
@@ -619,9 +611,9 @@ class RedisJobStore:
             Number of workers removed
         """
         workers = self.list_workers()
-        now = datetime.utcnow()
+        now = datetime.now()
         removed = 0
-        
+
         for worker in workers:
             if worker.last_heartbeat:
                 age = (now - worker.last_heartbeat).total_seconds()
@@ -633,5 +625,5 @@ class RedisJobStore:
                     removed += 1
                     logger.warning("Removed stale worker %s (last heartbeat: %ds ago)", 
                                  worker.id, int(age))
-        
+
         return removed
