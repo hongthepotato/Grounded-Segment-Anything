@@ -260,14 +260,14 @@ class RedisJobStore:
                     "updates": {k: str(v) for k, v in updates.items()},
                     "timestamp": datetime.now().isoformat()
                 })
-                
+
                 logger.debug("Updated job %s: %s", job_id[:8], list(updates.keys()))
             return True
-            
+
         except RedisError as e:
             logger.error("Failed to update job %s: %s", job_id[:8], e)
             return False
-    
+
     def list_jobs(
         self,
         status: Optional[JobStatus] = None,
@@ -294,41 +294,41 @@ class RedisJobStore:
             cursor = 0
             while True:
                 cursor, keys = self.redis.scan(
-                    cursor=cursor, 
+                    cursor=cursor,
                     match=f"{self.JOB_PREFIX}*",
                     count=100
                 )
                 job_keys.extend(keys)
                 if cursor == 0:
                     break
-            
+
             # Fetch and filter jobs
             jobs = []
             for key in job_keys:
                 data = self.redis.hgetall(key)
                 if not data:
                     continue
-                    
+
                 job = Job.from_dict(data)
-                
+
                 # Apply filters
                 if status and job.status != status:
                     continue
                 if job_type and job.type != job_type:
                     continue
-                    
+
                 jobs.append(job)
-            
+
             # Sort by created_at (newest first)
             jobs.sort(key=lambda j: j.created_at or datetime.min, reverse=True)
-            
+
             # Apply pagination
             return jobs[offset:offset + limit]
-            
+
         except RedisError as e:
             logger.error("Failed to list jobs: %s", e)
             return []
-    
+
     def delete_job(self, job_id: str) -> bool:
         """
         Delete job from store.
@@ -348,7 +348,7 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to delete job %s: %s", job_id[:8], e)
             return False
-    
+
     def job_exists(self, job_id: str) -> bool:
         """Check if job exists."""
         job_key = f"{self.JOB_PREFIX}{job_id}"
@@ -356,11 +356,11 @@ class RedisJobStore:
             return self.redis.exists(job_key) > 0
         except RedisError:
             return False
-    
+
     # =========================================================================
     # Pub/Sub Operations
     # =========================================================================
-    
+
     def publish_event(self, job_id: str, event: Dict[str, Any]) -> int:
         """
         Publish event for a job.
@@ -379,7 +379,22 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to publish event for job %s: %s", job_id[:8], e)
             return 0
-    
+
+    def _parse_pubsub_message(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Parse a pub/sub message, returning None if invalid or non-message type."""
+        if message["type"] != "message":
+            return None
+
+        data = message["data"]
+        if isinstance(data, bytes):
+            data = data.decode()
+
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
+            logger.warning("Invalid JSON in event: %s", message["data"])
+            return None
+
     def subscribe_to_job(self, job_id: str) -> Iterator[Dict[str, Any]]:
         """
         Subscribe to job events (blocking iterator).
@@ -394,28 +409,21 @@ class RedisJobStore:
         """
         channel = f"{self.JOB_PREFIX}{job_id}:events"
         pubsub = self.redis.pubsub()
-        
+
         try:
             pubsub.subscribe(channel)
             logger.debug("Subscribed to job %s events", job_id[:8])
-            
+
             for message in pubsub.listen():
-                if message["type"] == "message":
-                    try:
-                        data = message["data"]
-                        if isinstance(data, bytes):
-                            data = data.decode()
-                        event = json.loads(data)
-                        yield event
-                    except json.JSONDecodeError:
-                        logger.warning("Invalid JSON in event: %s", message["data"])
-                        
+                event = self._parse_pubsub_message(message)
+                if event:
+                    yield event
         except RedisError as e:
             logger.error("Pub/sub error for job %s: %s", job_id[:8], e)
         finally:
             pubsub.unsubscribe(channel)
             pubsub.close()
-    
+
     def subscribe_to_job_async(
         self, 
         job_id: str, 
@@ -526,9 +534,9 @@ class RedisJobStore:
             return False
     
     def update_worker_status(
-        self, 
-        worker_id: str, 
-        status: str, 
+        self,
+        worker_id: str,
+        status: str,
         current_job_id: Optional[str] = None
     ) -> bool:
         """
