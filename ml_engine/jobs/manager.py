@@ -34,7 +34,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Iterator, Callable
 
-from ml_engine.jobs.models import Job, JobStatus, JobProgress, JobType, WorkerInfo
+from ml_engine.jobs.models import Job, JobStatus, JobType, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ class JobManager:
         ...         print("Done!")
         ...         break
     """
-    
+
     def __init__(self, redis_url: str = "redis://localhost:6379"):
         """
         Initialize JobManager.
@@ -86,15 +86,15 @@ class JobManager:
         self.redis_url = redis_url
         self.store = RedisJobStore(redis_url)
         logger.info("JobManager initialized with Redis at %s", redis_url)
-    
+
     def close(self):
         """Close Redis connection."""
         self.store.close()
-    
+
     # =========================================================================
     # Job Submission
     # =========================================================================
-    
+
     def submit_job(
         self,
         job_type: str,
@@ -136,7 +136,7 @@ class JobManager:
         except ValueError:
             valid_types = [t.value for t in JobType]
             raise ValueError(f"Invalid job type: {job_type}. Must be one of: {valid_types}")
-        
+
         # Create job
         job = Job(
             type=job_type,
@@ -146,19 +146,19 @@ class JobManager:
             output_dir=output_dir,
             tags=tags or []
         )
-        
-        logger.info("Submitting job %s (type=%s, priority=%d)", 
+
+        logger.info("Submitting job %s (type=%s, priority=%d)",
                    job.id[:8], job_type, priority)
-        
+
         # Enqueue (stores job and adds to queue atomically)
         self.store.enqueue_job(job)
-        
+
         return job
-    
+
     # =========================================================================
     # Job Cancellation
     # =========================================================================
-    
+
     def cancel_job(self, job_id: str) -> bool:
         """
         Request job cancellation.
@@ -177,44 +177,44 @@ class JobManager:
         if job is None:
             logger.warning("Cannot cancel job %s: not found", job_id[:8])
             return False
-        
+
         if job.is_terminal:
-            logger.info("Cannot cancel job %s: already in terminal state %s", 
+            logger.info("Cannot cancel job %s: already in terminal state %s",
                        job_id[:8], job.status.value)
             return False
-        
+
         if job.status == JobStatus.PENDING:
             # Job is in queue - mark as cancelled directly
             self.store.update_job(
                 job_id,
                 status=JobStatus.CANCELLED,
-                finished_at=datetime.utcnow()
+                finished_at=datetime.now()
             )
             # Note: Job will be skipped when worker tries to execute it
             logger.info("Cancelled pending job %s", job_id[:8])
-            
+
         elif job.status == JobStatus.RUNNING:
             # Job is running - request graceful cancellation
             self.store.update_job(job_id, status=JobStatus.CANCELLING)
             logger.info("Requested cancellation for running job %s", job_id[:8])
-            
+
         elif job.status == JobStatus.CANCELLING:
             # Already cancelling
             logger.info("Job %s is already cancelling", job_id[:8])
-        
+
         # Publish cancellation event
         self.store.publish_event(job_id, {
             "type": "cancel_requested",
             "job_id": job_id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
-        
+
         return True
-    
+
     # =========================================================================
     # Job Queries
     # =========================================================================
-    
+
     def get_job(self, job_id: str) -> Optional[Job]:
         """
         Get job by ID.
@@ -226,7 +226,7 @@ class JobManager:
             Job object or None if not found
         """
         return self.store.get_job(job_id)
-    
+
     def list_jobs(
         self,
         status: Optional[str] = None,
@@ -253,14 +253,14 @@ class JobManager:
                 status_enum = JobStatus(status)
             except ValueError:
                 logger.warning("Invalid status filter: %s", status)
-        
+
         return self.store.list_jobs(
             status=status_enum,
             job_type=job_type,
             limit=limit,
             offset=offset
         )
-    
+
     def get_job_count(self, status: Optional[str] = None) -> int:
         """
         Get count of jobs by status.
@@ -273,7 +273,7 @@ class JobManager:
         """
         jobs = self.list_jobs(status=status, limit=10000)
         return len(jobs)
-    
+
     def delete_job(self, job_id: str) -> bool:
         """
         Delete a job from the store.
@@ -289,22 +289,22 @@ class JobManager:
         job = self.store.get_job(job_id)
         if job is None:
             return False
-        
+
         if not job.is_terminal:
             logger.warning("Cannot delete non-terminal job %s (status=%s)", 
                           job_id[:8], job.status.value)
             return False
-        
+
         return self.store.delete_job(job_id)
-    
+
     # =========================================================================
     # Queue Info
     # =========================================================================
-    
+
     def get_queue_length(self) -> int:
         """Get number of pending jobs in queue."""
         return self.store.get_queue_length()
-    
+
     def get_queue_status(self) -> Dict[str, Any]:
         """
         Get overall queue status.
@@ -323,11 +323,11 @@ class JobManager:
                 "cancelled": self.get_job_count("cancelled"),
             }
         }
-    
+
     # =========================================================================
     # Event Subscription
     # =========================================================================
-    
+
     def subscribe_to_job(self, job_id: str) -> Iterator[Dict[str, Any]]:
         """
         Subscribe to job events (blocking iterator).
@@ -348,7 +348,7 @@ class JobManager:
             ...         break
         """
         return self.store.subscribe_to_job(job_id)
-    
+
     def subscribe_to_job_async(
         self,
         job_id: str,
@@ -365,11 +365,11 @@ class JobManager:
             Thread object (already started)
         """
         return self.store.subscribe_to_job_async(job_id, callback)
-    
+
     # =========================================================================
     # Worker Management
     # =========================================================================
-    
+
     def list_workers(self, status: Optional[str] = None) -> List[WorkerInfo]:
         """
         List registered workers.
@@ -381,7 +381,7 @@ class JobManager:
             List of WorkerInfo objects
         """
         return self.store.list_workers(status=status)
-    
+
     def cleanup_stale_workers(self, timeout_seconds: int = 60) -> int:
         """
         Remove workers that haven't sent heartbeat.
@@ -415,8 +415,3 @@ def get_job_manager(redis_url: str = "redis://localhost:6379") -> JobManager:
     if _default_manager is None:
         _default_manager = JobManager(redis_url)
     return _default_manager
-
-
-
-
-
