@@ -33,7 +33,7 @@ class RedisJobStore:
     Redis-based storage for training jobs.
     
     Thread-safe operations for:
-    - Job queue management (priority queue via sorted sets)
+    - Job queue management (FIFO queue via Redis LIST)
     - Job state persistence
     - Real-time event pub/sub
     - Worker registration
@@ -75,10 +75,6 @@ class RedisJobStore:
         )
         self.redis = redis.Redis(connection_pool=self.pool)
 
-        # Pub/sub client (separate connection)
-        self._pubsub_lock = threading.Lock()
-        self._pubsub: Optional[redis.client.PubSub] = None
-
         # Test connection
         try:
             self.redis.ping()
@@ -89,8 +85,6 @@ class RedisJobStore:
 
     def close(self):
         """Close Redis connections."""
-        if self._pubsub:
-            self._pubsub.close()
         self.pool.disconnect()
         logger.info("Redis connections closed")
 
@@ -114,12 +108,8 @@ class RedisJobStore:
         # Use pipeline for atomic operation
         pipe = self.redis.pipeline()
         try:
-            # Store job state
-            job_data = job.to_dict()
-            # Convert all values to strings for Redis HSET
-            job_data_str = {k: str(v) if not isinstance(v, str) else v
-                          for k, v in job_data.items()}
-            pipe.hset(job_key, mapping=job_data_str)
+            # Store job state (to_dict() already returns Redis-compatible strings)
+            pipe.hset(job_key, mapping=job.to_dict())
 
             if job.priority > 0:
                 pipe.lpush(self.JOB_QUEUE_KEY, job.id)
@@ -478,8 +468,10 @@ class RedisJobStore:
         """
         worker_key = f"{self.WORKER_PREFIX}{worker.id}"
         try:
-            self.redis.hset(worker_key, mapping=worker.to_dict())
-            self.redis.hset(self.WORKERS_KEY, worker.id, worker_key)
+            pipe = self.redis.pipeline()
+            pipe.hset(worker_key, mapping=worker.to_dict())
+            pipe.hset(self.WORKERS_KEY, worker.id, worker_key)
+            pipe.execute()
             logger.info("Registered worker %s (GPU %d)", worker.id, worker.gpu_id)
             return True
         except RedisError as e:
@@ -623,7 +615,7 @@ class RedisJobStore:
                         self.requeue_job(worker.current_job_id, to_front=True)
                     self.unregister_worker(worker.id)
                     removed += 1
-                    logger.warning("Removed stale worker %s (last heartbeat: %ds ago)", 
+                    logger.warning("Removed stale worker %s (last heartbeat: %ds ago)",
                                  worker.id, int(age))
 
         return removed
