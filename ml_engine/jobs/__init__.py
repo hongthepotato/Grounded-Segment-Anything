@@ -18,12 +18,11 @@ Usage:
 from ml_engine.jobs.models import Job, JobStatus, JobProgress, JobType, WorkerInfo
 from ml_engine.jobs.manager import JobManager, get_job_manager
 from ml_engine.jobs.redis_store import RedisJobStore
-from ml_engine.jobs.worker import TrainingWorker
 
 __all__ = [
     # Models
     "Job",
-    "JobStatus", 
+    "JobStatus",
     "JobProgress",
     "JobType",
     "WorkerInfo",
@@ -32,6 +31,4 @@ __all__ = [
     "get_job_manager",
     # Store
     "RedisJobStore",
-    # Worker
-    "TrainingWorker",
 ]
