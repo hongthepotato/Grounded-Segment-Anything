@@ -415,17 +415,16 @@ class TeacherTrainer:
 
                 all_metrics = {**train_metrics, **val_metrics}
 
-                for model_name in self.models.keys():
+                for model_name, model in self.models.items():
                     self.checkpoint_managers[model_name].save_checkpoint(
                         epoch=epoch,
-                        model=self.models[model_name],
+                        model=model,
                         optimizer=self.optimizers[model_name],
                         metrics=all_metrics,
                         scheduler=self.schedulers.get(model_name),
                         scaler=self.training_managers[model_name].scaler,
                         extra_info={'config': self.config}
                     )
-                    
                     # Check early stopping
                     if self.checkpoint_managers[model_name].should_stop:
                         logger.info("Early stopping triggered for %s", model_name)
@@ -763,12 +762,12 @@ class TeacherTrainer:
             for k, v in loss_dict.items():
                 if torch.isnan(v).any():
                     logger.error(f"NaN detected in {k}: {v}")
-            
+
             # Compute total weighted loss
             total_loss = sum(loss_dict[k] * criterion.weight_dict[k]
                            for k in loss_dict.keys()
                            if k in criterion.weight_dict)
-            
+
             # Final NaN check
             if torch.isnan(total_loss):
                 logger.error("NaN in total_loss!")
@@ -776,31 +775,31 @@ class TeacherTrainer:
                 logger.error(f"Valid objects: {total_valid_objs}")
                 logger.error(f"Pred logits range: [{outputs['pred_logits'].min():.3f}, {outputs['pred_logits'].max():.3f}]")
                 logger.error(f"Pred boxes range: [{outputs['pred_boxes'].min():.3f}, {outputs['pred_boxes'].max():.3f}]")
-            
+
             # Return dict with total loss and components for logging
             result = {'loss': total_loss}
             result.update({k: v.detach() for k, v in loss_dict.items()})
-            
+
             return result
-        
+
         # Training step with gradient management
         loss_dict = manager.training_step(batch, compute_loss)
-        
+
         # Return all loss components for logging (convert to Dict[str, float])
         result = {'total_loss': loss_dict['loss'].item()}
-        
+
         # Add individual components (detached, already on CPU from result dict)
         for key, value in loss_dict.items():
             if key != 'loss':
                 result[key] = value.item() if torch.is_tensor(value) else value
-        
+
         return result
-    
+
     def _train_sam_batch(self, batch: Dict[str, Any]) -> float:
         """Train SAM on a batch."""
         model = self.models['sam']
         manager = self.training_managers['sam']
-        
+
         def compute_loss(batch):
             # Get preprocessed SAM data (already transformed by official transforms)
             sam_data = batch['preprocessed']['sam']
@@ -808,28 +807,28 @@ class TeacherTrainer:
             boxes = sam_data['boxes'].to(self.device)       # [B, max_objs, 4] already in SAM space!
             masks = sam_data['masks'].to(self.device)       # [B, max_objs, 1024, 1024]
             labels = sam_data['labels'].to(self.device)     # [B, max_objs]
-            
+
             # Create validity mask
             valid_mask = (labels != -1)  # [B, max_objs]
-            
+
             # Forward pass (boxes already in correct xyxy format from SAM preprocessing)
             outputs = model(images, box_prompts=boxes)
-            
+
             # Targets
             targets = {
                 'masks': masks,
                 'valid_mask': valid_mask
             }
-            
+
             # Compute loss
             loss_dict = self.losses['segmentation'](outputs, targets)
             return loss_dict
-        
+
         # Training step with gradient management
         loss_dict = manager.training_step(batch, compute_loss)
-        
+
         return loss_dict['loss'].item()
-    
+
     @torch.no_grad()
     def validate(self, epoch: int) -> Dict[str, float]:
         """
@@ -844,26 +843,26 @@ class TeacherTrainer:
         # Set models to eval mode
         for model in self.models.values():
             model.eval()
-        
+
         val_losses = {}  # Dynamic keys
-        
+
         pbar = tqdm(self.val_loader, desc=f"Val Epoch {epoch + 1}")
         visualized = False
-        
+
         for batch in pbar:
             # Validate each model
             batch_losses = self._validate_batch(batch)
-            
+
             # Visualize first batch only (for debugging)
             if self.visualizer and not visualized:
                 self._visualize_batch(batch, epoch)
                 visualized = True
-            
+
             for key, value in batch_losses.items():
                 if key not in val_losses:
                     val_losses[key] = []
                 val_losses[key].append(value)
-            
+
             # Update progress bar - show main loss and components
             postfix = {}
             for key, values in val_losses.items():
@@ -872,33 +871,33 @@ class TeacherTrainer:
                     if 'total_loss' in key or key in ['grounding_dino_loss_ce', 'grounding_dino_loss_bbox', 'grounding_dino_loss_giou']:
                         postfix[key] = f"{values[-1]:.4f}"
             pbar.set_postfix(postfix)
-        
+
         # Compute average metrics
         val_metrics = {}
         for key, values in val_losses.items():
             if values:
                 avg_value = sum(values) / len(values)
                 val_metrics[f'val_{key}'] = avg_value
-        
+
         # Log to TensorBoard
         for model_name, tb_logger in self.tb_loggers.items():
             model_metrics = {k.replace(f'{model_name}_', ''): v 
                            for k, v in val_metrics.items() 
                            if model_name in k}
             tb_logger.log_scalars(model_metrics, epoch, prefix='val')
-        
+
         log_metrics(logger, val_metrics, epoch, prefix="Val")
-        
+
         # Set models back to train mode
         for model in self.models.values():
             model.train()
-        
+
         return val_metrics
-    
+
     def _validate_batch(self, batch: Dict[str, Any]) -> Dict[str, float]:
         """Validate on a single batch."""
         batch_losses = {}
-        
+
         # Validate Grounding DINO if loaded
         if 'grounding_dino' in self.models:
             # Get preprocessed data (same structure as training)
@@ -906,26 +905,26 @@ class TeacherTrainer:
             images = dino_data['images'].to(self.device)
             boxes = dino_data['boxes'].to(self.device)
             labels = dino_data['labels'].to(self.device)
-            
+
             batch_size = labels.shape[0]
             class_names = list(self.dataset_info['class_mapping'].values())
             criterion = self.losses['detection']
             model = self.models['grounding_dino']
-            
+
             outputs = model(images, class_names=class_names)
-            
+
             # Use official Grounding DINO token mapping (same as training)
             caption, cat2tokenspan = build_captions_and_token_span(
-                class_names, 
+                class_names,
                 force_lowercase=False
             )
-            
+
             tokenized = model.tokenizer(
-                caption, 
-                padding="longest", 
+                caption,
+                padding="longest",
                 return_tensors="pt"
             ).to(self.device)
-            
+
             class_id_to_name = {i: name for i, name in enumerate(class_names)}
             token_span_per_class = []
             for class_id in range(len(class_names)):
@@ -934,28 +933,28 @@ class TeacherTrainer:
                     token_span_per_class.append(cat2tokenspan[class_name])
                 else:
                     token_span_per_class.append([])
-            
+
             positive_map = create_positive_map_from_span(
-                tokenized, 
+                tokenized,
                 token_span_per_class,
                 max_text_len=outputs['pred_logits'].shape[-1]
             ).to(self.device)
-            
+
             # Prepare targets in DETR format: list of dicts
             targets = []
             for b in range(batch_size):
                 valid_mask = labels[b] != -1
                 valid_labels = labels[b][valid_mask]
                 valid_boxes = boxes[b][valid_mask]
-                
+
                 # Create token labels using official positive map
                 token_labels = torch.zeros(
-                    len(valid_labels), 
+                    len(valid_labels),
                     positive_map.shape[1],
-                    dtype=torch.float32, 
+                    dtype=torch.float32,
                     device=self.device
                 )
-                
+
                 # Use category_id_to_index mapping to handle sparse COCO-style IDs
                 cat_id_to_idx = self.dataset_info['category_id_to_index']
                 for obj_idx, class_id in enumerate(valid_labels):
@@ -963,26 +962,26 @@ class TeacherTrainer:
                     if cat_id in cat_id_to_idx:
                         class_idx = cat_id_to_idx[cat_id]
                         token_labels[obj_idx] = positive_map[class_idx]
-                
+
                 targets.append({
                     'labels': valid_labels,
                     'boxes': valid_boxes,
                     'token_labels': token_labels,
                 })
-            
+
             # Compute loss with auxiliary losses
             loss_dict = criterion(outputs, targets)
-            
+
             # Compute total weighted loss
-            total_loss = sum(loss_dict[k] * criterion.weight_dict[k] 
-                           for k in loss_dict.keys() 
+            total_loss = sum(loss_dict[k] * criterion.weight_dict[k]
+                           for k in loss_dict.keys()
                            if k in criterion.weight_dict)
-            
+
             # Add all loss components with prefix
             batch_losses['grounding_dino_total_loss'] = total_loss.item()
             for key, value in loss_dict.items():
                 batch_losses[f'grounding_dino_{key}'] = value.item() if torch.is_tensor(value) else value
-        
+
         # Validate SAM if loaded
         if 'sam' in self.models:
             # Get preprocessed data (same structure as training)
@@ -991,21 +990,21 @@ class TeacherTrainer:
             boxes = sam_data['boxes'].to(self.device)
             masks = sam_data['masks'].to(self.device)
             labels = sam_data['labels'].to(self.device)
-            
+
             valid_mask = (labels != -1)
-            
+
             outputs = self.models['sam'](images, box_prompts=boxes)
-            
+
             targets = {
                 'masks': masks,
                 'valid_mask': valid_mask
             }
-            
+
             loss_dict = self.losses['segmentation'](outputs, targets)
             batch_losses['sam_loss'] = loss_dict['loss'].item()
-        
+
         return batch_losses
-    
+
     def _visualize_batch(self, batch: Dict[str, Any], epoch: int):
         """
         Visualize predictions for debugging.
@@ -1014,44 +1013,44 @@ class TeacherTrainer:
         """
         import numpy as np
         from PIL import Image
-        
+
         if 'grounding_dino' not in self.models:
             return
-        
+
         try:
             # Get batch info
             file_names = batch['file_names']
             image_sizes = batch['image_sizes']  # List of (width, height)
-            
+
             # Get preprocessed data
             dino_data = batch['preprocessed']['grounding_dino']
             images_tensor = dino_data['images'].to(self.device)
             gt_boxes = dino_data['boxes'].to(self.device)  # [B, max_obj, 4] normalized cxcywh
             labels = dino_data['labels'].to(self.device)   # [B, max_obj]
-            
+
             # Get predictions
             class_names = list(self.dataset_info['class_mapping'].values())
             model = self.models['grounding_dino']
             outputs = model(images_tensor, class_names=class_names)
-            
+
             pred_boxes = outputs['pred_boxes']  # [B, num_queries, 4] normalized cxcywh
             pred_logits = outputs['pred_logits']  # [B, num_queries, num_tokens]
-            
+
             batch_size = len(file_names)
             images_list = []
             predictions_list = {'boxes': [], 'labels': []}
             targets_list = {'boxes': [], 'labels': []}
-            
+
             for b in range(min(batch_size, 8)):  # Max 8 samples
                 # Load original image
                 img_path = self.data_manager.image_dir / file_names[b]
                 if not img_path.exists():
                     continue
-                    
+
                 img = Image.open(img_path).convert('RGB')
                 img_array = np.array(img)
                 img_w, img_h = img.size
-                
+
                 # Convert GT boxes: cxcywh normalized -> xyxy pixel
                 valid_mask = labels[b] != -1
                 gt_box = gt_boxes[b][valid_mask].cpu().numpy()  # [N, 4]
@@ -1059,12 +1058,12 @@ class TeacherTrainer:
 
                 cat_id_to_idx = self.dataset_info['category_id_to_index']
                 gt_label = np.array([cat_id_to_idx.get(int(cat_id), -1) for cat_id in gt_label_raw])
-                
+
                 # Debug: print raw normalized GT boxes
                 print(f"\nGround Truth boxes (raw normalized cxcywh):")
                 for i, box in enumerate(gt_box[:5]):
                     print(f"  GT Box {i}: cxcywh={box}, cat_id={gt_label_raw[i]}, class_idx={gt_label[i]}")
-                
+
                 if len(gt_box) > 0:
                     # cxcywh to xyxy
                     cx, cy, w, h = gt_box[:, 0], gt_box[:, 1], gt_box[:, 2], gt_box[:, 3]
@@ -1077,30 +1076,24 @@ class TeacherTrainer:
                 else:
                     gt_box_xyxy = np.array([])
                     gt_label = np.array([])
-                
+
                 # Convert pred boxes: take top-k by confidence
                 # Note: pred_logits is [num_queries, num_tokens], not [num_queries, num_classes]
                 # Need to map token probabilities to class probabilities
                 pred_box = pred_boxes[b].cpu().numpy()  # [num_queries, 4]
                 pred_logit = pred_logits[b].sigmoid()  # [num_queries, num_tokens]
-                
+
                 # Build positive_map for token->class mapping
                 from groundingdino.util.vl_utils import build_captions_and_token_span, create_positive_map_from_span
                 caption, cat2tokenspan = build_captions_and_token_span(class_names, force_lowercase=False)
                 tokenized = model.tokenizer(caption, padding="longest", return_tensors="pt").to(self.device)
-                
-                token_span_per_class = []
-                for class_id in range(len(class_names)):
-                    class_name = class_names[class_id]
-                    if class_name in cat2tokenspan:
-                        token_span_per_class.append(cat2tokenspan[class_name])
-                    else:
-                        token_span_per_class.append([])
-                
+
+                token_span_per_class = [cat2tokenspan.get(name, []) for name in class_names]
+
                 positive_map = create_positive_map_from_span(
                     tokenized, token_span_per_class, max_text_len=pred_logit.shape[-1]
                 ).to(self.device)  # [num_classes, num_tokens]
-                
+
                 # For each query, compute class score as MEAN of token probs for that class
                 # This matches mmdetection's convert_grounding_to_cls_scores approach
                 num_classes = positive_map.shape[0]
@@ -1109,15 +1102,15 @@ class TeacherTrainer:
                     token_mask = positive_map[c] > 0  # which tokens belong to class c
                     if token_mask.sum() > 0:
                         class_probs[:, c] = pred_logit[:, token_mask].mean(dim=-1)
-                
+
                 pred_score = class_probs.max(dim=-1)[0].cpu().numpy()  # [num_queries]
                 pred_class = class_probs.max(dim=-1)[1].cpu().numpy()  # [num_queries] - actual class IDs
-                
+
                 # Get metadata for size comparison
                 metadata = dino_data['metadata'][b] if 'metadata' in dino_data else {}
                 final_size = metadata.get('final_size', 'N/A')
                 original_size = metadata.get('original_size', 'N/A')
-                
+
                 # Debug: print prediction info
                 print(f"\n{'='*60}")
                 print(f"[DEBUG] Visualization - Sample {b}")
@@ -1135,23 +1128,23 @@ class TeacherTrainer:
                     cls_name = class_names[cls_id] if cls_id < len(class_names) else f'unk_{cls_id}'
                     box = pred_box[idx]  # normalized cxcywh
                     print(f"  #{rank+1}: class={cls_id}({cls_name}), score={pred_score[idx]:.4f}, box_cxcywh={box}")
-                
+
                 # Filter by confidence threshold
                 conf_thresh = 0.3
                 keep = pred_score > conf_thresh
                 num_kept = keep.sum()
                 print(f"Confidence threshold: {conf_thresh}")
                 print(f"Boxes kept: {num_kept} / {len(pred_score)}")
-                
+
                 pred_box = pred_box[keep]
                 pred_label = pred_class[keep]
                 pred_score_kept = pred_score[keep]
-                
+
                 if len(pred_box) > 0:
                     print(f"\nKept boxes (normalized cxcywh):")
                     for i, (box, score, lbl) in enumerate(zip(pred_box[:5], pred_score_kept[:5], pred_label[:5])):
                         print(f"  Box {i}: cxcywh={box}, score={score:.4f}, class={lbl}")
-                    
+
                     # cxcywh to xyxy
                     cx, cy, w, h = pred_box[:, 0], pred_box[:, 1], pred_box[:, 2], pred_box[:, 3]
                     pred_box_xyxy = np.stack([
@@ -1160,7 +1153,7 @@ class TeacherTrainer:
                         (cx + w/2) * img_w,
                         (cy + h/2) * img_h
                     ], axis=1)
-                    
+
                     print(f"\nConverted boxes (pixel xyxy):")
                     for i, box in enumerate(pred_box_xyxy[:5]):
                         print(f"  Box {i}: xyxy={box}")
@@ -1168,21 +1161,21 @@ class TeacherTrainer:
                     pred_box_xyxy = np.array([])
                     pred_label = np.array([])
                     print("No boxes passed threshold!")
-                
+
                 # Also print GT for comparison
                 print(f"\nGround Truth boxes: {len(gt_box_xyxy)}")
                 if len(gt_box_xyxy) > 0:
                     for i, (box, lbl, raw_id) in enumerate(zip(gt_box_xyxy[:5], gt_label[:5], gt_label_raw[:5])):
-                        cls_name = class_name[lbl] if 0 <= lbl < len(class_name) else f'unk_{lbl}'
+                        cls_name = class_names[lbl] if 0 <= lbl < len(class_names) else f'unk_{lbl}'
                         print(f"  GT Box {i}: xyxy={box}, cat_id={raw_id}, class_idx={lbl}({cls_name})")
                 print(f"{'='*60}\n")
-                
+
                 images_list.append(img_array)
                 predictions_list['boxes'].append(pred_box_xyxy)
                 predictions_list['labels'].append(pred_label)
                 targets_list['boxes'].append(gt_box_xyxy)
                 targets_list['labels'].append(gt_label)
-            
+
             if images_list:
                 self.visualizer.save_batch(
                     epoch=epoch,
@@ -1192,24 +1185,22 @@ class TeacherTrainer:
                     class_names=class_names,
                     image_ids=list(range(len(images_list)))
                 )
-                
+
         except Exception as e:
             logger.warning(f"Visualization failed: {e}")
-    
+
     def _resume_from_checkpoint(self, checkpoint_path: str):
         """Resume training from checkpoint."""
         logger.info(f"Resuming from checkpoint: {checkpoint_path}")
-        
-        for model_name in self.models.keys():
+
+        for model_name, model in self.models.items():
             ckpt_manager = self.checkpoint_managers[model_name]
             checkpoint = ckpt_manager.load_checkpoint(
                 checkpoint_path,
-                model=self.models[model_name],
+                model=model,
                 optimizer=self.optimizers[model_name],
                 scheduler=self.schedulers.get(model_name)
             )
-            
-            # Update training manager state
             if 'training_manager_state' in checkpoint:
                 self.training_managers[model_name].load_state_dict(
                     checkpoint['training_manager_state']
