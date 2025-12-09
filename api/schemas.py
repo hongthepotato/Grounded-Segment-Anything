@@ -22,7 +22,7 @@ class JobProgressSchema(BaseModel):
     total_steps: int = 0
     metrics: Dict[str, float] = Field(default_factory=dict)
     message: str = ""
-    
+
     class Config:
         from_attributes = True
 
@@ -92,7 +92,7 @@ class JobResponse(BaseModel):
     output_dir: Optional[str] = Field(default=None, description="Output directory")
     priority: int = Field(default=0, description="Job priority")
     tags: List[str] = Field(default_factory=list, description="Job tags")
-    
+
     class Config:
         from_attributes = True
 
@@ -114,7 +114,7 @@ class WorkerResponse(BaseModel):
     current_job_id: Optional[str] = Field(default=None, description="Current job ID")
     last_heartbeat: Optional[datetime] = Field(default=None, description="Last heartbeat")
     started_at: Optional[datetime] = Field(default=None, description="Worker start time")
-    
+
     class Config:
         from_attributes = True
 
@@ -139,8 +139,3 @@ class WebSocketEvent(BaseModel):
     progress: Optional[JobProgressSchema] = Field(default=None, description="Progress info")
     error: Optional[str] = Field(default=None, description="Error message")
     output_dir: Optional[str] = Field(default=None, description="Output directory")
-
-
-
-
-

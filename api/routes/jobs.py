@@ -10,6 +10,7 @@ Provides:
 - GET /api/queue/status - Get queue status
 """
 
+import os
 import logging
 from typing import Optional
 
@@ -32,7 +33,6 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 def get_manager() -> JobManager:
     """Dependency to get JobManager instance."""
-    import os
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     return get_job_manager(redis_url)
 
@@ -49,7 +49,7 @@ def job_to_response(job: Job) -> JobResponse:
             metrics=job.progress.metrics,
             message=job.progress.message,
         )
-    
+
     return JobResponse(
         id=job.id,
         type=job.type,
@@ -98,12 +98,12 @@ async def submit_job(
         )
         logger.info("Submitted job %s (type=%s)", job.id[:8], request.job_type)
         return job_to_response(job)
-        
+
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error("Failed to submit job: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to submit job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to submit job: {str(e)}") from e
 
 
 @router.get("", response_model=JobListResponse)
@@ -126,10 +126,10 @@ async def list_jobs(
         limit=limit,
         offset=offset,
     )
-    
+
     # Get total count for pagination
     total = manager.get_job_count(status=status)
-    
+
     return JobListResponse(
         jobs=[job_to_response(job) for job in jobs],
         total=total,
@@ -152,7 +152,7 @@ async def get_job(
     job = manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
+
     return job_to_response(job)
 
 
@@ -174,17 +174,17 @@ async def cancel_job(
     job = manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
+
     if job.is_terminal:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot cancel job in terminal state: {job.status.value}"
         )
-    
+
     success = manager.cancel_job(job_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to cancel job")
-    
+
     # Get updated job
     job = manager.get_job(job_id)
     return job_to_response(job)
@@ -205,7 +205,7 @@ async def get_queue_status(
         GET /api/queue/status
     """
     status = manager.get_queue_status()
-    
+
     workers = [
         WorkerResponse(
             id=w["id"],
@@ -218,14 +218,9 @@ async def get_queue_status(
         )
         for w in status["workers"]
     ]
-    
+
     return QueueStatusResponse(
         queue_length=status["queue_length"],
         workers=workers,
         job_counts=status["job_counts"],
     )
-
-
-
-
-

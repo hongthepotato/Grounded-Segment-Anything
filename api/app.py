@@ -42,24 +42,24 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("Starting Training Job Manager API...")
-    
+
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    
+
     try:
         manager = get_job_manager(redis_url)
         logger.info("Connected to Redis at %s", redis_url)
-        
+
         # Cleanup stale workers on startup
         removed = manager.cleanup_stale_workers(timeout_seconds=120)
         if removed > 0:
             logger.info("Removed %d stale workers", removed)
-            
+
     except Exception as e:
         logger.error("Failed to connect to Redis: %s", e)
         raise
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down Training Job Manager API...")
     manager = get_job_manager(redis_url)
@@ -102,6 +102,7 @@ API for managing ML training jobs.
 
 # Configure CORS
 # In production, replace "*" with specific origins
+# List of allowed website domains
 cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 
 app.add_middleware(
@@ -127,7 +128,7 @@ async def health_check():
         {"status": "healthy", "redis": "connected"}
     """
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    
+
     try:
         manager = get_job_manager(redis_url)
         # Quick Redis check
@@ -168,8 +169,3 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
-
-
-
-
-

@@ -23,7 +23,6 @@ import socket
 import traceback
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, Any, Optional
 
 from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo, JobType
@@ -52,7 +51,7 @@ class TrainingWorker:
 
     # Heartbeat interval in seconds
     HEARTBEAT_INTERVAL = 10
-    # Queue poll timeout in seconds  
+    # Queue poll timeout in seconds
     POLL_TIMEOUT = 5
 
     def __init__(
@@ -168,7 +167,7 @@ class TrainingWorker:
 
         # Update job status to RUNNING
         job.status = JobStatus.RUNNING
-        job.started_at = datetime.utcnow()
+        job.started_at = datetime.now()
         job.worker_id = self.worker_id
 
         self.store.update_job(
@@ -180,15 +179,15 @@ class TrainingWorker:
 
         # Update worker status
         self.store.update_worker_status(self.worker_id, "busy", job.id)
-        
+
         # Publish job started event
         self.store.publish_event(job.id, {
             "type": "job_started",
             "job_id": job.id,
             "worker_id": self.worker_id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
-        
+
         try:
             # Route to appropriate trainer
             if job.type == JobType.TEACHER_TRAINING.value:
@@ -197,20 +196,20 @@ class TrainingWorker:
                 self._run_student_distillation(job)
             else:
                 raise ValueError(f"Unknown job type: {job.type}")
-            
+
             # Job completed successfully
             self._complete_job(job)
-            
+
         except TrainingCancelledException:
             self._cancel_job(job)
-            
+
         except Exception as e:
             self._fail_job(job, e)
-            
+
         finally:
             self.current_job = None
             self.store.update_worker_status(self.worker_id, "idle")
-    
+
     def _run_teacher_training(self, job: Job):
         """
         Run teacher model training.
@@ -219,15 +218,15 @@ class TrainingWorker:
             job: Job with teacher training config
         """
         config = job.config
-        
+
         # Extract paths from config
         data_path = config.get("data_path")
         image_dir = config.get("image_dir")
         output_dir = job.output_dir or f"experiments/{job.id[:8]}"
-        
+
         if not data_path:
             raise ValueError("data_path required in job config")
-        
+
         # Create DataManager
         split_config = config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
         data_manager = DataManager(
@@ -236,10 +235,10 @@ class TrainingWorker:
             split_config=split_config,
             auto_preprocess=True
         )
-        
+
         # Training config
         training_config = config.get("training", {})
-        
+
         # Create trainer with callbacks
         trainer = TeacherTrainer(
             data_manager=data_manager,
@@ -248,10 +247,10 @@ class TrainingWorker:
             progress_callback=lambda p: self._on_progress(job.id, p),
             cancel_check=lambda: self._cancel_requested
         )
-        
+
         # Run training
         trainer.train()
-    
+
     def _run_student_distillation(self, job: Job):
         """
         Run student model distillation.
@@ -261,7 +260,7 @@ class TrainingWorker:
         """
         # TODO: Implement when StudentDistiller is ready
         raise NotImplementedError("Student distillation not yet implemented")
-    
+
     def _on_progress(self, job_id: str, progress_info: Dict[str, Any]):
         """
         Progress callback - updates Redis and publishes event.
@@ -274,7 +273,7 @@ class TrainingWorker:
         job = self.store.get_job(job_id)
         if job and job.status == JobStatus.CANCELLING:
             self._cancel_requested = True
-        
+
         # Create progress object
         progress = JobProgress(
             current_epoch=progress_info.get("current_epoch", 0),
@@ -284,83 +283,83 @@ class TrainingWorker:
             metrics=progress_info.get("metrics", progress_info.get("train_metrics", {})),
             message=progress_info.get("message", "")
         )
-        
+
         # Update job progress in Redis
         self.store.update_job(job_id, progress=progress)
-        
+
         # Publish progress event
         self.store.publish_event(job_id, {
             "type": "progress",
             "job_id": job_id,
             "progress": progress.to_dict(),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
-        
+
         # Update heartbeat
         self.store.update_worker_heartbeat(self.worker_id)
-        
-        logger.debug("Progress: epoch %d/%d, step %d/%d", 
+
+        logger.debug("Progress: epoch %d/%d, step %d/%d",
                     progress.current_epoch, progress.total_epochs,
                     progress.current_step, progress.total_steps)
-    
+
     def _complete_job(self, job: Job):
         """Mark job as completed."""
         logger.info("Job %s completed successfully", job.id[:8])
-        
+
         self.store.update_job(
             job.id,
             status=JobStatus.COMPLETED,
-            finished_at=datetime.utcnow()
+            finished_at=datetime.now()
         )
-        
+
         self.store.publish_event(job.id, {
             "type": "job_completed",
             "job_id": job.id,
             "output_dir": job.output_dir,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
-    
+
     def _cancel_job(self, job: Job):
         """Mark job as cancelled."""
         logger.info("Job %s cancelled", job.id[:8])
-        
+
         self.store.update_job(
             job.id,
             status=JobStatus.CANCELLED,
-            finished_at=datetime.utcnow()
+            finished_at=datetime.now()
         )
-        
+
         self.store.publish_event(job.id, {
             "type": "job_cancelled",
             "job_id": job.id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
-    
+
     def _fail_job(self, job: Job, error: Exception):
         """Mark job as failed with error message."""
         error_msg = f"{type(error).__name__}: {str(error)}"
         logger.error("Job %s failed: %s", job.id[:8], error_msg)
         logger.debug("Traceback:\n%s", traceback.format_exc())
-        
+
         self.store.update_job(
             job.id,
             status=JobStatus.FAILED,
-            finished_at=datetime.utcnow(),
+            finished_at=datetime.now(),
             error_message=error_msg
         )
-        
+
         self.store.publish_event(job.id, {
             "type": "job_failed",
             "job_id": job.id,
             "error": error_msg,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
 
 
 def main():
     """Entry point for worker process."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Training Worker")
     parser.add_argument("--redis-url", default="redis://localhost:6379",
                        help="Redis connection URL")
@@ -372,13 +371,13 @@ def main():
                        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                        help="Log level")
     args = parser.parse_args()
-    
+
     # Setup logging
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    
+
     # Create and run worker
     worker = TrainingWorker(
         redis_url=args.redis_url,
@@ -390,8 +389,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-

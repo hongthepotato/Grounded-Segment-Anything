@@ -1214,4 +1214,3 @@ class TeacherTrainer:
                 self.training_managers[model_name].load_state_dict(
                     checkpoint['training_manager_state']
                 )
-
