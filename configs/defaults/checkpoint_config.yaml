@@ -15,6 +15,8 @@ checkpointing:
   min_delta: 0.001        # Minimum improvement to consider
   
   # Checkpoint content
+  save_trainable_only: true  # Save only trainable params (~50MB for LoRA vs ~2GB full)
+                             # Set to false for full fine-tuning (non-LoRA)
   save_optimizer: true    # Save optimizer state (needed for resume)
   save_scheduler: true    # Save LR scheduler state
   save_scaler: true       # Save AMP scaler state (if using mixed precision)

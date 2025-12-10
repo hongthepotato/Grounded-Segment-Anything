@@ -445,10 +445,27 @@ class TeacherTrainer:
             logger.info("Training Completed!")
             logger.info("=" * 60)
 
+            self._save_lora_adapters_only()
+
         finally:
             # Always close loggers
             for tb_logger in self.tb_loggers.values():
                 tb_logger.close()
+
+    def _save_lora_adapters_only(self):
+        """
+        Save only LoRA adapters for deployment (NOT full model).
+        
+        This produces ~5-10MB files instead of ~2GB checkpoints.
+        Use these for inference; use full checkpoints only for resuming training.
+        """
+        for model_name, model in self.models.items():
+            if hasattr(model, 'save_lora_adapters'):
+                adapter_dir = self.output_dir / 'teachers' / f'{model_name}_lora_adapters'
+                model.save_lora_adapters(str(adapter_dir))
+                logger.info("✓ Saved LoRA adapters (~5MB) to: %s", adapter_dir)
+            else:
+                logger.warning("Model %s does not support save_lora_adapters", model_name)
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """

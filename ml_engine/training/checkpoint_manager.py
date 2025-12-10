@@ -9,15 +9,13 @@ This module provides:
 - Automatic cleanup of old checkpoints
 """
 
-import torch
-import torch.nn as nn
-import os
-import shutil
 from pathlib import Path
 from typing import Dict, Optional, List, Any
 import yaml
 import logging
 from datetime import datetime
+import torch
+import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +55,8 @@ class CheckpointManager:
     """
 
     def __init__(
-        self, 
-        output_dir: str, 
+        self,
+        output_dir: str,
         config_path: str,
         monitor_metric: Optional[str] = None,
         mode: Optional[str] = None
@@ -95,7 +93,7 @@ class CheckpointManager:
 
         logger.info(f"CheckpointManager initialized: output_dir={output_dir}")
         logger.info(f"Monitoring metric: {self.monitor_metric} (mode={self.mode})")
-    
+
     def save_checkpoint(
         self,
         epoch: int,
@@ -121,15 +119,30 @@ class CheckpointManager:
         Returns:
             Path to saved checkpoint (or None if not saved this epoch)
         """
+        # Check if we should save only trainable parameters (for LoRA training)
+        save_trainable_only = self.config.get('save_trainable_only', False)
+
+        if save_trainable_only:
+            # Save only trainable parameters (~50MB for LoRA vs ~2GB for full model)
+            model_state = {
+                name: param.data for name, param in model.named_parameters() 
+                if param.requires_grad
+            }
+            logger.debug("Saving trainable params only: %d tensors", len(model_state))
+        else:
+            # Save full model state (needed for full fine-tuning)
+            model_state = model.state_dict()
+
         # Prepare checkpoint dictionary
         checkpoint = {
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model_state,
             'optimizer_state_dict': optimizer.state_dict(),
             'metrics': metrics,
             'best_metric': self.best_metric,
             'best_epoch': self.best_epoch,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'trainable_only': save_trainable_only  # Flag for loading
         }
 
         # Add optional components
@@ -320,9 +333,16 @@ class CheckpointManager:
 
         checkpoint = torch.load(checkpoint_path, map_location=map_location)
 
-        # Load model
-        model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
-        logger.info(f"✓ Model loaded from epoch {checkpoint.get('epoch', 'unknown')}")
+        # Load model - handle trainable-only checkpoints
+        trainable_only = checkpoint.get('trainable_only', False)
+        if trainable_only:
+            # Only trainable params were saved - must use strict=False
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            logger.info("✓ Loaded trainable parameters only from epoch %s", 
+                       checkpoint.get('epoch', 'unknown'))
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
+            logger.info("✓ Model loaded from epoch %s", checkpoint.get('epoch', 'unknown'))
 
         # Load optimizer
         if load_optimizer and optimizer is not None and 'optimizer_state_dict' in checkpoint:
