@@ -32,3 +32,4 @@ segment-anything  # SAM models
 scikit-learn  # For stratified splitting
 tqdm  # Progress bars
 redis
+torchmetrics==1.8.2
