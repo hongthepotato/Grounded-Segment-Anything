@@ -19,6 +19,7 @@ from ml_engine.training.peft_utils import (
 from groundingdino.util.slconfig import SLConfig
 from groundingdino.models import build_model
 from groundingdino.util.utils import clean_state_dict
+from groundingdino.util.vl_utils import build_captions_and_token_span, create_positive_map_from_span
 
 from core.constants import DEFAULT_DINO_LORA_CONFIG
 
@@ -295,12 +296,8 @@ class GroundingDINOLoRA(nn.Module):
             if class_names is None:
                 raise ValueError("Must provide either class_names or captions")
             # Format as "class1 . class2 . class3"
-            caption = " . ".join(class_names)
-            if not caption.endswith("."):
-                caption += "."
-            # Replicate for batch size
-            batch_size = images.tensors.shape[0] if hasattr(images, 'tensors') else images.shape[0]
-            captions = [caption] * batch_size
+            caption, _ = build_captions_and_token_span(class_names, force_lowercase=False)
+            captions = [caption] * (images.tensors.shape[0] if hasattr(images, 'tensors') else images.shape[0])
         
         # Must use 'samples' parameter name to match original GroundingDINO signature
         outputs = self.model(samples=images, captions=captions)
@@ -356,8 +353,6 @@ class GroundingDINOLoRA(nn.Module):
                 - scores: [N] confidence scores
                 - labels: [N] class indices (0-based)
         """
-        from groundingdino.util.vl_utils import build_captions_and_token_span, create_positive_map_from_span
-
         # Forward pass
         outputs = self.forward(images, class_names=class_names)
         pred_boxes = outputs['pred_boxes']    # [B, num_queries, 4]
@@ -369,7 +364,15 @@ class GroundingDINOLoRA(nn.Module):
         # Build positive_map for token -> class mapping (same for all batch items)
         caption, cat2tokenspan = build_captions_and_token_span(class_names, force_lowercase=False)
         tokenized = self.tokenizer(caption, padding="longest", return_tensors="pt").to(device)
-        token_span_per_class = [cat2tokenspan.get(name, []) for name in class_names]
+        token_span_per_class = []
+        for name in class_names:
+            if name not in cat2tokenspan:
+                raise ValueError(
+                    f"Class '{name}' not found in cat2tokenspan during predict()!\n"
+                    f"Available classes: {list(cat2tokenspan.keys())}\n"
+                    f"This indicates a mismatch between class_names and caption tokenization."
+                )
+            token_span_per_class.append(cat2tokenspan[name])
         positive_map = create_positive_map_from_span(
             tokenized, token_span_per_class, max_text_len=pred_logits.shape[-1]
         ).to(device)  # [num_classes, num_tokens]
