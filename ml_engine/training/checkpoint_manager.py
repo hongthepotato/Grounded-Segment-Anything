@@ -286,7 +286,8 @@ class CheckpointManager:
         scaler: Optional[torch.cuda.amp.GradScaler] = None,
         load_optimizer: bool = True,
         strict: bool = True,
-        map_location: Optional[str] = None
+        map_location: Optional[str] = None,
+        load_rng_state: bool = True
     ) -> Dict[str, Any]:
         """
         Load checkpoint and restore training state.
@@ -300,6 +301,7 @@ class CheckpointManager:
             load_optimizer: Whether to load optimizer state
             strict: Strict mode for model loading
             map_location: Device to map tensors to
+            load_rng_state: Whether to restore RNG state (set False for evaluation)
 
         Returns:
             Checkpoint dictionary with metadata
@@ -359,12 +361,24 @@ class CheckpointManager:
             scaler.load_state_dict(checkpoint['scaler_state_dict'])
             logger.info("✓ AMP scaler state loaded")
 
-        # Load RNG state for reproducibility
-        if 'rng_state' in checkpoint:
-            torch.set_rng_state(checkpoint['rng_state']['python'])
-            if torch.cuda.is_available() and checkpoint['rng_state']['cuda'] is not None:
-                torch.cuda.set_rng_state_all(checkpoint['rng_state']['cuda'])
-            logger.info("✓ RNG states restored")
+        # Load RNG state for reproducibility (skip for evaluation-only loading)
+        if load_rng_state and 'rng_state' in checkpoint:
+            try:
+                # RNG state must be ByteTensor - convert if needed after loading from disk
+                python_rng = checkpoint['rng_state']['python']
+                if not isinstance(python_rng, torch.ByteTensor):
+                    python_rng = python_rng.to(torch.uint8)
+                torch.set_rng_state(python_rng)
+
+                if torch.cuda.is_available() and checkpoint['rng_state']['cuda'] is not None:
+                    cuda_rng = checkpoint['rng_state']['cuda']
+                    # Convert each CUDA RNG state if needed
+                    if cuda_rng and not isinstance(cuda_rng[0], torch.ByteTensor):
+                        cuda_rng = [state.to(torch.uint8) for state in cuda_rng]
+                    torch.cuda.set_rng_state_all(cuda_rng)
+                logger.info("✓ RNG states restored")
+            except Exception as e:
+                logger.warning("Failed to restore RNG state: %s (continuing without it)", e)
 
         # Restore best metric tracking
         self.best_metric = checkpoint.get('best_metric', self.best_metric)

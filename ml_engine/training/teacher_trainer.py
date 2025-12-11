@@ -543,7 +543,8 @@ class TeacherTrainer:
                 self.checkpoint_managers[model_name].load_checkpoint(
                     str(best_ckpt_path),
                     model=model,
-                    load_optimizer=False
+                    load_optimizer=False,
+                    load_rng_state=False  # Don't need RNG for evaluation
                 )
 
             # Run evaluation based on model type
