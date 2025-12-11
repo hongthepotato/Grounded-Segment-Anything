@@ -97,15 +97,24 @@ class DetectionMetrics:
         """Compute all detection metrics."""
         results = self.map_metric.compute()
 
-        mAP50 = float(results.get('map_50'))
-        mAP50_95 = float(results.get('map'))
+        mAP50 = float(results.get('map_50', 0.0))
+        mAP50_95 = float(results.get('map', 0.0))
 
         # Per-class AP (mAP@[.5:.95] per class - the primary COCO metric)
         per_class_ap = {}
-        if 'map_per_class' in results and results['map_per_class'] is not None:
-            for i, ap in enumerate(results['map_per_class']):
-                if i < len(self.class_names):
-                    per_class_ap[self.class_names[i]] = float(ap) if not torch.isnan(ap) else 0.0
+        map_per_class = results.get('map_per_class', None)
+        if map_per_class is not None:
+            # Handle different tensor shapes from torchmetrics
+            if map_per_class.dim() == 0:
+                # Scalar tensor (single class or aggregated) - can't iterate
+                if self.num_classes == 1 and len(self.class_names) > 0:
+                    val = float(map_per_class) if not torch.isnan(map_per_class) else 0.0
+                    per_class_ap[self.class_names[0]] = val
+            else:
+                # 1-d tensor - iterate normally
+                for i, ap in enumerate(map_per_class):
+                    if i < len(self.class_names):
+                        per_class_ap[self.class_names[i]] = float(ap) if not torch.isnan(ap) else 0.0
 
         return {
             'mAP50': mAP50,
