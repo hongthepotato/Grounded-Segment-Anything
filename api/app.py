@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.jobs import router as jobs_router, queue_router
 from api.routes.websocket import router as websocket_router
+from api.routes.exports import router as exports_router
 from ml_engine.jobs import get_job_manager
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,10 @@ API for managing ML training jobs.
 - `GET /api/jobs/{id}` - Get job details
 - `DELETE /api/jobs/{id}` - Cancel job
 
+### Exports
+- `GET /api/jobs/{id}/exports` - List available export formats
+- `GET /api/jobs/{id}/export` - Download trained model package
+
 ### Queue
 - `GET /api/queue/status` - Queue and worker status
 
@@ -117,6 +122,7 @@ app.add_middleware(
 app.include_router(jobs_router)
 app.include_router(queue_router)
 app.include_router(websocket_router)
+app.include_router(exports_router)
 
 
 @app.get("/health", tags=["health"])
