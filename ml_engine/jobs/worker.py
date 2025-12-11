@@ -29,6 +29,8 @@ from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo, JobTy
 from ml_engine.jobs.redis_store import RedisJobStore
 from ml_engine.training.teacher_trainer import TeacherTrainer, TrainingCancelledException
 from ml_engine.data.manager import DataManager
+from core.config import load_config, merge_configs
+from core.constants import DEFAULT_CONFIGS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -214,21 +216,26 @@ class TrainingWorker:
         """
         Run teacher model training.
         
+        Builds complete config by:
+        1. Loading shared defaults from teacher_training.yaml
+        2. Loading model-specific configs based on dataset
+        3. Merging with user-provided overrides from job config
+        
         Args:
             job: Job with teacher training config
         """
-        config = job.config
+        job_config = job.config
 
         # Extract paths from config
-        data_path = config.get("data_path")
-        image_dir = config.get("image_dir")
+        data_path = job_config.get("data_path")
+        image_dir = job_config.get("image_dir")
         output_dir = job.output_dir or f"experiments/{job.id[:8]}"
 
         if not data_path:
             raise ValueError("data_path required in job config")
 
         # Create DataManager
-        split_config = config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
+        split_config = job_config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
         data_manager = DataManager(
             data_path=data_path,
             image_dir=image_dir,
@@ -236,20 +243,82 @@ class TrainingWorker:
             auto_preprocess=True
         )
 
-        # Training config
-        training_config = config.get("training", {})
+        # Build complete config like CLI does
+        config = self._build_teacher_config(data_manager, job_config)
 
         # Create trainer with callbacks
         trainer = TeacherTrainer(
             data_manager=data_manager,
             output_dir=output_dir,
-            config=training_config,
+            config=config,
             progress_callback=lambda p: self._on_progress(job.id, p),
             cancel_check=lambda: self._cancel_requested
         )
 
         # Run training
         trainer.train()
+
+    def _build_teacher_config(
+        self,
+        data_manager: DataManager,
+        job_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Build complete teacher training config from defaults + job overrides.
+        
+        Mirrors the config building logic in cli/train_teacher.py to ensure
+        consistent behavior between CLI and API.
+        
+        Args:
+            data_manager: DataManager with dataset info
+            job_config: User-provided job configuration
+            
+        Returns:
+            Complete training config with all required keys
+        """
+        # Step 1: Load shared training defaults
+        shared_config_path = DEFAULT_CONFIGS_DIR / 'teacher_training.yaml'
+        shared_config = load_config(str(shared_config_path))
+        logger.info("Loaded shared training config from %s", shared_config_path)
+
+        # Step 2: Load model-specific configs based on dataset
+        dataset_info = data_manager.get_dataset_info()
+        required_models = data_manager.get_required_models()
+        logger.info("Required teacher models: %s", required_models)
+
+        model_configs = {}
+        if 'grounding_dino' in required_models:
+            dino_config_path = DEFAULT_CONFIGS_DIR / 'teacher_grounding_dino_lora.yaml'
+            model_configs['grounding_dino'] = load_config(str(dino_config_path))
+            logger.info("Loaded Grounding DINO config")
+
+        if 'sam' in required_models:
+            sam_config_path = DEFAULT_CONFIGS_DIR / 'teacher_sam_lora.yaml'
+            model_configs['sam'] = load_config(str(sam_config_path))
+            logger.info("Loaded SAM config")
+
+        if not model_configs:
+            raise ValueError("No models to train! Dataset has no valid annotations.")
+
+        # Step 3: Build base config (same structure as CLI)
+        config = {
+            **shared_config['training'],
+            'num_classes': dataset_info['num_classes'],
+            'class_names': list(dataset_info['class_mapping'].values()),
+            'class_mapping': dataset_info['class_mapping'],
+            'augmentation': shared_config.get('augmentation'),
+            'evaluation': shared_config.get('evaluation'),
+            'checkpointing': shared_config.get('checkpointing'),
+            'models': model_configs
+        }
+
+        # Step 4: Merge user overrides from job config
+        user_overrides = job_config.get("training", {})
+        if user_overrides:
+            config = merge_configs(config, user_overrides)
+            logger.info("Applied user config overrides")
+
+        return config
 
     def _run_student_distillation(self, job: Job):
         """
