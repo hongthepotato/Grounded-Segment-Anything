@@ -24,6 +24,7 @@ from ml_engine.data.dataset_factory import DatasetFactory
 from ml_engine.evaluation import PredictionVisualizer
 from ml_engine.evaluation.evaluator import ModelEvaluator
 from ml_engine.evaluation.report import ModelReportGenerator
+from ml_engine.export import create_export_package
 from ml_engine.models.teacher.grounding_dino_lora import load_grounding_dino_with_lora
 from ml_engine.models.teacher.sam_lora import load_sam_with_lora
 from ml_engine.training.losses import build_criterion, SegmentationLoss
@@ -210,15 +211,35 @@ class TeacherTrainer:
         """Initialize teacher models based on dataset."""
         self.models = {}
 
+        # Validate models config exists
+        if 'models' not in self.config:
+            raise ValueError(
+                "Config missing 'models' section!\n"
+                "This indicates a bug in config generation."
+            )
+
         # Load Grounding DINO if dataset has boxes
         if 'grounding_dino' in self.required_models:
-            model_config = self.config.get('models').get('grounding_dino')
+            model_config = self.config['models']['grounding_dino']
+
             logger.info("Loading Grounding DINO with LoRA...")
-            base_ckpt = model_config.get('model').get('base_checkpoint',
-                                        'data/models/pretrained/groundingdino_swint_ogc.pth')
+
+            # Checkpoint path is optional (sensible default exists)
+            base_ckpt = model_config.get('model', {}).get(
+                'base_checkpoint',
+                'data/models/pretrained/groundingdino_swint_ogc.pth'
+            )
+
+            # LoRA config is REQUIRED for LoRA training
+            if 'lora' not in model_config:
+                raise ValueError(
+                    "LoRA training requires 'models.grounding_dino.lora' config!\n"
+                    "Expected keys: r, lora_alpha, target_modules, lora_dropout"
+                )
+
             self.models['grounding_dino'] = load_grounding_dino_with_lora(
                 base_checkpoint=base_ckpt,
-                lora_config=model_config.get('lora'),
+                lora_config=model_config['lora'],
                 freeze_backbone=model_config.get('freeze_backbone', True),
                 freeze_bbox_embed=model_config.get('freeze_bbox_embed', False),
                 bert_model_path=model_config.get('bert_model_path', None)
@@ -228,15 +249,29 @@ class TeacherTrainer:
 
         # Load SAM if dataset has masks
         if 'sam' in self.required_models:
+            sam_config = self.config['models']['sam']
+
             logger.info("Loading SAM with LoRA...")
-            base_ckpt = self.config.get('sam_checkpoint',
-                                        'data/models/pretrained/sam_vit_h_4b8939.pth')
-            model_type = self.config.get('sam_model_type', 'vit_h')
+
+            # Checkpoint and model type are optional (sensible defaults exist)
+            model_section = sam_config.get('model', {})
+            base_ckpt = model_section.get(
+                'base_checkpoint',
+                'data/models/pretrained/sam_vit_h_4b8939.pth'
+            )
+            model_type = model_section.get('model_type', 'vit_h')
+
+            # LoRA config is REQUIRED for LoRA training
+            if 'lora' not in sam_config:
+                raise ValueError(
+                    "LoRA training requires 'models.sam.lora' config!\n"
+                    "Expected keys: r, lora_alpha, target_modules, lora_dropout"
+                )
 
             self.models['sam'] = load_sam_with_lora(
                 base_checkpoint=base_ckpt,
                 model_type=model_type,
-                lora_config=self.config.get('sam_lora', {})
+                lora_config=sam_config['lora']
             ).to(self.device)
 
             logger.info("SAM loaded")
@@ -252,7 +287,11 @@ class TeacherTrainer:
         if 'grounding_dino' in self.models:
             # Use proper DETR-style criterion with Hungarian matching
             num_classes = self.dataset_info['num_classes']
-            num_decoder_layers = self.config.get('num_decoder_layers', 6)
+
+            # Query num_decoder_layers from actual model architecture
+            dino_model = self.models['grounding_dino']
+            base_model = dino_model.model.model  # Unwrap PEFT wrapper
+            num_decoder_layers = base_model.transformer.decoder.num_layers
 
             # Build criterion with auxiliary losses
             self.losses['detection'] = build_criterion(
@@ -263,9 +302,9 @@ class TeacherTrainer:
             )
 
             logger.info("✓ Grounding DINO criterion with Hungarian matching initialized")
-            logger.info("  - Num classes: %s", num_classes)
-            logger.info("  - Num decoder layers: %s", num_decoder_layers)
-            logger.info("  - Auxiliary losses: %s intermediate + 1 encoder", num_decoder_layers - 1)
+            logger.info("  - Num classes: %d", num_classes)
+            logger.info("  - Num decoder layers: %d (architectural constant)", num_decoder_layers)
+            logger.info("  - Auxiliary losses: %d intermediate + 1 encoder", num_decoder_layers - 1)
 
         if 'sam' in self.models:
             self.losses['segmentation'] = SegmentationLoss().to(self.device)
@@ -275,15 +314,27 @@ class TeacherTrainer:
         self.optimizers = {}
         self.schedulers = {}
 
-        # in default config, `learning_rate` as actually model dependent
-        # but leave it as it is for now
-        lr = self.config.get('learning_rate', 1e-4)
+        # Shared training params (from flattened shared_config['training'])
         weight_decay = self.config.get('weight_decay', 1e-4)
         optimizer_type = self.config.get('optimizer', 'AdamW')
+        warmup_epochs = self.config.get('warmup_epochs', 3)
+        total_epochs = self.config.get('epochs', 50)
 
         for model_name, model in self.models.items():
+            model_config = self.config['models'][model_name]
+            lr = model_config.get('learning_rate', 1e-4)
             # Get trainable parameters
             trainable_params = [p for p in model.parameters() if p.requires_grad]
+
+            # ===================================================================
+            # Following prints are for debugging purposes
+            # ===================================================================
+            print("#" * 60)
+            num_trainable = sum(p.numel() for p in trainable_params)
+            print(f"Model: {model_name}")
+            print(f"Trainable parameters: {num_trainable:,} ({num_trainable / 1e6:.2f}M)")
+            print(f"Number of trainable tensors: {len(trainable_params)}")
+            print("#" * 60)
 
             # Create optimizer
             if optimizer_type == 'AdamW':
@@ -293,10 +344,12 @@ class TeacherTrainer:
                     weight_decay=weight_decay
                 )
             elif optimizer_type == 'SGD':
+                # Momentum is MODEL-SPECIFIC
+                momentum = model_config.get('momentum', 0.9)
                 optimizer = torch.optim.SGD(
                     trainable_params,
                     lr=lr,
-                    momentum=self.config.get('momentum', 0.9),
+                    momentum=momentum,
                     weight_decay=weight_decay
                 )
             else:
@@ -305,17 +358,14 @@ class TeacherTrainer:
             self.optimizers[model_name] = optimizer
 
             # Create scheduler
-            warmup_epochs = self.config.get('warmup_epochs', 3)
-            total_epochs = self.config.get('epochs', 50)
-
             scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                 optimizer,
-                T_0=total_epochs - warmup_epochs,
+                T_0=max(1, total_epochs - warmup_epochs),
                 T_mult=1
             )
             self.schedulers[model_name] = scheduler
 
-            logger.info("✓ Optimizer and scheduler created for %s", model_name)
+            logger.info("Optimizer for %s: %s (lr=%.2e)", model_name, optimizer_type, lr)
 
     def _init_training_manager(self):
         """Initialize training managers for each model."""
@@ -453,6 +503,9 @@ class TeacherTrainer:
             # Evaluate on test set and generate report
             self._evaluate_on_test_set()
 
+            # Create downloadable export package
+            self._create_export_package()
+
         finally:
             # Always close loggers
             for tb_logger in self.tb_loggers.values():
@@ -472,6 +525,64 @@ class TeacherTrainer:
                 logger.info("✓ Saved LoRA adapters (~5MB) to: %s", adapter_dir)
             else:
                 logger.warning("Model %s does not support save_lora_adapters", model_name)
+
+    def _create_export_package(self):
+        """
+        Create downloadable export package with merged model and inference scripts.
+        
+        This creates a ZIP file in output_dir/exports/ containing:
+        - merged_model.pth: Merged model weights (base + LoRA)
+        - inference.py: Ready-to-run inference script
+        - README.md: Usage instructions
+        - requirements.txt: Python dependencies
+        - class_names.txt: Classes the model was trained on
+        """
+        logger.info("=" * 60)
+        logger.info("Creating Export Package")
+        logger.info("=" * 60)
+
+        class_names = list(self.dataset_info['class_mapping'].values())
+
+        for model_name, model in self.models.items():
+            if model_name != 'grounding_dino':
+                logger.info("Skipping export for %s (only Grounding DINO supported)", model_name)
+                continue
+
+            try:
+                # Gather training info for README
+                model_config = self.config['models'][model_name]
+                training_info = {
+                    'epochs': self.config.get('epochs', 'N/A'),
+                    'batch_size': self.config.get('batch_size', 'N/A'),
+                    'learning_rate': model_config.get('learning_rate', 'N/A'),
+                }
+
+                # Try to get mAP from evaluation results
+                eval_report_path = self.output_dir / 'evaluation' / f'{model_name}_report.json'
+                if eval_report_path.exists():
+                    import json
+                    with open(eval_report_path) as f:
+                        report = json.load(f)
+                        training_info['mAP50'] = report.get('technical_metrics', {}).get('mAP50', 0)
+
+                # Create export package
+                zip_path = create_export_package(
+                    model=model,
+                    output_dir=self.output_dir,
+                    class_names=class_names,
+                    model_name=model_name,
+                    training_info=training_info
+                )
+
+                logger.info("✓ Export package created: %s", zip_path)
+
+            except Exception as e:
+                logger.error("Failed to create export package for %s: %s", model_name, e)
+                logger.exception(e)
+
+        logger.info("=" * 60)
+        logger.info("Export Package Creation Completed!")
+        logger.info("=" * 60)
 
     def _evaluate_on_test_set(self):
         """
@@ -567,6 +678,7 @@ class TeacherTrainer:
                 continue
 
             # Generate report
+            model_config = self.config['models'][model_name]
             report = report_generator.generate_report(
                 evaluation_results=eval_results,
                 model_name=model_name,
@@ -575,7 +687,7 @@ class TeacherTrainer:
                     'config': {
                         'epochs': self.config.get('epochs'),
                         'batch_size': self.config.get('batch_size'),
-                        'learning_rate': self.config.get('learning_rate')
+                        'learning_rate': model_config.get('learning_rate')
                     }
                 }
             )
