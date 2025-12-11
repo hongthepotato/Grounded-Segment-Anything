@@ -22,6 +22,8 @@ from ml_engine.data.loaders import create_dataloader
 from ml_engine.data.manager import DataManager
 from ml_engine.data.dataset_factory import DatasetFactory
 from ml_engine.evaluation import PredictionVisualizer
+from ml_engine.evaluation.evaluator import ModelEvaluator
+from ml_engine.evaluation.report import ModelReportGenerator
 from ml_engine.models.teacher.grounding_dino_lora import load_grounding_dino_with_lora
 from ml_engine.models.teacher.sam_lora import load_sam_with_lora
 from ml_engine.training.losses import build_criterion, SegmentationLoss
@@ -445,7 +447,11 @@ class TeacherTrainer:
             logger.info("Training Completed!")
             logger.info("=" * 60)
 
+            # Save lightweight LoRA adapters for deployment
             self._save_lora_adapters_only()
+
+            # Evaluate on test set and generate report
+            self._evaluate_on_test_set()
 
         finally:
             # Always close loggers
@@ -466,6 +472,133 @@ class TeacherTrainer:
                 logger.info("✓ Saved LoRA adapters (~5MB) to: %s", adapter_dir)
             else:
                 logger.warning("Model %s does not support save_lora_adapters", model_name)
+
+    def _evaluate_on_test_set(self):
+        """
+        Evaluate trained models on held-out test set.
+        
+        This runs after training completes and generates:
+        - Technical metrics (mAP, IoU, etc.)
+        - Simple metrics (overall score, detection rate)
+        - Evaluation report with recommendations
+        """
+        # Check if test split exists
+        try:
+            test_data = self.data_manager.get_split('test')
+        except ValueError:
+            logger.warning("No test split available. Skipping test evaluation.")
+            logger.warning("To enable test evaluation, provide split_config with 'test' ratio.")
+            return
+
+        if len(test_data.get('images', [])) == 0:
+            logger.warning("Test split is empty. Skipping test evaluation.")
+            return
+
+        logger.info("=" * 60)
+        logger.info("Running Test Set Evaluation")
+        logger.info("=" * 60)
+
+        # Create test dataset and dataloader
+        test_dataset = DatasetFactory.create_dataset(
+            coco_data=test_data,
+            image_dir=str(self.data_manager.image_dir),
+            dataset_info=self.dataset_info,
+            model_names=self.required_models,
+            augmentation_config=None,  # No augmentation for test
+            is_training=False
+        )
+
+        batch_size = self.config.get('batch_size', 8)
+        num_workers = self.config.get('num_workers', 4)
+
+        test_loader = create_dataloader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers
+        )
+
+        logger.info("Test set: %d images", len(test_dataset))
+
+        # Initialize evaluator and report generator
+        evaluator = ModelEvaluator(
+            device=str(self.device),
+            confidence_threshold=self.config.get('evaluation', {}).get('confidence_threshold', 0.3)
+        )
+        report_generator = ModelReportGenerator()
+
+        # Get class names
+        class_names = list(self.dataset_info['class_mapping'].values())
+
+        # Evaluate each model
+        all_reports = []
+
+        for model_name, model in self.models.items():
+            logger.info("Evaluating %s...", model_name)
+
+            # Load best checkpoint before evaluation
+            best_ckpt_path = self.checkpoint_managers[model_name].get_best_checkpoint_path()
+            if best_ckpt_path.exists():
+                logger.info("Loading best checkpoint: %s", best_ckpt_path)
+                self.checkpoint_managers[model_name].load_checkpoint(
+                    str(best_ckpt_path),
+                    model=model,
+                    load_optimizer=False
+                )
+
+            # Run evaluation based on model type
+            if model_name == 'grounding_dino':
+                eval_results = evaluator.evaluate_detection(
+                    model=model,
+                    dataloader=test_loader,
+                    class_names=class_names,
+                    dataset_info=self.dataset_info
+                )
+            elif model_name == 'sam':
+                eval_results = evaluator.evaluate_segmentation(
+                    model=model,
+                    dataloader=test_loader,
+                    class_names=class_names,
+                    dataset_info=self.dataset_info
+                )
+            else:
+                logger.warning("Unknown model type %s, skipping evaluation", model_name)
+                continue
+
+            # Generate report
+            report = report_generator.generate_report(
+                evaluation_results=eval_results,
+                model_name=model_name,
+                test_set_size=len(test_dataset),
+                extra_info={
+                    'config': {
+                        'epochs': self.config.get('epochs'),
+                        'batch_size': self.config.get('batch_size'),
+                        'learning_rate': self.config.get('learning_rate')
+                    }
+                }
+            )
+
+            # Save individual report
+            report_path = self.output_dir / 'evaluation' / f'{model_name}_report.json'
+            report_generator.save_report(report, str(report_path))
+
+            # Print summary
+            summary_text = report_generator.generate_summary_text(report)
+            logger.info("\n%s", summary_text)
+
+            all_reports.append(report)
+
+        # Save combined report if multiple models
+        if len(all_reports) > 1:
+            combined_report = report_generator.combine_reports(all_reports)
+            combined_path = self.output_dir / 'evaluation' / 'combined_report.json'
+            report_generator.save_report(combined_report, str(combined_path))
+
+        logger.info("=" * 60)
+        logger.info("Test Evaluation Completed!")
+        logger.info("Reports saved to: %s", self.output_dir / 'evaluation')
+        logger.info("=" * 60)
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """
@@ -607,68 +740,12 @@ class TeacherTrainer:
             # The model should return auxiliary outputs for DETR-style training
             outputs = model(images, class_names=class_names)
 
-            # # Diagnose valid token count
-            # print("=" * 80)
-            # print("TOKEN DIAGNOSTICS")
-            # print("=" * 80)
-
-            # # Get valid token mask from first query (all queries share same text encoding)
-            # first_query_logits = outputs['pred_logits'][0, 0, :]  # [num_text_tokens]
-            # valid_token_mask = ~torch.isinf(first_query_logits)
-            # num_valid_tokens = valid_token_mask.sum().item()
-            # total_tokens = first_query_logits.shape[0]
-
-            # print(f"Text caption: '{' . '.join(class_names)}'")
-            # print(f"Number of classes: {len(class_names)}")
-            # print(f"Total token positions (with padding): {total_tokens}")
-            # print(f"Valid tokens (non -inf): {num_valid_tokens}")
-            # print(f"Padding tokens (-inf): {total_tokens - num_valid_tokens}")
-            # print(f"Valid token positions: {valid_token_mask.nonzero().squeeze().tolist()}")
-
-            # # Show first few logits values
-            # print(f"\nFirst 20 logit values (from first query):")
-            # for i in range(min(20, total_tokens)):
-            #     val = first_query_logits[i].item()
-            #     status = "VALID" if not torch.isinf(first_query_logits[i]) else "-INF"
-            #     print(f"  Token {i:3d}: {val:8.4f}  [{status}]")
-
-            # # Show what token ranges each class should occupy
-            # if num_valid_tokens > 0:
-            #     tokens_per_class = max(1, num_valid_tokens // len(class_names))
-            #     print(f"\nRecommended token mapping (equally distributed):")
-            #     for class_id, class_name in enumerate(class_names):
-            #         start_idx = class_id * tokens_per_class
-            #         end_idx = min(start_idx + tokens_per_class, num_valid_tokens)
-            #         print(f"  Class {class_id} '{class_name}': tokens [{start_idx}:{end_idx}] (total: {end_idx - start_idx})")
-
-            # print("=" * 80)
-
-            # Ensure model returns auxiliary outputs
-            # if 'aux_outputs' not in outputs:
-            #     logger.warning("Model not returning auxiliary outputs! Training may be suboptimal.")
-
-            # # Debug: check model outputs
-            # if torch.isnan(outputs['pred_logits']).any():
-            #     logger.error("NaN detected in pred_logits!")
-            # if torch.isnan(outputs['pred_boxes']).any():
-            #     logger.error("NaN detected in pred_boxes!")
-
-            # ============================================================
-            # OFFICIAL TOKEN MAPPING: Use Grounding DINO's built-in utilities
-            # ============================================================
-
             # Step 1: Build caption and character-level token spans using official utility
             # This formats the caption exactly as Grounding DINO expects: "class1 . class2 . class3"
             caption, cat2tokenspan = build_captions_and_token_span(
                 class_names, 
                 force_lowercase=False
             )
-
-            # print(f"\nOFFICIAL TOKEN MAPPING:")
-            # print(f"  Caption: '{caption}'")
-            # print(f"  Character spans per category:")
-            # for cat_name, spans in cat2tokenspan.items():
-            #     print(f"    '{cat_name}': {spans}")
 
             # # Step 2: Tokenize using the model's tokenizer (same as model uses internally)
             tokenized = model.tokenizer(
@@ -677,20 +754,20 @@ class TeacherTrainer:
                 return_tensors="pt"
             ).to(self.device)
 
-            # print(f"  Tokenized input_ids: {tokenized['input_ids'][0].tolist()}")
-            # print(f"  Tokenized length: {tokenized['input_ids'].shape[1]}")
-
             # Step 3: Build class_id -> token_span mapping
             # Map from class_id (integer) to character spans
             class_id_to_name = {i: name for i, name in enumerate(class_names)}
             token_span_per_class = []
             for class_id in range(len(class_names)):
                 class_name = class_id_to_name[class_id]
-                if class_name in cat2tokenspan:
-                    token_span_per_class.append(cat2tokenspan[class_name])
-                else:
-                    logger.warning(f"Class '{class_name}' not found in cat2tokenspan!")
-                    token_span_per_class.append([])  # Empty span as fallback
+                if class_name not in cat2tokenspan:
+                    raise ValueError(
+                        f"Class '{class_name}' not found in cat2tokenspan!\n"
+                        f"Available classes: {list(cat2tokenspan.keys())}\n"
+                        f"This indicates a mismatch between class_names and caption tokenization.\n"
+                        f"Check if class names contain special characters or case mismatches."
+                    )
+                token_span_per_class.append(cat2tokenspan[class_name])
 
             # Step 4: Create positive map using official utility
             # This converts character spans to actual BERT token positions
@@ -700,12 +777,6 @@ class TeacherTrainer:
                 token_span_per_class,
                 max_text_len=outputs['pred_logits'].shape[-1]  # 256
             ).to(self.device)
-
-            # print(f"  Positive map shape: {positive_map.shape}")
-            # for class_id, class_name in enumerate(class_names):
-            #     active_tokens = (positive_map[class_id] > 0).nonzero().squeeze()
-            #     print(f"  Class {class_id} '{class_name}' → tokens {active_tokens.tolist()}")
-            # print("=" * 80)
 
             # Prepare targets in DETR format: list of dicts (one per batch element)
             targets = []
@@ -734,11 +805,15 @@ class TeacherTrainer:
                 cat_id_to_idx = self.dataset_info['category_id_to_index']
                 for obj_idx, class_id in enumerate(valid_labels):
                     cat_id = int(class_id.item())  # Original category_id from annotation
-                    if cat_id in cat_id_to_idx:
-                        class_idx = cat_id_to_idx[cat_id]  # Convert to 0-based index
-                        token_labels[obj_idx] = positive_map[class_idx]
-                    else:
-                        logger.warning(f"Unknown category_id {cat_id} not in category_id_to_index mapping")
+                    if cat_id not in cat_id_to_idx:
+                        raise ValueError(
+                            f"Unknown category_id {cat_id} not in category_id_to_index mapping!\n"
+                            f"Available category_ids: {list(cat_id_to_idx.keys())}\n"
+                            f"This indicates corrupted annotations or dataset_info mismatch.\n"
+                            f"Batch {b}, object {obj_idx}."
+                        )
+                    class_idx = cat_id_to_idx[cat_id]  # Convert to 0-based index
+                    token_labels[obj_idx] = positive_map[class_idx]
 
                 # Create target dict for this batch element
                 targets.append({
@@ -746,26 +821,6 @@ class TeacherTrainer:
                     'boxes': valid_boxes,          # [num_valid_objs, 4] in normalized [cx, cy, w, h]
                     'token_labels': token_labels,  # [num_valid_objs, max_text_len] - proper token labels
                 })
-
-            # DEBUG: Print target structure before loss computation
-            # print("\n" + "=" * 80)
-            # print("TARGET STRUCTURE DEBUG")
-            # print("=" * 80)
-            # print(f"Number of targets (batch elements): {len(targets)}")
-            # for batch_idx, target in enumerate(targets):
-            #     print(f"\nBatch {batch_idx}:")
-            #     print(f"  - num_objects: {len(target['labels'])}")
-            #     print(f"  - labels: {target['labels']}")
-            #     print(f"  - boxes shape: {target['boxes'].shape}")
-            #     print(f"  - token_labels shape: {target['token_labels'].shape}")
-            #     print(f"  - token_labels nonzero count: {(target['token_labels'] > 0).sum().item()}")
-
-            #     # Show token_labels for first object
-            #     if len(target['labels']) > 0:
-            #         first_obj_tokens = target['token_labels'][0]
-            #         nonzero_positions = (first_obj_tokens > 0).nonzero().squeeze()
-            #         print(f"  - First object token_labels nonzero at: {nonzero_positions.tolist() if nonzero_positions.numel() > 0 else 'none'}")
-            # print("=" * 80)
 
             # Compute loss with Hungarian matching and auxiliary losses
             # Returns dict with keys like:
@@ -1035,9 +1090,7 @@ class TeacherTrainer:
             return
 
         try:
-            # Get batch info
             file_names = batch['file_names']
-            image_sizes = batch['image_sizes']  # List of (width, height)
 
             # Get preprocessed data
             dino_data = batch['preprocessed']['grounding_dino']
@@ -1045,13 +1098,10 @@ class TeacherTrainer:
             gt_boxes = dino_data['boxes'].to(self.device)  # [B, max_obj, 4] normalized cxcywh
             labels = dino_data['labels'].to(self.device)   # [B, max_obj]
 
-            # Get predictions
+            # Get predictions using model.predict() - handles token-to-class internally
             class_names = list(self.dataset_info['class_mapping'].values())
             model = self.models['grounding_dino']
-            outputs = model(images_tensor, class_names=class_names)
-
-            pred_boxes = outputs['pred_boxes']  # [B, num_queries, 4] normalized cxcywh
-            pred_logits = outputs['pred_logits']  # [B, num_queries, num_tokens]
+            predictions = model.predict(images_tensor, class_names, confidence_threshold=0.3)
 
             batch_size = len(file_names)
             images_list = []
@@ -1074,12 +1124,17 @@ class TeacherTrainer:
                 gt_label_raw = labels[b][valid_mask].cpu().numpy() # [N]
 
                 cat_id_to_idx = self.dataset_info['category_id_to_index']
-                gt_label = np.array([cat_id_to_idx.get(int(cat_id), -1) for cat_id in gt_label_raw])
-
-                # Debug: print raw normalized GT boxes
-                print(f"\nGround Truth boxes (raw normalized cxcywh):")
-                for i, box in enumerate(gt_box[:5]):
-                    print(f"  GT Box {i}: cxcywh={box}, cat_id={gt_label_raw[i]}, class_idx={gt_label[i]}")
+                gt_label = []
+                for cat_id in gt_label_raw:
+                    cat_id_int = int(cat_id)
+                    if cat_id_int not in cat_id_to_idx:
+                        raise ValueError(
+                            f"Unknown category_id {cat_id_int} in visualization!\n"
+                            f"Available category_ids: {list(cat_id_to_idx.keys())}\n"
+                            f"This indicates corrupted annotations or dataset_info mismatch."
+                        )
+                    gt_label.append(cat_id_to_idx[cat_id_int])
+                gt_label = np.array(gt_label)
 
                 if len(gt_box) > 0:
                     # cxcywh to xyxy
@@ -1094,75 +1149,18 @@ class TeacherTrainer:
                     gt_box_xyxy = np.array([])
                     gt_label = np.array([])
 
-                # Convert pred boxes: take top-k by confidence
-                # Note: pred_logits is [num_queries, num_tokens], not [num_queries, num_classes]
-                # Need to map token probabilities to class probabilities
-                pred_box = pred_boxes[b].cpu().numpy()  # [num_queries, 4]
-                pred_logit = pred_logits[b].sigmoid()  # [num_queries, num_tokens]
+                # Get predictions from model.predict() (already filtered by confidence)
+                pred = predictions[b]
+                pred_box = pred['boxes'].cpu().numpy()      # [N, 4] normalized cxcywh
+                pred_score = pred['scores'].cpu().numpy()   # [N]
+                pred_label = pred['labels'].cpu().numpy()   # [N]
 
-                # Build positive_map for token->class mapping
-                from groundingdino.util.vl_utils import build_captions_and_token_span, create_positive_map_from_span
-                caption, cat2tokenspan = build_captions_and_token_span(class_names, force_lowercase=False)
-                tokenized = model.tokenizer(caption, padding="longest", return_tensors="pt").to(self.device)
-
-                token_span_per_class = [cat2tokenspan.get(name, []) for name in class_names]
-
-                positive_map = create_positive_map_from_span(
-                    tokenized, token_span_per_class, max_text_len=pred_logit.shape[-1]
-                ).to(self.device)  # [num_classes, num_tokens]
-
-                # For each query, compute class score as MEAN of token probs for that class
-                # This matches mmdetection's convert_grounding_to_cls_scores approach
-                num_classes = positive_map.shape[0]
-                class_probs = torch.zeros(pred_logit.shape[0], num_classes, device=self.device)
-                for c in range(num_classes):
-                    token_mask = positive_map[c] > 0  # which tokens belong to class c
-                    if token_mask.sum() > 0:
-                        class_probs[:, c] = pred_logit[:, token_mask].mean(dim=-1)
-
-                pred_score = class_probs.max(dim=-1)[0].cpu().numpy()  # [num_queries]
-                pred_class = class_probs.max(dim=-1)[1].cpu().numpy()  # [num_queries] - actual class IDs
-
-                # Get metadata for size comparison
-                metadata = dino_data['metadata'][b] if 'metadata' in dino_data else {}
-                final_size = metadata.get('final_size', 'N/A')
-                original_size = metadata.get('original_size', 'N/A')
-
-                # Debug: print prediction info
-                print(f"\n{'='*60}")
-                print(f"[DEBUG] Visualization - Sample {b}")
-                print(f"{'='*60}")
-                print(f"Image: {file_names[b]}")
-                print(f"Original image size (from file): {img_w}x{img_h}")
-                print(f"Metadata original_size (H,W): {original_size}")
-                print(f"Metadata final_size (H,W): {final_size}")
-                print(f"Class names: {class_names}")
-                print(f"Num queries: {pred_box.shape[0]}, Num classes: {num_classes}")
-                print(f"\nTop 5 predictions (before threshold):")
-                top5_indices = np.argsort(pred_score)[-5:][::-1]
-                for rank, idx in enumerate(top5_indices):
-                    cls_id = pred_class[idx]
-                    cls_name = class_names[cls_id] if cls_id < len(class_names) else f'unk_{cls_id}'
-                    box = pred_box[idx]  # normalized cxcywh
-                    print(f"  #{rank+1}: class={cls_id}({cls_name}), score={pred_score[idx]:.4f}, box_cxcywh={box}")
-
-                # Filter by confidence threshold
-                conf_thresh = 0.3
-                keep = pred_score > conf_thresh
-                num_kept = keep.sum()
-                print(f"Confidence threshold: {conf_thresh}")
-                print(f"Boxes kept: {num_kept} / {len(pred_score)}")
-
-                pred_box = pred_box[keep]
-                pred_label = pred_class[keep]
-                pred_score_kept = pred_score[keep]
+                # Debug info
+                logger.debug("Visualization sample %d: %d predictions, %d GT boxes",
+                            b, len(pred_box), len(gt_box))
 
                 if len(pred_box) > 0:
-                    print(f"\nKept boxes (normalized cxcywh):")
-                    for i, (box, score, lbl) in enumerate(zip(pred_box[:5], pred_score_kept[:5], pred_label[:5])):
-                        print(f"  Box {i}: cxcywh={box}, score={score:.4f}, class={lbl}")
-
-                    # cxcywh to xyxy
+                    # cxcywh to xyxy (using original image size for visualization)
                     cx, cy, w, h = pred_box[:, 0], pred_box[:, 1], pred_box[:, 2], pred_box[:, 3]
                     pred_box_xyxy = np.stack([
                         (cx - w/2) * img_w,
@@ -1170,22 +1168,9 @@ class TeacherTrainer:
                         (cx + w/2) * img_w,
                         (cy + h/2) * img_h
                     ], axis=1)
-
-                    print(f"\nConverted boxes (pixel xyxy):")
-                    for i, box in enumerate(pred_box_xyxy[:5]):
-                        print(f"  Box {i}: xyxy={box}")
                 else:
                     pred_box_xyxy = np.array([])
                     pred_label = np.array([])
-                    print("No boxes passed threshold!")
-
-                # Also print GT for comparison
-                print(f"\nGround Truth boxes: {len(gt_box_xyxy)}")
-                if len(gt_box_xyxy) > 0:
-                    for i, (box, lbl, raw_id) in enumerate(zip(gt_box_xyxy[:5], gt_label[:5], gt_label_raw[:5])):
-                        cls_name = class_names[lbl] if 0 <= lbl < len(class_names) else f'unk_{lbl}'
-                        print(f"  GT Box {i}: xyxy={box}, cat_id={raw_id}, class_idx={lbl}({cls_name})")
-                print(f"{'='*60}\n")
 
                 images_list.append(img_array)
                 predictions_list['boxes'].append(pred_box_xyxy)
