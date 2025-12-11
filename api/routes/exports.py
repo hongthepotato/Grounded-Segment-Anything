@@ -13,6 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 from ml_engine.jobs import JobManager, get_job_manager
@@ -164,7 +165,7 @@ async def download_model(
             path=str(tmp_path),
             filename=filename,
             media_type="application/zip",
-            background=None  # Don't delete file until response is sent
+            background=BackgroundTask(tmp_path.unlink)
         )
     
     else:
