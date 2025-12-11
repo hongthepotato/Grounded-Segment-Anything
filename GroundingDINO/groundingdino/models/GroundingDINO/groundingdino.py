@@ -232,9 +232,7 @@ class GroundingDINO(nn.Module):
         len(captions)
 
         # encoder texts
-        tokenized = self.tokenizer(captions, padding="longest", return_tensors="pt").to(
-            samples.device
-        )
+        tokenized = self.tokenizer(captions, padding="longest", return_tensors="pt").to(samples.device)
         (
             text_self_attention_masks,
             position_ids,
