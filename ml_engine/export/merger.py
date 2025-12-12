@@ -38,26 +38,25 @@ def merge_lora_weights(model: nn.Module) -> nn.Module:
     if hasattr(model, 'model') and hasattr(model.model, 'merge_and_unload'):
         # GroundingDINOLoRA wraps PEFT model in self.model
         logger.info("Merging LoRA weights into base model...")
-        
+
         # Get the PEFT model
         peft_model = model.model
-        
+
         # Merge and unload - this modifies in place and returns unwrapped model
         merged_model = peft_model.merge_and_unload()
-        
+
         logger.info("LoRA weights merged successfully")
         return merged_model
-        
-    elif hasattr(model, 'merge_and_unload'):
+
+    if hasattr(model, 'merge_and_unload'):
         # Direct PEFT model
         logger.info("Merging LoRA weights (direct PEFT model)...")
         merged_model = model.merge_and_unload()
         logger.info("LoRA weights merged successfully")
         return merged_model
-        
-    else:
-        logger.warning("Model does not have LoRA adapters, returning as-is")
-        return model
+
+    logger.warning("Model does not have LoRA adapters, returning as-is")
+    return model
 
 
 def save_merged_model(
@@ -89,7 +88,7 @@ def save_merged_model(
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Build checkpoint
     checkpoint = {
         'model_state_dict': model.state_dict(),
@@ -100,17 +99,17 @@ def save_merged_model(
             'requires_peft': False,
         }
     }
-    
+
     if extra_metadata:
         checkpoint['metadata'].update(extra_metadata)
-    
+
     # Save
     torch.save(checkpoint, output_path)
-    
+
     # Get file size
     size_mb = output_path.stat().st_size / (1024 * 1024)
     logger.info("Saved merged model to: %s (%.1f MB)", output_path, size_mb)
-    
+
     return output_path
 
 
@@ -131,22 +130,20 @@ def load_merged_model(
         Model with loaded weights
     """
     checkpoint_path = Path(checkpoint_path)
-    
+
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    
+
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    
+
     # Verify format
     metadata = checkpoint.get('metadata', {})
     if metadata.get('format') != 'merged_grounding_dino':
         logger.warning("Checkpoint may not be a merged model format")
-    
+
     # Load weights
     model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
-    
+
     logger.info("Loaded merged model from: %s", checkpoint_path)
-    
+
     return model
-
-
