@@ -15,6 +15,8 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
+import tempfile
+import zipfile
 
 from ml_engine.jobs import JobManager, get_job_manager
 
@@ -57,30 +59,30 @@ async def list_exports(
     job = manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
+
     if job.status.value != "completed":
         raise HTTPException(
             status_code=400,
             detail=f"Job is not completed (status: {job.status.value}). Cannot export."
         )
-    
+
     output_dir = Path(job.output_dir)
     exports_dir = output_dir / "exports"
-    
+
     available = []
     package_size_mb = None
-    
+
     # Check for merged model package
     zip_path = exports_dir / "model_package.zip"
     if zip_path.exists():
         available.append("merged_pth")
         package_size_mb = zip_path.stat().st_size / (1024 * 1024)
-    
+
     # Check for LoRA adapters
     lora_dir = output_dir / "teachers" / "grounding_dino_lora_adapters"
     if lora_dir.exists():
         available.append("lora_adapters")
-    
+
     return ExportInfo(
         available=available,
         exportable=[],  # Future: ONNX, TorchScript
@@ -113,15 +115,15 @@ async def download_model(
     job = manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
+
     if job.status.value != "completed":
         raise HTTPException(
             status_code=400,
             detail=f"Job is not completed (status: {job.status.value}). Cannot download."
         )
-    
+
     output_dir = Path(job.output_dir)
-    
+
     if format == "merged_pth":
         # Full merged model package
         zip_path = output_dir / "exports" / "model_package.zip"
@@ -130,15 +132,15 @@ async def download_model(
                 status_code=404,
                 detail="Export package not found. The job may not have completed successfully."
             )
-        
+
         filename = f"grounding_dino_model_{job_id[:8]}.zip"
         return FileResponse(
             path=str(zip_path),
             filename=filename,
             media_type="application/zip"
         )
-    
-    elif format == "lora_adapters":
+
+    if format == "lora_adapters":
         # LoRA adapters only
         lora_dir = output_dir / "teachers" / "grounding_dino_lora_adapters"
         if not lora_dir.exists():
@@ -146,20 +148,16 @@ async def download_model(
                 status_code=404,
                 detail="LoRA adapters not found."
             )
-        
-        # Create temporary ZIP of LoRA adapters
-        import tempfile
-        import zipfile
-        
+
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
             tmp_path = Path(tmp.name)
-        
+
         with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for file_path in lora_dir.rglob("*"):
                 if file_path.is_file():
                     arcname = file_path.relative_to(lora_dir)
                     zipf.write(file_path, arcname)
-        
+
         filename = f"grounding_dino_lora_{job_id[:8]}.zip"
         return FileResponse(
             path=str(tmp_path),
@@ -167,9 +165,8 @@ async def download_model(
             media_type="application/zip",
             background=BackgroundTask(tmp_path.unlink)
         )
-    
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown format: {format}. Available: merged_pth, lora_adapters"
-        )
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unknown format: {format}. Available: merged_pth, lora_adapters"
+    )

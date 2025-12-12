@@ -158,16 +158,16 @@ async def root():
 # Entry point for running directly
 if __name__ == "__main__":
     import uvicorn
-    
+
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    
+
     host = os.environ.get("API_HOST", "0.0.0.0")
     port = int(os.environ.get("API_PORT", "8000"))
-    
+
     uvicorn.run(
         "api.app:app",
         host=host,

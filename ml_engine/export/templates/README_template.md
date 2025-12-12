@@ -133,5 +133,3 @@ For issues with inference, check:
 
 ---
 *Generated on {generation_date}*
-
-
