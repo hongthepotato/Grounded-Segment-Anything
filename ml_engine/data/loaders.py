@@ -337,7 +337,7 @@ class TeacherDataset(COCODataset):
         return {
             'image_id': sample['image_id'],
             'file_name': sample['file_name'],
-            # 'image_size': sample['image_size'],
+            'image_size': sample['image_size'],
             'preprocessed': preprocessed_data
         }
 

@@ -95,11 +95,19 @@ DEFAULT_DINO_LORA_CONFIG = {
         'r': 16,
         'lora_alpha': 32,
         'lora_dropout': 0.1,
+        # Target modules that actually exist in Grounding DINO:
+        # - MSDeformAttn: value_proj, output_proj
+        # - MultiheadAttention: out_proj
+        # - Vision-Language fusion: v_proj, l_proj, out_l_proj, values_v_proj, values_l_proj
         'target_modules': [
-            'self_attn.q_proj',
-            'self_attn.k_proj',
-            'self_attn.v_proj',
-            'self_attn.out_proj'
+            'value_proj',      # MSDeformAttn value projection
+            'output_proj',     # MSDeformAttn output projection
+            'out_proj',        # MultiheadAttention output projection
+            'v_proj',          # Vision projection in fusion
+            'l_proj',          # Language projection in fusion
+            'out_l_proj',      # Language output projection
+            'values_v_proj',   # Vision values projection
+            'values_l_proj'    # Language values projection
         ]
     }
 }

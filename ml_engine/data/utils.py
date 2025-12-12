@@ -4,7 +4,7 @@ Utility functions for COCO data processing.
 from typing import Dict, Any, List
 
 def has_valid_list_field(data: Dict[str, Any], field: str) -> bool:
-    f"""
+    r"""
     Check if a field exists and has a valid list value.
     Valid means: key exists, value is not None, and value is not empty.
 

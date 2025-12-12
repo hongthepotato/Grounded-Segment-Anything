@@ -19,6 +19,7 @@ from ml_engine.training.peft_utils import (
 from groundingdino.util.slconfig import SLConfig
 from groundingdino.models import build_model
 from groundingdino.util.utils import clean_state_dict
+from groundingdino.util.vl_utils import build_captions_and_token_span, create_positive_map_from_span
 
 from core.constants import DEFAULT_DINO_LORA_CONFIG
 
@@ -295,12 +296,8 @@ class GroundingDINOLoRA(nn.Module):
             if class_names is None:
                 raise ValueError("Must provide either class_names or captions")
             # Format as "class1 . class2 . class3"
-            caption = " . ".join(class_names)
-            if not caption.endswith("."):
-                caption += "."
-            # Replicate for batch size
-            batch_size = images.tensors.shape[0] if hasattr(images, 'tensors') else images.shape[0]
-            captions = [caption] * batch_size
+            caption, _ = build_captions_and_token_span(class_names, force_lowercase=False)
+            captions = [caption] * (images.tensors.shape[0] if hasattr(images, 'tensors') else images.shape[0])
         
         # Must use 'samples' parameter name to match original GroundingDINO signature
         outputs = self.model(samples=images, captions=captions)
@@ -332,6 +329,82 @@ class GroundingDINOLoRA(nn.Module):
         base_model = self.model.base_model.model if hasattr(self.model, 'base_model') else self.model
         return base_model.tokenizer
     
+    @torch.no_grad()
+    def predict(
+        self,
+        images: torch.Tensor,
+        class_names: List[str],
+        confidence_threshold: float = 0.3
+    ) -> List[Dict[str, torch.Tensor]]:
+        """
+        Run inference and return detections in standard format.
+        
+        This handles all the Grounding DINO token-to-class conversion internally,
+        returning clean (boxes, scores, labels) per image.
+        
+        Args:
+            images: Input images [B, 3, H, W] or NestedTensor
+            class_names: List of class names
+            confidence_threshold: Minimum confidence to keep detections
+        
+        Returns:
+            List of dicts (one per image), each with:
+                - boxes: [N, 4] in normalized cxcywh format
+                - scores: [N] confidence scores
+                - labels: [N] class indices (0-based)
+        """
+        # Forward pass
+        outputs = self.forward(images, class_names=class_names)
+        pred_boxes = outputs['pred_boxes']    # [B, num_queries, 4]
+        pred_logits = outputs['pred_logits']  # [B, num_queries, num_tokens]
+
+        batch_size = pred_logits.shape[0]
+        device = pred_logits.device
+
+        # Build positive_map for token -> class mapping (same for all batch items)
+        caption, cat2tokenspan = build_captions_and_token_span(class_names, force_lowercase=False)
+        tokenized = self.tokenizer(caption, padding="longest", return_tensors="pt").to(device)
+        token_span_per_class = []
+        for name in class_names:
+            if name not in cat2tokenspan:
+                raise ValueError(
+                    f"Class '{name}' not found in cat2tokenspan during predict()!\n"
+                    f"Available classes: {list(cat2tokenspan.keys())}\n"
+                    f"This indicates a mismatch between class_names and caption tokenization."
+                )
+            token_span_per_class.append(cat2tokenspan[name])
+        positive_map = create_positive_map_from_span(
+            tokenized, token_span_per_class, max_text_len=pred_logits.shape[-1]
+        ).to(device)  # [num_classes, num_tokens]
+
+        # Convert to per-image predictions
+        results = []
+        num_classes = len(class_names)
+
+        for b in range(batch_size):
+            # Convert token logits to class scores
+            token_probs = pred_logits[b].sigmoid()  # [num_queries, num_tokens]
+            class_probs = torch.zeros(token_probs.shape[0], num_classes, device=device)
+
+            for c in range(num_classes):
+                token_mask = positive_map[c] > 0
+                if token_mask.sum() > 0:
+                    class_probs[:, c] = token_probs[:, token_mask].mean(dim=-1)
+
+            # Get best class per query
+            scores, labels = class_probs.max(dim=-1)
+
+            # Filter by confidence
+            keep = scores > confidence_threshold
+
+            results.append({
+                'boxes': pred_boxes[b][keep],
+                'scores': scores[keep],
+                'labels': labels[keep]
+            })
+
+        return results
+
     def get_trainable_parameters(self) -> List[nn.Parameter]:
         """Get list of trainable parameters (LoRA adapters only)."""
         return [p for p in self.model.parameters() if p.requires_grad]

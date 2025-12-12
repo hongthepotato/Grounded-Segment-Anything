@@ -1,0 +1,21 @@
+# Requirements for Grounding DINO Inference
+# Install with: pip install -r requirements.txt
+
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.21.0
+pillow>=9.0.0
+
+# GroundingDINO dependencies
+transformers>=4.25.0
+timm>=0.9.0
+supervision>=0.6.0
+
+# For visualization
+opencv-python>=4.7.0
+matplotlib>=3.5.0
+
+# Note: You also need to install GroundingDINO:
+# git clone https://github.com/IDEA-Research/GroundingDINO.git
+# cd GroundingDINO && pip install -e .

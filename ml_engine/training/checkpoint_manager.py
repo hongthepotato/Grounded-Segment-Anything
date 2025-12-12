@@ -9,15 +9,13 @@ This module provides:
 - Automatic cleanup of old checkpoints
 """
 
-import torch
-import torch.nn as nn
-import os
-import shutil
 from pathlib import Path
 from typing import Dict, Optional, List, Any
 import yaml
 import logging
 from datetime import datetime
+import torch
+import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 
@@ -56,39 +54,46 @@ class CheckpointManager:
         >>>         break
     """
 
-    def __init__(self, output_dir: str, config_path: str):
+    def __init__(
+        self,
+        output_dir: str,
+        config_path: str,
+        monitor_metric: Optional[str] = None,
+        mode: Optional[str] = None
+    ):
         """
         Args:
             output_dir: Directory to save checkpoints
             config_path: Path to checkpoint config
+            monitor_metric: Optional override for metric to monitor (default from config)
+            mode: Optional override for mode ('min' or 'max', default from config)
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        
+
         self.config = config.get('checkpointing', config)
-        
-        # Best model tracking
-        self.monitor_metric = self.config.get('monitor_metric', 'mAP50')
-        self.mode = self.config.get('mode', 'max')
+
+        self.monitor_metric = monitor_metric or self.config.get('monitor_metric', 'mAP50')
+        self.mode = mode or self.config.get('mode', 'max')
         self.min_delta = self.config.get('min_delta', 0.001)
-        
+
         self.best_metric = float('-inf') if self.mode == 'max' else float('inf')
         self.best_epoch = -1
-        
+
         # Early stopping
         self.early_stop_cfg = self.config.get('early_stopping', {})
         self.patience_counter = 0
         self.should_stop = False
-        
+
         # Checkpoint history
         self.checkpoint_history: List[Path] = []
-        
+
         logger.info(f"CheckpointManager initialized: output_dir={output_dir}")
         logger.info(f"Monitoring metric: {self.monitor_metric} (mode={self.mode})")
-    
+
     def save_checkpoint(
         self,
         epoch: int,
@@ -114,37 +119,52 @@ class CheckpointManager:
         Returns:
             Path to saved checkpoint (or None if not saved this epoch)
         """
+        # Check if we should save only trainable parameters (for LoRA training)
+        save_trainable_only = self.config.get('save_trainable_only', False)
+
+        if save_trainable_only:
+            # Save only trainable parameters (~50MB for LoRA vs ~2GB for full model)
+            model_state = {
+                name: param.data for name, param in model.named_parameters() 
+                if param.requires_grad
+            }
+            logger.debug("Saving trainable params only: %d tensors", len(model_state))
+        else:
+            # Save full model state (needed for full fine-tuning)
+            model_state = model.state_dict()
+
         # Prepare checkpoint dictionary
         checkpoint = {
             'epoch': epoch,
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model_state,
             'optimizer_state_dict': optimizer.state_dict(),
             'metrics': metrics,
             'best_metric': self.best_metric,
             'best_epoch': self.best_epoch,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'trainable_only': save_trainable_only  # Flag for loading
         }
-        
+
         # Add optional components
         if scheduler is not None and self.config.get('save_scheduler', True):
             checkpoint['scheduler_state_dict'] = scheduler.state_dict()
-        
+
         if scaler is not None and self.config.get('save_scaler', True):
             checkpoint['scaler_state_dict'] = scaler.state_dict()
-        
+
         if self.config.get('save_rng_state', True):
             checkpoint['rng_state'] = {
                 'python': torch.get_rng_state(),
                 'cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
             }
-        
+
         if extra_info:
             checkpoint['extra_info'] = extra_info
-        
+
         # Determine if this is the best model
         is_best = self._is_best(metrics)
         save_paths = []
-        
+
         # Save regular checkpoint (every N epochs)
         save_interval = self.config.get('save_interval', 5)
         if epoch % save_interval == 0:
@@ -155,13 +175,13 @@ class CheckpointManager:
             except (KeyError, ValueError):
                 # Fallback if format string has invalid keys
                 checkpoint_name = f'epoch_{epoch:04d}.pth'
-            
+
             checkpoint_path = self.output_dir / checkpoint_name
             torch.save(checkpoint, checkpoint_path)
             save_paths.append(checkpoint_path)
             self.checkpoint_history.append(checkpoint_path)
             logger.info(f"✓ Saved checkpoint: {checkpoint_path.name}")
-        
+
         # Save best checkpoint
         if is_best and self.config.get('save_best', True):
             best_name = self.config.get('best_checkpoint_name', 'best.pth')
@@ -170,89 +190,93 @@ class CheckpointManager:
             save_paths.append(best_path)
             logger.info(f"✨ New best model! {self.monitor_metric}={metrics.get(self.monitor_metric, 'N/A'):.4f}")
             logger.info(f"✓ Saved best checkpoint: {best_path.name}")
-        
+
         # Save last checkpoint (overwrite)
         if self.config.get('save_last', True):
             last_name = self.config.get('last_checkpoint_name', 'last.pth')
             last_path = self.output_dir / last_name
             torch.save(checkpoint, last_path)
-        
+
         # Cleanup old checkpoints
         self._cleanup_checkpoints()
-        
+
         # Check early stopping
         self._check_early_stopping(metrics)
-        
+
         return save_paths[0] if save_paths else None
-    
+
     def _is_best(self, metrics: Dict[str, float]) -> bool:
         """Check if current metrics are the best so far."""
         if self.monitor_metric not in metrics:
-            logger.warning(f"Monitor metric '{self.monitor_metric}' not in metrics: {list(metrics.keys())}")
+            has_any_val_metrics = any(k.startswith('val_') for k in metrics.keys())
+            if has_any_val_metrics:
+                logger.warning(f"Monitor metric '{self.monitor_metric}' not in metrics: {list(metrics.keys())}")
+            else:
+                logger.debug(f"Validation skipped this epoch, no best model check")
             return False
-        
+
         current_metric = metrics[self.monitor_metric]
-        
+
         if self.mode == 'max':
             is_better = current_metric > (self.best_metric + self.min_delta)
         else:
             is_better = current_metric < (self.best_metric - self.min_delta)
-        
+
         if is_better:
             self.best_metric = current_metric
             self.best_epoch = metrics.get('epoch', -1)
             self.patience_counter = 0  # Reset early stopping counter
             return True
-        
+
         return False
-    
+
     def _check_early_stopping(self, metrics: Dict[str, float]) -> None:
         """Check if training should stop early."""
         if not self.early_stop_cfg.get('enabled', False):
             return
-        
+
         if self.monitor_metric not in metrics:
             return
-        
+
         current_metric = metrics[self.monitor_metric]
         min_delta = self.early_stop_cfg.get('min_delta', 0.001)
-        
+
         # Check if improved
         if self.mode == 'max':
             improved = current_metric > (self.best_metric + min_delta)
         else:
             improved = current_metric < (self.best_metric - min_delta)
-        
+
         if not improved:
             self.patience_counter += 1
             patience = self.early_stop_cfg.get('patience', 15)
             logger.info(f"No improvement for {self.patience_counter}/{patience} epochs")
-            
+
             if self.patience_counter >= patience:
                 self.should_stop = True
                 logger.info(f"⚠️  Early stopping triggered!")
                 logger.info(f"Best {self.monitor_metric}={self.best_metric:.4f} at epoch {self.best_epoch}")
-    
+
     def _cleanup_checkpoints(self) -> None:
         """Remove old checkpoints to save disk space."""
         max_keep = self.config.get('max_keep_checkpoints', 5)
-        
+
         if len(self.checkpoint_history) > max_keep:
             # Keep only the most recent checkpoints
             to_remove = self.checkpoint_history[:-max_keep]
             self.checkpoint_history = self.checkpoint_history[-max_keep:]
-            
+
             # Protected checkpoint names (don't delete these)
             protected = [
                 self.config.get('best_checkpoint_name', 'best.pth'),
                 self.config.get('last_checkpoint_name', 'last.pth')
             ]
-            
+
             for checkpoint_path in to_remove:
                 if checkpoint_path.exists() and checkpoint_path.name not in protected:
                     checkpoint_path.unlink()
                     logger.debug(f"Removed old checkpoint: {checkpoint_path.name}")
-    
+
     def load_checkpoint(
         self,
         checkpoint_path: str,
@@ -262,11 +286,12 @@ class CheckpointManager:
         scaler: Optional[torch.cuda.amp.GradScaler] = None,
         load_optimizer: bool = True,
         strict: bool = True,
-        map_location: Optional[str] = None
+        map_location: Optional[str] = None,
+        load_rng_state: bool = True
     ) -> Dict[str, Any]:
         """
         Load checkpoint and restore training state.
-        
+
         Args:
             checkpoint_path: Path to checkpoint file (or 'best', 'last')
             model: Model to load weights into
@@ -276,10 +301,11 @@ class CheckpointManager:
             load_optimizer: Whether to load optimizer state
             strict: Strict mode for model loading
             map_location: Device to map tensors to
-        
+            load_rng_state: Whether to restore RNG state (set False for evaluation)
+
         Returns:
             Checkpoint dictionary with metadata
-        
+
         Example:
             >>> # Load best checkpoint
             >>> checkpoint = manager.load_checkpoint(
@@ -300,59 +326,78 @@ class CheckpointManager:
         
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-        
+
         logger.info(f"Loading checkpoint from: {checkpoint_path}")
-        
+
         # Load checkpoint
         if map_location is None:
             map_location = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
+
         checkpoint = torch.load(checkpoint_path, map_location=map_location)
-        
-        # Load model
-        model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
-        logger.info(f"✓ Model loaded from epoch {checkpoint.get('epoch', 'unknown')}")
-        
+
+        # Load model - handle trainable-only checkpoints
+        trainable_only = checkpoint.get('trainable_only', False)
+        if trainable_only:
+            # Only trainable params were saved - must use strict=False
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            logger.info("✓ Loaded trainable parameters only from epoch %s", 
+                       checkpoint.get('epoch', 'unknown'))
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'], strict=strict)
+            logger.info("✓ Model loaded from epoch %s", checkpoint.get('epoch', 'unknown'))
+
         # Load optimizer
         if load_optimizer and optimizer is not None and 'optimizer_state_dict' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             logger.info("✓ Optimizer state loaded")
-        
+
         # Load scheduler
         if scheduler is not None and 'scheduler_state_dict' in checkpoint:
             scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             logger.info("✓ Scheduler state loaded")
-        
+
         # Load scaler
         if scaler is not None and 'scaler_state_dict' in checkpoint:
             scaler.load_state_dict(checkpoint['scaler_state_dict'])
             logger.info("✓ AMP scaler state loaded")
-        
-        # Load RNG state for reproducibility
-        if 'rng_state' in checkpoint:
-            torch.set_rng_state(checkpoint['rng_state']['python'])
-            if torch.cuda.is_available() and checkpoint['rng_state']['cuda'] is not None:
-                torch.cuda.set_rng_state_all(checkpoint['rng_state']['cuda'])
-            logger.info("✓ RNG states restored")
-        
+
+        # Load RNG state for reproducibility (skip for evaluation-only loading)
+        if load_rng_state and 'rng_state' in checkpoint:
+            try:
+                # RNG state must be ByteTensor - convert if needed after loading from disk
+                python_rng = checkpoint['rng_state']['python']
+                if not isinstance(python_rng, torch.ByteTensor):
+                    python_rng = python_rng.to(torch.uint8)
+                torch.set_rng_state(python_rng)
+
+                if torch.cuda.is_available() and checkpoint['rng_state']['cuda'] is not None:
+                    cuda_rng = checkpoint['rng_state']['cuda']
+                    # Convert each CUDA RNG state if needed
+                    if cuda_rng and not isinstance(cuda_rng[0], torch.ByteTensor):
+                        cuda_rng = [state.to(torch.uint8) for state in cuda_rng]
+                    torch.cuda.set_rng_state_all(cuda_rng)
+                logger.info("✓ RNG states restored")
+            except Exception as e:
+                logger.warning("Failed to restore RNG state: %s (continuing without it)", e)
+
         # Restore best metric tracking
         self.best_metric = checkpoint.get('best_metric', self.best_metric)
         self.best_epoch = checkpoint.get('best_epoch', -1)
-        
+
         logger.info(f"✓ Checkpoint loaded successfully")
         if self.best_epoch >= 0:
             logger.info(f"  Best metric so far: {self.best_metric:.4f} at epoch {self.best_epoch}")
-        
+
         return checkpoint
-    
+
     def get_best_checkpoint_path(self) -> Path:
         """Get path to best checkpoint."""
         return self.output_dir / self.config.get('best_checkpoint_name', 'best.pth')
-    
+
     def get_last_checkpoint_path(self) -> Path:
         """Get path to last checkpoint."""
         return self.output_dir / self.config.get('last_checkpoint_name', 'last.pth')
-    
+
     def has_checkpoint(self, name: str = 'last') -> bool:
         """Check if a checkpoint exists."""
         if name == 'best':
@@ -362,13 +407,13 @@ class CheckpointManager:
         else:
             path = self.output_dir / name
         return path.exists()
-    
+
     def reset_early_stopping(self) -> None:
         """Reset early stopping counter."""
         self.patience_counter = 0
         self.should_stop = False
         logger.info("Early stopping counter reset")
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get current status of checkpoint manager."""
         return {

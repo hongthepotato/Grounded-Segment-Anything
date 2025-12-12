@@ -212,7 +212,9 @@ class DataManager:
                 - has_boxes: bool
                 - has_masks: bool
                 - num_classes: int
-                - class_mapping: Dict[int, str]
+                - class_mapping: Dict[int, str] - category_id to name
+                - category_id_to_index: Dict[int, int] - category_id to 0-based index
+                - index_to_category_id: Dict[int, int] - 0-based index to category_id
                 - num_images: int
                 - num_annotations: int
                 - annotation_mode: str

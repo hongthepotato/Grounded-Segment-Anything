@@ -38,8 +38,8 @@ augmentation:
 
 # Evaluation settings (shared)
 evaluation:
-  interval: 5                # Validate every N epochs
-  save_predictions: false    # Save prediction visualizations
+  interval: 1                # Validate every N epochs
+  save_predictions: true     # Save prediction visualizations
 
 # Checkpoint settings (shared)
 checkpointing:
