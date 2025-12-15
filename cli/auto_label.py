@@ -24,10 +24,17 @@ Usage:
         --classes "ear of bag" \\
         --output annotations.json \\
         --gpu 0
+    
+    # With visualization (saves annotated images)
+    python cli/auto_label.py \\
+        --images data/raw/images/ \\
+        --classes "ear of bag,defect" \\
+        --output annotations.json \\
+        --visualize \\
+        --viz-dir output/visualizations/
 """
 import argparse
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -38,7 +45,6 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from cli.utils import (
-    validate_dir_exists,
     validate_file_exists,
     setup_cuda_device,
     print_header,
@@ -46,7 +52,11 @@ from cli.utils import (
     format_time
 )
 
-from ml_engine.inference.auto_labeler import AutoLabeler, AutoLabelerConfig
+from ml_engine.inference.auto_labeler import (
+    AutoLabeler,
+    AutoLabelerConfig,
+    visualize_detections
+)
 
 # Configure logging
 logging.basicConfig(
@@ -160,6 +170,29 @@ Examples:
         default="jpg,jpeg,png,bmp",
         help="Comma-separated image extensions to process (default: jpg,jpeg,png,bmp)"
     )
+    
+    # Visualization
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Save visualized images with annotations overlaid"
+    )
+    parser.add_argument(
+        "--viz-dir",
+        type=str,
+        default=None,
+        help="Directory to save visualizations (default: output_dir/visualizations/)"
+    )
+    parser.add_argument(
+        "--no-labels",
+        action="store_true",
+        help="Hide class labels in visualization"
+    )
+    parser.add_argument(
+        "--no-scores",
+        action="store_true",
+        help="Hide confidence scores in visualization"
+    )
 
     return parser.parse_args()
 
@@ -266,11 +299,61 @@ def main():
     print_section("Processing Images")
     start_time = time.time()
 
-    coco_output = labeler.label_images(
-        image_paths=image_paths,
-        class_prompts=class_prompts,
-        output_path=args.output
-    )
+    # If visualization is enabled, process images individually to store results
+    if args.visualize:
+        results = []
+        processed_paths = []
+        
+        for image_path in image_paths:
+            logger.info(f"Processing: {image_path}")
+            try:
+                result = labeler.label_single_image(image_path, class_prompts)
+                results.append(result)
+                processed_paths.append(image_path)
+            except Exception as e:
+                logger.warning(f"Failed to process {image_path}: {e}")
+        
+        # Build COCO output from results
+        from ml_engine.inference.auto_labeler import export_to_coco
+        coco_output = export_to_coco(results, class_prompts, args.output_mode)
+        
+        # Save COCO JSON
+        from core.config import save_json
+        save_json(coco_output, args.output)
+        logger.info(f"Saved COCO annotations to: {args.output}")
+        
+        # Save visualizations
+        viz_dir = args.viz_dir or str(Path(args.output).parent / "visualizations")
+        print_section("Saving Visualizations")
+        
+        show_boxes = args.output_mode in ("boxes", "both")
+        show_masks = args.output_mode in ("masks", "both")
+        
+        viz_count = 0
+        for image_path, result in zip(processed_paths, results):
+            filename = Path(image_path).stem + "_viz.jpg"
+            viz_path = str(Path(viz_dir) / filename)
+            
+            visualize_detections(
+                image_path=image_path,
+                result=result,
+                class_prompts=class_prompts,
+                output_path=viz_path,
+                show_boxes=show_boxes,
+                show_masks=show_masks,
+                show_labels=not args.no_labels,
+                show_scores=not args.no_scores
+            )
+            viz_count += 1
+        
+        logger.info(f"Saved {viz_count} visualizations to: {viz_dir}")
+    else:
+        # Standard processing without visualization
+        coco_output = labeler.label_images(
+            image_paths=image_paths,
+            class_prompts=class_prompts,
+            output_path=args.output
+        )
 
     elapsed_time = time.time() - start_time
 
@@ -283,6 +366,10 @@ def main():
     print(f"  Avg time/image:    {elapsed_time / max(len(image_paths), 1):.2f}s")
     print()
     print(f"Output saved to: {args.output}")
+    
+    if args.visualize:
+        viz_dir = args.viz_dir or str(Path(args.output).parent / "visualizations")
+        print(f"Visualizations saved to: {viz_dir}")
 
     # Print category breakdown
     if coco_output['annotations']:
