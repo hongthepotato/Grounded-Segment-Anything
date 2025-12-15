@@ -67,9 +67,9 @@ class AutoLabelerConfig:
     mobile_sam_checkpoint: str = "data/models/pretrained/mobile_sam.pt"
 
     # Detection thresholds
-    box_threshold: float = 0.25
-    text_threshold: float = 0.25
-    nms_threshold: float = 0.5
+    box_threshold: float = 0.5
+    text_threshold: float = 0.5
+    nms_threshold: float = 0.7
 
     # Output mode: "boxes", "masks", or "both"
     # - "boxes": Only bounding boxes (faster, no SAM needed, default)
