@@ -130,19 +130,19 @@ Examples:
     parser.add_argument(
         "--box-threshold",
         type=float,
-        default=0.25,
+        default=0.5,
         help="Box confidence threshold for DINO (default: 0.25)"
     )
     parser.add_argument(
         "--text-threshold",
         type=float,
-        default=0.25,
+        default=0.5,
         help="Text threshold for DINO (default: 0.25)"
     )
     parser.add_argument(
         "--nms-threshold",
         type=float,
-        default=0.5,
+        default=0.7,
         help="NMS IoU threshold (default: 0.5)"
     )
 
@@ -151,7 +151,7 @@ Examples:
         "--output-mode",
         type=str,
         choices=["boxes", "masks", "both"],
-        default="both",
+        default="boxes",
         help="Output mode: 'boxes' (fast, no SAM), 'masks' (segmentation only), 'both' (default)"
     )
 
