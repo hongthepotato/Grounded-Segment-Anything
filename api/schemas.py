@@ -222,3 +222,114 @@ class WebSocketEvent(BaseModel):
     progress: Optional[JobProgressSchema] = Field(default=None, description="Progress info")
     error: Optional[str] = Field(default=None, description="Error message")
     output_dir: Optional[str] = Field(default=None, description="Output directory")
+
+
+# =============================================================================
+# Auto-Labeling Schemas
+# =============================================================================
+
+class AutoLabelRequest(BaseModel):
+    """
+    Request body for auto-labeling job submission.
+    
+    Example:
+        {
+            "image_dir": "/data/raw/images",
+            "classes": ["ear of bag", "defect", "label"],
+            "output_mode": "boxes",
+            "box_threshold": 0.5
+        }
+    """
+    image_dir: str = Field(
+        ...,
+        description="Path to images directory on server"
+    )
+    classes: List[str] = Field(
+        ...,
+        description="List of class names to detect"
+    )
+    output_mode: str = Field(
+        default="boxes",
+        description="Output mode: 'boxes', 'masks', or 'both'"
+    )
+    box_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Detection confidence threshold"
+    )
+    text_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Text matching threshold"
+    )
+    nms_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Non-Maximum Suppression threshold"
+    )
+    output_dir: Optional[str] = Field(
+        default=None,
+        description="Output directory (auto-generated if not provided)"
+    )
+    priority: int = Field(
+        default=0,
+        description="Job priority (higher = more urgent)"
+    )
+    tags: List[str] = Field(
+        default_factory=list,
+        description="Optional tags for filtering"
+    )
+
+
+class COCOImageSchema(BaseModel):
+    """COCO image entry."""
+    id: int = Field(..., description="Image ID")
+    file_name: str = Field(..., description="Image filename")
+    width: int = Field(..., description="Image width")
+    height: int = Field(..., description="Image height")
+
+
+class COCOAnnotationSchema(BaseModel):
+    """COCO annotation entry."""
+    id: int = Field(..., description="Annotation ID")
+    image_id: int = Field(..., description="Image ID")
+    category_id: int = Field(..., description="Category ID")
+    bbox: Optional[List[float]] = Field(default=None, description="Bounding box [x, y, w, h]")
+    segmentation: Optional[List[List[float]]] = Field(default=None, description="Polygon segmentation")
+    area: Optional[float] = Field(default=None, description="Area in pixels")
+    score: Optional[float] = Field(default=None, description="Detection confidence")
+    iscrowd: int = Field(default=0, description="Is crowd annotation")
+
+
+class COCOCategorySchema(BaseModel):
+    """COCO category entry."""
+    id: int = Field(..., description="Category ID")
+    name: str = Field(..., description="Category name")
+
+
+class AutoLabelResultResponse(BaseModel):
+    """
+    COCO-format annotations response.
+    
+    Contains complete COCO JSON structure with images, annotations, and categories.
+    """
+    images: List[COCOImageSchema] = Field(..., description="List of images")
+    annotations: List[COCOAnnotationSchema] = Field(..., description="List of annotations")
+    categories: List[COCOCategorySchema] = Field(..., description="List of categories")
+
+
+class VisualizationInfo(BaseModel):
+    """Information about a single visualization image."""
+    filename: str = Field(..., description="Visualization filename")
+    original: str = Field(..., description="Original image filename")
+    annotation_count: int = Field(..., description="Number of annotations in this image")
+
+
+class VisualizationListResponse(BaseModel):
+    """List of visualization images for an auto-label job."""
+    job_id: str = Field(..., description="Job ID")
+    total: int = Field(..., description="Total number of visualizations")
+    images: List[VisualizationInfo] = Field(..., description="List of visualization info")
