@@ -250,15 +250,15 @@ class AutoLabeler:
                 - image_info: Dict with file_name, width, height
         """
         self._load_models()
-        
+
         # Load image
         image_bgr = cv2.imread(image_path)
         if image_bgr is None:
             raise ValueError(f"Could not load image: {image_path}")
-        
+
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         height, width = image_bgr.shape[:2]
-        
+
         # Detect objects
         boxes_xyxy, confidences, class_ids = self._detect_objects(image_bgr, class_prompts)
         

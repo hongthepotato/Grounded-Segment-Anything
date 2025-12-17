@@ -23,13 +23,20 @@ import socket
 import traceback
 import uuid
 from datetime import datetime
-from typing import Dict, Any, Optional
+from glob import glob
+from pathlib import Path
+from typing import Dict, Any, Optional, List
 
 from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo, JobType
 from ml_engine.jobs.redis_store import RedisJobStore
 from ml_engine.training.teacher_trainer import TeacherTrainer, TrainingCancelledException
 from ml_engine.data.manager import DataManager
-from core.config import load_config, merge_configs
+from ml_engine.inference.auto_labeler import (
+    AutoLabeler,
+    AutoLabelerConfig,
+    visualize_detections
+)
+from core.config import load_config, merge_configs, save_json
 from core.constants import DEFAULT_CONFIGS_DIR
 
 logger = logging.getLogger(__name__)
@@ -196,6 +203,8 @@ class TrainingWorker:
                 self._run_teacher_training(job)
             elif job.type == JobType.STUDENT_DISTILLATION.value:
                 self._run_student_distillation(job)
+            elif job.type == JobType.AUTO_LABEL.value:
+                self._run_auto_label(job)
             else:
                 raise ValueError(f"Unknown job type: {job.type}")
 
@@ -329,6 +338,227 @@ class TrainingWorker:
         """
         # TODO: Implement when StudentDistiller is ready
         raise NotImplementedError("Student distillation not yet implemented")
+
+    def _run_auto_label(self, job: Job):
+        """
+        Run auto-labeling job using Grounding DINO + MobileSAM.
+        
+        Args:
+            job: Job with auto-labeling config containing:
+                - image_dir: Path to images directory
+                - classes: List of class names to detect
+                - output_mode: "boxes", "masks", or "both"
+                - box_threshold: Detection confidence threshold (default: 0.5)
+                - text_threshold: Text threshold (default: 0.5)
+                - nms_threshold: NMS threshold (default: 0.7)
+        """
+        config = job.config
+
+        # Extract required config
+        image_dir = config.get("image_dir")
+        classes = config.get("classes", [])
+
+        if not image_dir:
+            raise ValueError("image_dir required in job config")
+        if not classes:
+            raise ValueError("classes required in job config")
+
+        # Optional config with defaults
+        output_mode = config.get("output_mode", "boxes")
+        box_threshold = config.get("box_threshold", 0.5)
+        text_threshold = config.get("text_threshold", 0.5)
+        nms_threshold = config.get("nms_threshold", 0.7)
+
+        # Setup output directory
+        output_dir = Path(job.output_dir or f"data/autolabel/{job.id[:8]}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        viz_dir = output_dir / "visualizations"
+        viz_dir.mkdir(exist_ok=True)
+
+        # Collect image paths
+        image_paths = self._collect_image_paths(image_dir)
+        if not image_paths:
+            raise ValueError(f"No images found in: {image_dir}")
+
+        logger.info("Auto-labeling %d images with classes: %s", len(image_paths), classes)
+
+        # Create AutoLabeler config
+        labeler_config = AutoLabelerConfig(
+            box_threshold=box_threshold,
+            text_threshold=text_threshold,
+            nms_threshold=nms_threshold,
+            output_mode=output_mode,
+            device="cuda"
+        )
+
+        # Create labeler
+        labeler = AutoLabeler(labeler_config)
+
+        # Process images with progress reporting
+        results = []
+        annotation_count = 0
+
+        for i, image_path in enumerate(image_paths):
+            # Check for cancellation
+            if self._cancel_requested:
+                raise TrainingCancelledException("Auto-labeling cancelled")
+
+            # Process single image
+            try:
+                result = labeler.label_single_image(image_path, classes)
+                results.append(result)
+                annotation_count += len(result.get('class_ids', []))
+
+                # Generate visualization
+                show_boxes = output_mode in ("boxes", "both")
+                show_masks = output_mode in ("masks", "both")
+                
+                viz_filename = Path(image_path).stem + "_viz.jpg"
+                viz_path = str(viz_dir / viz_filename)
+                
+                visualize_detections(
+                    image_path=image_path,
+                    result=result,
+                    class_prompts=classes,
+                    output_path=viz_path,
+                    show_boxes=show_boxes,
+                    show_masks=show_masks
+                )
+                
+            except Exception as e:
+                logger.warning("Failed to process %s: %s", image_path, e)
+                continue
+            
+            # Report progress
+            self._on_progress(job.id, {
+                "current_step": i + 1,
+                "total_steps": len(image_paths),
+                "current_epoch": 0,
+                "total_epochs": 1,
+                "message": f"Processing {Path(image_path).name}",
+                "metrics": {
+                    "images_processed": i + 1,
+                    "annotations_found": annotation_count
+                }
+            })
+        
+        # Build COCO output
+        coco_output = self._build_coco_output(results, classes, output_mode)
+        
+        # Save annotations
+        annotations_path = output_dir / "annotations.json"
+        save_json(coco_output, str(annotations_path))
+        
+        logger.info("Auto-labeling complete: %d images, %d annotations",
+                   len(coco_output['images']), len(coco_output['annotations']))
+        logger.info("Results saved to: %s", output_dir)
+
+    def _collect_image_paths(
+        self,
+        image_dir: str,
+        extensions: List[str] = None
+    ) -> List[str]:
+        """
+        Collect image paths from directory.
+        
+        Args:
+            image_dir: Path to images directory
+            extensions: List of valid extensions (default: jpg, jpeg, png, bmp)
+            
+        Returns:
+            Sorted list of image file paths
+        """
+        if extensions is None:
+            extensions = ["jpg", "jpeg", "png", "bmp"]
+
+        path = Path(image_dir)
+        if not path.exists():
+            return []
+
+        image_paths = []
+        for ext in extensions:
+            image_paths.extend(glob(str(path / f"*.{ext}")))
+            image_paths.extend(glob(str(path / f"*.{ext.upper()}")))
+
+        return sorted(set(image_paths))
+
+    def _build_coco_output(
+        self,
+        results: List[Dict[str, Any]],
+        classes: List[str],
+        output_mode: str
+    ) -> Dict[str, Any]:
+        """
+        Build COCO-format annotations from labeling results.
+        
+        Args:
+            results: List of results from label_single_image
+            classes: List of class names
+            output_mode: "boxes", "masks", or "both"
+            
+        Returns:
+            COCO-format dictionary
+        """
+        coco_output = {
+            'images': [],
+            'annotations': [],
+            'categories': [
+                {'id': i, 'name': name}
+                for i, name in enumerate(classes)
+            ]
+        }
+        
+        annotation_id = 1
+        
+        for image_id, result in enumerate(results, start=1):
+            # Add image info
+            coco_output['images'].append({
+                'id': image_id,
+                'file_name': result['image_info']['file_name'],
+                'width': result['image_info']['width'],
+                'height': result['image_info']['height']
+            })
+            
+            # Get data based on output mode
+            boxes = result.get('boxes', [])
+            masks = result.get('masks', [])
+            num_detections = len(result.get('class_ids', []))
+            
+            # Add annotations
+            for i in range(num_detections):
+                class_id = result['class_ids'][i]
+                score = result['scores'][i]
+                
+                annotation = {
+                    'id': annotation_id,
+                    'image_id': image_id,
+                    'category_id': int(class_id) if class_id is not None else 0,
+                    'iscrowd': 0,
+                    'score': float(score)
+                }
+                
+                # Add bbox if available
+                if output_mode in ("boxes", "both") and i < len(boxes):
+                    box = boxes[i]
+                    annotation['bbox'] = box
+                    annotation['area'] = box[2] * box[3]
+                
+                # Add segmentation if available
+                if output_mode in ("masks", "both") and i < len(masks):
+                    mask = masks[i]
+                    segmentation = AutoLabeler._mask_to_polygon(mask)
+                    annotation['segmentation'] = segmentation
+                    if mask is not None and hasattr(mask, 'sum'):
+                        annotation['area'] = float(mask.sum())
+                    
+                    # For masks-only mode, generate bbox from mask
+                    if output_mode == "masks" and 'bbox' not in annotation:
+                        annotation['bbox'] = AutoLabeler._bbox_from_mask(mask)
+                
+                coco_output['annotations'].append(annotation)
+                annotation_id += 1
+        
+        return coco_output
 
     def _on_progress(self, job_id: str, progress_info: Dict[str, Any]):
         """
