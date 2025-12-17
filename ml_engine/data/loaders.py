@@ -5,7 +5,7 @@ This module provides PyTorch Dataset classes for loading COCO format
 datasets with support for multiple model types (Grounding DINO, SAM, YOLO).
 """
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Callable
 from pathlib import Path
 import torch
 from torch.utils.data import Dataset
@@ -23,25 +23,24 @@ class COCODataset(Dataset):
     
     This dataset class:
     - Receives pre-loaded COCO data
-    - Loads images from disk
+    - Loads images using a path resolver function
     - Supports boxes, masks
     - Returns data in a format suitable for multiple models
     - Handles missing annotations gracefully
     
     Args:
         coco_data: Pre-loaded COCO format dictionary (from DataManager)
-        image_dir: Directory containing images
-        transforms: Optional augmentation/preprocessing pipeline
+        image_path_resolver: Function that takes file_name and returns actual filesystem path
         return_boxes: Whether to return bounding boxes
         return_masks: Whether to return segmentation masks
     
     Example:
         >>> from ml_engine.data.manager import DataManager
-        >>> manager = DataManager('train.json', 'images/')
+        >>> manager = DataManager('train.json', image_paths=[...])
         >>> train_data = manager.get_split('train')
         >>> dataset = COCODataset(
         >>>     coco_data=train_data,
-        >>>     image_dir='data/raw/images',
+        >>>     image_path_resolver=manager.get_image_path,
         >>>     return_boxes=True,
         >>>     return_masks=True
         >>> )
@@ -50,14 +49,12 @@ class COCODataset(Dataset):
     def __init__(
         self,
         coco_data: Dict,
-        image_dir: str,
-        # transforms=None,
+        image_path_resolver: Callable[[str], str],
         return_boxes: bool = True,
         return_masks: bool = True,
     ):
         self.coco_data = coco_data
-        self.image_dir = Path(image_dir)
-        # self.transforms = transforms
+        self.image_path_resolver = image_path_resolver
         self.return_boxes = return_boxes
         self.return_masks = return_masks
 
@@ -107,8 +104,8 @@ class COCODataset(Dataset):
         img_info = self.images[idx]
         image_id, file_name = img_info['id'], img_info['file_name']
 
-        # Load image
-        image_path = self.image_dir / file_name
+        # Load image using path resolver
+        image_path = Path(self.image_path_resolver(file_name))
         if not image_path.exists():
             raise FileNotFoundError(f"Image not found: {image_path}")
 
@@ -224,7 +221,7 @@ class TeacherDataset(COCODataset):
     
     Args:
         coco_data: Pre-loaded COCO format dictionary
-        image_dir: Directory containing images
+        image_path_resolver: Function that takes file_name and returns actual filesystem path
         preprocessor: MultiModelPreprocessor instance
         augmentation_pipeline: ConfigurableAugmentationPipeline instance
         return_boxes: Whether to return bounding boxes
@@ -232,18 +229,18 @@ class TeacherDataset(COCODataset):
     
     Example:
         >>> # Use DataManager to create this dataset
-        >>> manager = DataManager('train.json', 'images/')
-        >>> dataset = manager.create_pytorch_dataset(
-        >>>     split='train',
-        >>>     preprocessor=preprocessor,
-        >>>     augmentation_pipeline=aug_pipeline
+        >>> manager = DataManager('train.json', image_paths=[...])
+        >>> dataset = DatasetFactory.create_dataset(
+        >>>     coco_data=manager.get_split('train'),
+        >>>     image_path_resolver=manager.get_image_path,
+        >>>     ...
         >>> )
     """
 
     def __init__(
         self,
         coco_data: Dict,
-        image_dir: str,
+        image_path_resolver: Callable[[str], str],
         preprocessor: MultiModelPreprocessor=None,
         augmentation_pipeline: ConfigurableAugmentationPipeline=None,
         return_boxes: bool = True,
@@ -251,7 +248,7 @@ class TeacherDataset(COCODataset):
     ):
         super().__init__(
             coco_data=coco_data,
-            image_dir=image_dir,
+            image_path_resolver=image_path_resolver,
             return_boxes=return_boxes,
             return_masks=return_masks
         )

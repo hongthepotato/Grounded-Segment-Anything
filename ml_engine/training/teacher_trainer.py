@@ -57,14 +57,15 @@ class TeacherTrainer:
     - Saves LoRA adapters (not full models)
     
     Example:
+        >>> manager = DataManager(
+        >>>     data_path='data/raw/annotations.json',
+        >>>     image_paths=['/profile/upload/2025/12/16/xxx.jpeg', ...]
+        >>> )
         >>> trainer = TeacherTrainer(
-        >>>     train_data_path='data/raw/train.json',
-        >>>     val_data_path='data/raw/val.json',
-        >>>     image_dir='data/raw/images',
+        >>>     data_manager=manager,
         >>>     output_dir='experiments/exp1',
         >>>     config=config
         >>> )
-        >>> 
         >>> trainer.train()
     """
 
@@ -96,10 +97,10 @@ class TeacherTrainer:
         - Trainer uses 'train' and 'val' splits from the manager
         
         Example:
-            >>> # User provides single annotations.json
+            >>> # User provides single annotations.json with image paths
             >>> manager = DataManager(
             >>>     data_path='data/raw/annotations.json',
-            >>>     image_dir='data/raw/images/',
+            >>>     image_paths=['/profile/upload/2025/12/16/xxx.jpeg', ...],
             >>>     split_config={'train': 0.7, 'val': 0.2, 'test': 0.1}
             >>> )
             >>> 
@@ -169,7 +170,7 @@ class TeacherTrainer:
         # Create training dataset with augmentation
         self.train_dataset = DatasetFactory.create_dataset(
             coco_data=train_data,
-            image_dir=str(self.data_manager.image_dir),
+            image_path_resolver=self.data_manager.get_image_path,
             dataset_info=self.dataset_info,
             model_names=self.required_models,
             augmentation_config=self.config['augmentation'],
@@ -179,7 +180,7 @@ class TeacherTrainer:
         # Create validation dataset without augmentation
         self.val_dataset = DatasetFactory.create_dataset(
             coco_data=val_data,
-            image_dir=str(self.data_manager.image_dir),
+            image_path_resolver=self.data_manager.get_image_path,
             dataset_info=self.dataset_info,
             model_names=self.required_models,
             augmentation_config=None,  # No augmentation for validation
@@ -612,7 +613,7 @@ class TeacherTrainer:
         # Create test dataset and dataloader
         test_dataset = DatasetFactory.create_dataset(
             coco_data=test_data,
-            image_dir=str(self.data_manager.image_dir),
+            image_path_resolver=self.data_manager.get_image_path,
             dataset_info=self.dataset_info,
             model_names=self.required_models,
             augmentation_config=None,  # No augmentation for test
@@ -1222,8 +1223,8 @@ class TeacherTrainer:
             targets_list = {'boxes': [], 'labels': []}
 
             for b in range(min(batch_size, 8)):  # Max 8 samples
-                # Load original image
-                img_path = self.data_manager.image_dir / file_names[b]
+                # Load original image using path resolver
+                img_path = Path(self.data_manager.get_image_path(file_names[b]))
                 if not img_path.exists():
                     continue
 

@@ -84,7 +84,10 @@ async def submit_job(
             "job_type": "teacher_training",
             "config": {
                 "data_path": "data/annotations.json",
-                "image_dir": "data/images",
+                "image_paths": [
+                    "/profile/upload/2025/12/16/xxx1.jpeg",
+                    "/profile/upload/2025/12/16/xxx2.jpeg"
+                ],
                 "training": {"epochs": 50, "batch_size": 8}
             }
         }

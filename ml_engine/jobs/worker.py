@@ -228,17 +228,25 @@ class TrainingWorker:
 
         # Extract paths from config
         data_path = job_config.get("data_path")
-        image_dir = job_config.get("image_dir")
-        output_dir = job.output_dir or f"experiments/{job.id[:8]}"
+        image_paths = job_config.get("image_paths", [])
+        # Build output directory with job-specific subdirectory
+        job_subdir = f"{job.type}_{job.id[:8]}"
+        base_dir = job.output_dir or "experiments"
+        output_dir = f"{base_dir}/{job_subdir}"
+        # Update job's output_dir so API responses show actual path
+        self.store.update_job(job.id, output_dir=output_dir)
 
         if not data_path:
             raise ValueError("data_path required in job config")
+
+        if not image_paths:
+            raise ValueError("image_paths required in job config")
 
         # Create DataManager
         split_config = job_config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
         data_manager = DataManager(
             data_path=data_path,
-            image_dir=image_dir,
+            image_paths=image_paths,
             split_config=split_config,
             auto_preprocess=True
         )
