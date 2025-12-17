@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from core.config import load_json, save_json
+from core.constants import transform_image_path, IMAGE_PATH_FRONTEND_PREFIX
 from ml_engine.data.inspection import inspect_dataset, get_required_models
 from ml_engine.data.validators import (
     validate_coco_format,
@@ -39,6 +40,7 @@ class DataManager:
     - Inspect dataset once (cache results)
     - Split train/val/test (if needed)
     - Expose data through clean accessors
+    - Resolve image paths from COCO file_name to actual filesystem paths
     
     Design principles:
     - Data is loaded ONCE in __init__
@@ -53,7 +55,10 @@ class DataManager:
         >>> # Create manager (loads and validates once)
         >>> manager = DataManager(
         >>>     data_path='data/raw/annotations.json',
-        >>>     image_dir='data/raw/images',
+        >>>     image_paths=[
+        >>>         '/profile/upload/2025/12/16/xxx1.jpeg',
+        >>>         '/profile/upload/2025/12/16/xxx2.jpeg'
+        >>>     ],
         >>>     split_config={'train': 0.7, 'val': 0.2, 'test': 0.1}
         >>> )
         >>> 
@@ -66,7 +71,7 @@ class DataManager:
     def __init__(
         self,
         data_path: str,
-        image_dir: str,
+        image_paths: List[str],
         split_config: Optional[Dict[str, float]] = None,
         auto_preprocess: bool = True
     ):
@@ -75,14 +80,12 @@ class DataManager:
         
         Args:
             data_path: Path to COCO JSON file
-            image_dir: Directory containing images
+            image_paths: List of image paths from frontend (with /profile/ prefix)
             split_config: Optional split ratios, e.g., {'train': 0.7, 'val': 0.2, 'test': 0.1}
                          If None, uses all data as single split
-            validate: Whether to validate COCO format
             auto_preprocess: Whether to auto-generate missing bbox/area from masks
         """
         self.data_path = Path(data_path)
-        self.image_dir = Path(image_dir)
         self.split_config = split_config
 
         logger.info("=" * 60)
@@ -92,11 +95,10 @@ class DataManager:
         if not self.data_path.exists():
             raise FileNotFoundError(f"Dataset file not found: {self.data_path}")
 
-        if not self.image_dir.exists():
-            raise FileNotFoundError(f"Image directory not found: {self.image_dir}")
-
-        if not self.image_dir.is_dir():
-            raise NotADirectoryError(f"Image path is not a directory: {self.image_dir}")
+        # Build file_name -> actual_path mapping from image_paths
+        logger.info("Building image path mapping from %d image paths...", len(image_paths))
+        self.image_path_map = self._build_image_path_map(image_paths)
+        logger.info("  Image path map built with %d entries", len(self.image_path_map))
 
         # Step 1: Load JSON
         logger.info("Loading dataset: %s", self.data_path)
@@ -132,15 +134,15 @@ class DataManager:
         logger.info("Checking data quality...")
         self.quality_report = check_data_quality(self.raw_data)
 
-        # Check for image directory sync (warn if extra images exist)
-        self._check_image_directory_sync()
+        # Validate that all COCO file_names can be resolved
+        self._validate_image_paths()
 
         if self.quality_report['warnings']:
             logger.warning("Data quality warnings:")
             for warning in self.quality_report['warnings']:
                 logger.warning("  - %s", warning)
         else:
-            logger.info(" No data quality issues found")
+            logger.info("  No data quality issues found")
 
         # Step 6: Split dataset (if configured)
         if split_config:
@@ -151,7 +153,7 @@ class DataManager:
                 stratify=True,
                 random_seed=42
             )
-            logger.info(" Dataset split complete:")
+            logger.info("  Dataset split complete:")
             for split_name, split_data in self.splits.items():
                 logger.info("  - %s: %d images, %d annotations",
                           split_name,
@@ -165,43 +167,80 @@ class DataManager:
         logger.info("DataManager initialized successfully")
         logger.info("=" * 60)
 
-    def _check_image_directory_sync(self):
+    def _build_image_path_map(self, image_paths: List[str]) -> Dict[str, str]:
         """
-        Check if image directory has more images than annotated.
+        Build mapping from COCO file_name to actual filesystem path.
         
-        Warns user if there are extra images in the directory that
-        are not referenced in the annotations.
+        Frontend sends paths like: /profile/upload/2025/12/16/xxx.jpeg
+        COCO file_name contains:   /upload/2025/12/16/xxx.jpeg
+        Actual filesystem path:    /srv/shared/images/upload/2025/12/16/xxx.jpeg
+        
+        Args:
+            image_paths: List of image paths from frontend
+            
+        Returns:
+            Dictionary mapping COCO file_name to actual filesystem path
         """
-        # Get annotated image filenames from COCO data
+        path_map = {}
+        for path in image_paths:
+            # Transform to actual filesystem path
+            actual_path = transform_image_path(path)
+
+            # Extract file_name key (the COCO-style path without /profile/)
+            # /profile/upload/2025/12/16/xxx.jpeg -> /upload/2025/12/16/xxx.jpeg
+            if path.startswith(IMAGE_PATH_FRONTEND_PREFIX):
+                # Strip /profile/ prefix, keep leading /
+                file_name = '/' + path[len(IMAGE_PATH_FRONTEND_PREFIX):]
+            else:
+                file_name = path
+            path_map[file_name] = actual_path
+        return path_map
+
+    def _validate_image_paths(self):
+        """
+        Validate that all COCO file_names can be resolved to actual paths.
+        
+        Raises:
+            FileNotFoundError: If any image path cannot be resolved or doesn't exist
+        """
         annotated_filenames = {img['file_name'] for img in self.raw_data['images']}
 
-        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
+        missing_files = []
 
-        directory_images = set()
-        for file_path in self.image_dir.iterdir():
-            if file_path.is_file() and file_path.suffix.lower() in image_extensions:
-                directory_images.add(file_path.name)
+        for file_name in annotated_filenames:
+            actual_path = self.get_image_path(file_name)
 
-        extra_images = directory_images - annotated_filenames
+            # Check if path exists on filesystem
+            if not Path(actual_path).exists():
+                missing_files.append((file_name, actual_path))
 
-        if extra_images:
-            logger.warning(
-                "Found %d images in directory but NOT in annotations (will be ignored during training)",
-                len(extra_images)
-            )
-            logger.warning("  - Annotated images: %d", len(annotated_filenames))
-            logger.warning("  - Total images in directory: %d", len(directory_images))
-            logger.warning("  - Extra images: %d", len(extra_images))
-
-        missing_images = annotated_filenames - directory_images
-        if missing_images:
-            logger.error(
-                "Found %d images in annotations but NOT in directory (training will fail!)",
-                len(missing_images)
-            )
+        if missing_files:
+            logger.error("Found %d images that do not exist on filesystem:", len(missing_files))
+            for file_name, actual_path in missing_files[:5]:  # Show first 5
+                logger.error("  - %s -> %s", file_name, actual_path)
+            if len(missing_files) > 5:
+                logger.error("  ... and %d more", len(missing_files) - 5)
             raise FileNotFoundError(
-                f"{len(missing_images)} images referenced in annotations not found in {self.image_dir}"
+                f"{len(missing_files)} images referenced in annotations not found on filesystem"
             )
+
+        logger.info("  All %d image paths validated successfully", len(annotated_filenames))
+
+    def get_image_path(self, file_name: str) -> str:
+        """
+        Get actual filesystem path for a COCO file_name.
+        
+        Args:
+            file_name: The file_name from COCO annotation (e.g., /upload/2025/12/16/xxx.jpeg)
+            
+        Returns:
+            Actual filesystem path (e.g., /srv/shared/images/upload/2025/12/16/xxx.jpeg)
+        """
+        if file_name in self.image_path_map:
+            return self.image_path_map[file_name]
+
+        # Fallback: apply transform directly to file_name
+        return transform_image_path(file_name)
 
     def get_dataset_info(self) -> Dict[str, Any]:
         """
@@ -260,10 +299,6 @@ class DataManager:
             raise ValueError(f"Split '{split_name}' not found. Available: {available}")
         
         return self.splits[split_name]
-
-    # def get_available_splits(self) -> List[str]:
-    #     """Get list of available split names."""
-    #     return list(self.splits.keys())
 
     def save_splits(self, output_dir: str) -> None:
         """

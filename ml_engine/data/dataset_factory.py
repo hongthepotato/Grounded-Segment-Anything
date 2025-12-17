@@ -14,7 +14,7 @@ Benefits:
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
 
 from ml_engine.data.loaders import TeacherDataset
 from ml_engine.data.preprocessing import create_preprocessor_from_models
@@ -40,7 +40,7 @@ class DatasetFactory:
         >>> 
         >>> train_dataset = DatasetFactory.create_dataset(
         >>>     coco_data=data_manager.get_split('train'),
-        >>>     image_dir=str(data_manager.image_dir),
+        >>>     image_path_resolver=data_manager.get_image_path,
         >>>     dataset_info=data_manager.get_dataset_info(),
         >>>     model_names=['grounding_dino', 'sam'],
         >>>     augmentation_config={'enabled': True, ...},
@@ -51,7 +51,7 @@ class DatasetFactory:
     @staticmethod
     def create_dataset(
         coco_data: Dict[str, Any],
-        image_dir: str,
+        image_path_resolver: Callable[[str], str],
         dataset_info: Dict[str, Any],
         model_names: List[str],
         augmentation_config: Optional[Dict[str, Any]] = None,
@@ -67,7 +67,7 @@ class DatasetFactory:
 
         Args:
             coco_data: COCO format dictionary (from DataManager.get_split())
-            image_dir: Path to directory containing images
+            image_path_resolver: Function that resolves COCO file_name to actual path
             dataset_info: Dataset metadata (from DataManager.get_dataset_info())
                          Must contain 'has_boxes' and 'has_masks' keys
             model_names: List of model names requiring preprocessing
@@ -86,7 +86,7 @@ class DatasetFactory:
             >>> # Training dataset with augmentation
             >>> train_dataset = DatasetFactory.create_dataset(
             >>>     coco_data=train_data,
-            >>>     image_dir='/path/to/images',
+            >>>     image_path_resolver=data_manager.get_image_path,
             >>>     dataset_info={'has_boxes': True, 'has_masks': True},
             >>>     model_names=['grounding_dino', 'sam'],
             >>>     augmentation_config={
@@ -101,7 +101,7 @@ class DatasetFactory:
             >>> # Validation dataset without augmentation
             >>> val_dataset = DatasetFactory.create_dataset(
             >>>     coco_data=val_data,
-            >>>     image_dir='/path/to/images',
+            >>>     image_path_resolver=data_manager.get_image_path,
             >>>     dataset_info={'has_boxes': True, 'has_masks': True},
             >>>     model_names=['grounding_dino', 'sam'],
             >>>     augmentation_config=None,  # No augmentation
@@ -131,7 +131,7 @@ class DatasetFactory:
         # Create dataset with all components
         dataset = TeacherDataset(
             coco_data=coco_data,
-            image_dir=image_dir,
+            image_path_resolver=image_path_resolver,
             preprocessor=preprocessor,
             augmentation_pipeline=augmentation_pipeline,
             return_boxes=dataset_info['has_boxes'],

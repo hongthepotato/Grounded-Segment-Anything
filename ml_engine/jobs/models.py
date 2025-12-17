@@ -135,9 +135,8 @@ class Job:
         """Set defaults after initialization."""
         if self.created_at is None:
             self.created_at = datetime.now()
-        if self.output_dir is None:
-            short_id = self.id[:8]
-            self.output_dir = f"experiments/{self.type}_{short_id}"
+        # Note: output_dir is intentionally left as-is (None or user-provided base path)
+        # The worker will build the full path with job-specific subdirectory
         # Convert status string to enum if needed
         if isinstance(self.status, str):
             self.status = JobStatus(self.status)
