@@ -30,7 +30,7 @@ from ml_engine.jobs.redis_store import RedisJobStore
 from ml_engine.training.teacher_trainer import TeacherTrainer, TrainingCancelledException
 from ml_engine.data.manager import DataManager
 from core.config import load_config, merge_configs
-from core.constants import DEFAULT_CONFIGS_DIR
+from core.constants import DEFAULT_CONFIGS_DIR, transform_image_path
 
 logger = logging.getLogger(__name__)
 
@@ -226,8 +226,9 @@ class TrainingWorker:
         """
         job_config = job.config
 
-        # Extract paths from config
-        data_path = job_config.get("data_path")
+        # Extract paths from config and transform to actual filesystem paths
+        data_path_raw = job_config.get("data_path")
+        data_path = transform_image_path(data_path_raw) if data_path_raw else None
         image_paths = job_config.get("image_paths", [])
         # Build output directory with job-specific subdirectory
         job_subdir = f"{job.type}_{job.id[:8]}"
