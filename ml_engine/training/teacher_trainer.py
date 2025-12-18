@@ -1032,7 +1032,7 @@ class TeacherTrainer:
 
         val_losses = {}  # Dynamic keys
 
-        pbar = tqdm(self.val_loader, desc=f"Val Epoch {epoch + 1}")
+        pbar = tqdm(self.val_loader, desc="Validation")
         visualized = False
 
         for batch in pbar:

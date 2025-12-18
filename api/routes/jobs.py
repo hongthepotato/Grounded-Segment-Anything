@@ -12,9 +12,10 @@ Provides:
 
 import os
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.responses import JSONResponse
 
 from api.schemas import (
     JobCreate,
@@ -23,12 +24,84 @@ from api.schemas import (
     JobProgressSchema,
     QueueStatusResponse,
     WorkerResponse,
+    success_response,
 )
 from ml_engine.jobs import JobManager, get_job_manager, Job
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+
+
+# =============================================================================
+# Job Config Validation
+# =============================================================================
+
+# Required fields per job type
+JOB_CONFIG_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
+    "teacher_training": {
+        "required": ["data_path", "image_paths"],
+        "field_types": {
+            "data_path": str,
+            "image_paths": list,
+        },
+        "field_validations": {
+            "image_paths": lambda v: len(v) > 0,  # Must have at least one image
+        }
+    },
+    "student_distillation": {
+        "required": ["data_path", "image_paths", "teacher_checkpoint"],
+        "field_types": {
+            "data_path": str,
+            "image_paths": list,
+            "teacher_checkpoint": str,
+        },
+        "field_validations": {
+            "image_paths": lambda v: len(v) > 0,
+        }
+    },
+}
+
+
+def validate_job_config(job_type: str, config: Dict[str, Any]) -> List[str]:
+    """
+    Validate job config before submission.
+    
+    Args:
+        job_type: Type of job (teacher_training, student_distillation)
+        config: Job configuration dict
+        
+    Returns:
+        List of validation error messages (empty if valid)
+    """
+    errors = []
+
+    # Check if job type is known
+    if job_type not in JOB_CONFIG_REQUIREMENTS:
+        # Unknown job type - skip validation (let worker handle it)
+        return errors
+
+    requirements = JOB_CONFIG_REQUIREMENTS[job_type]
+
+    # Check required fields
+    for field in requirements.get("required", []):
+        if field not in config or config[field] is None:
+            errors.append(f"'{field}' is required for {job_type}")
+        elif field in requirements.get("field_types", {}):
+            expected_type = requirements["field_types"][field]
+            if not isinstance(config[field], expected_type):
+                errors.append(f"'{field}' must be a {expected_type.__name__}")
+
+    # Run custom validations
+    for field, validator in requirements.get("field_validations", {}).items():
+        if field in config and config[field] is not None:
+            if not validator(config[field]):
+                if field == "image_paths":
+                    errors.append(f"'{field}' must contain at least one image path")
+                else:
+                    errors.append(f"'{field}' validation failed")
+
+    return errors
 
 
 def get_manager() -> JobManager:
@@ -54,7 +127,6 @@ def job_to_response(job: Job) -> JobResponse:
         id=job.id,
         type=job.type,
         status=job.status.value,
-        config=job.config,
         progress=progress,
         worker_id=job.worker_id,
         created_at=job.created_at,
@@ -62,12 +134,13 @@ def job_to_response(job: Job) -> JobResponse:
         finished_at=job.finished_at,
         error_message=job.error_message,
         output_dir=job.output_dir,
-        priority=job.priority,
-        tags=job.tags,
+        # Commented out - not needed by frontend for now
+        # priority=job.priority,
+        # tags=job.tags,
     )
 
 
-@router.post("", response_model=JobResponse, status_code=201)
+@router.post("", status_code=200)
 async def submit_job(
     request: JobCreate,
     manager: JobManager = Depends(get_manager)
@@ -92,6 +165,14 @@ async def submit_job(
             }
         }
     """
+    # Validate config before accepting job
+    validation_errors = validate_job_config(request.job_type, request.config)
+    if validation_errors:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid job config: {'; '.join(validation_errors)}"
+        )
+
     try:
         job = manager.submit_job(
             job_type=request.job_type,
@@ -101,7 +182,13 @@ async def submit_job(
             tags=request.tags,
         )
         logger.info("Submitted job %s (type=%s)", job.id[:8], request.job_type)
-        return job_to_response(job)
+        return JSONResponse(
+            status_code=201,
+            content=success_response(
+                data=job_to_response(job).model_dump(mode='json'),
+                code=201
+            )
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -110,7 +197,7 @@ async def submit_job(
         raise HTTPException(status_code=500, detail=f"Failed to submit job: {str(e)}") from e
 
 
-@router.get("", response_model=JobListResponse)
+@router.get("")
 async def list_jobs(
     status: Optional[str] = Query(None, description="Filter by status"),
     job_type: Optional[str] = Query(None, description="Filter by job type"),
@@ -134,15 +221,22 @@ async def list_jobs(
     # Get total count for pagination
     total = manager.get_job_count(status=status)
 
-    return JobListResponse(
+    response_data = JobListResponse(
         jobs=[job_to_response(job) for job in jobs],
         total=total,
         limit=limit,
         offset=offset,
     )
 
+    return JSONResponse(
+        status_code=200,
+        content=success_response(
+            data=response_data.model_dump(mode='json')
+        )
+    )
 
-@router.get("/{job_id}", response_model=JobResponse)
+
+@router.get("/{job_id}")
 async def get_job(
     job_id: str,
     manager: JobManager = Depends(get_manager)
@@ -157,7 +251,12 @@ async def get_job(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-    return job_to_response(job)
+    return JSONResponse(
+        status_code=200,
+        content=success_response(
+            data=job_to_response(job).model_dump(mode='json')
+        )
+    )
 
 
 @router.delete("/{job_id}", status_code=200)
@@ -191,14 +290,19 @@ async def cancel_job(
 
     # Get updated job
     job = manager.get_job(job_id)
-    return job_to_response(job)
+    return JSONResponse(
+        status_code=200,
+        content=success_response(
+            data=job_to_response(job).model_dump(mode='json')
+        )
+    )
 
 
 # Queue status endpoint (separate router for clarity)
 queue_router = APIRouter(prefix="/api/queue", tags=["queue"])
 
 
-@queue_router.get("/status", response_model=QueueStatusResponse)
+@queue_router.get("/status")
 async def get_queue_status(
     manager: JobManager = Depends(get_manager)
 ):
@@ -223,8 +327,15 @@ async def get_queue_status(
         for w in status["workers"]
     ]
 
-    return QueueStatusResponse(
+    response_data = QueueStatusResponse(
         queue_length=status["queue_length"],
         workers=workers,
         job_counts=status["job_counts"],
+    )
+
+    return JSONResponse(
+        status_code=200,
+        content=success_response(
+            data=response_data.model_dump(mode='json')
+        )
     )

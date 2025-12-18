@@ -2,6 +2,7 @@
 Pydantic schemas for API request/response models.
 
 This module defines:
+- ApiResponse: Unified wrapper for all API responses
 - JobCreate: Request body for job submission
 - JobResponse: Response body for job details
 - JobListResponse: Response body for job list
@@ -10,8 +11,85 @@ This module defines:
 """
 
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, TypeVar, Generic
 from pydantic import BaseModel, Field
+
+# Generic type for wrapped data
+T = TypeVar('T')
+
+
+class ApiResponse(BaseModel, Generic[T]):
+    """
+    Unified API response wrapper.
+    
+    All API responses are wrapped in this format for consistency.
+    Frontend checks 'status' field to determine success or failure.
+    
+    Success example:
+        {
+            "code": 200,
+            "status": "succeed",
+            "data": { "id": "abc123", ... }
+        }
+    
+    Error example:
+        {
+            "code": 422,
+            "status": "failed",
+            "error": "Validation failed: invalid job type"
+        }
+    """
+    code: int = Field(..., description="HTTP status code")
+    status: str = Field(..., description="Business status: 'succeed' or 'failed'")
+    data: Optional[T] = Field(default=None, description="Response data (present when succeed)")
+    error: Optional[str] = Field(default=None, description="Error message (present when failed)")
+
+    class Config:
+        from_attributes = True
+
+
+def success_response(data: Any = None, code: int = 200) -> dict:
+    """
+    Helper function to create a success response.
+    
+    Args:
+        data: Response data (task info, job details, etc.)
+        code: HTTP status code (default 200)
+    
+    Returns:
+        {
+            "code": 200,
+            "status": "succeed",
+            "data": { ... }
+        }
+    """
+    return {
+        "code": code,
+        "status": "succeed",
+        "data": data
+    }
+
+
+def error_response(error: str, code: int = 400) -> dict:
+    """
+    Helper function to create an error response.
+    
+    Args:
+        error: Error message describing what went wrong
+        code: HTTP status code (default 400)
+    
+    Returns:
+        {
+            "code": 422,
+            "status": "failed",
+            "error": "Error message here"
+        }
+    """
+    return {
+        "code": code,
+        "status": "failed",
+        "error": error
+    }
 
 
 class JobProgressSchema(BaseModel):
@@ -85,7 +163,6 @@ class JobResponse(BaseModel):
     id: str = Field(..., description="Job UUID")
     type: str = Field(..., description="Job type")
     status: str = Field(..., description="Job status")
-    config: Dict[str, Any] = Field(default_factory=dict, description="Job configuration")
     progress: Optional[JobProgressSchema] = Field(default=None, description="Training progress")
     worker_id: Optional[str] = Field(default=None, description="Worker executing job")
     created_at: Optional[datetime] = Field(default=None, description="Creation timestamp")
@@ -93,8 +170,9 @@ class JobResponse(BaseModel):
     finished_at: Optional[datetime] = Field(default=None, description="Completion timestamp")
     error_message: Optional[str] = Field(default=None, description="Error message if failed")
     output_dir: Optional[str] = Field(default=None, description="Output directory")
-    priority: int = Field(default=0, description="Job priority")
-    tags: List[str] = Field(default_factory=list, description="Job tags")
+    # Commented out - not needed by frontend for now
+    # priority: int = Field(default=0, description="Job priority")
+    # tags: List[str] = Field(default_factory=list, description="Job tags")
 
     class Config:
         from_attributes = True

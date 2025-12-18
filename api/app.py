@@ -21,12 +21,15 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 from api.routes.jobs import router as jobs_router, queue_router
 from api.routes.websocket import router as websocket_router
 from api.routes.exports import router as exports_router
+from api.schemas import success_response, error_response
 from ml_engine.jobs import get_job_manager
 
 logger = logging.getLogger(__name__)
@@ -125,13 +128,66 @@ app.include_router(websocket_router)
 app.include_router(exports_router)
 
 
+# =============================================================================
+# Exception Handlers - Wrap all errors in unified response format
+# =============================================================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTP exceptions with unified response format."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_response(
+            error=str(exc.detail),
+            code=exc.status_code
+        )
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors with unified response format."""
+    errors = exc.errors()
+    error_messages = []
+    for error in errors:
+        loc = " -> ".join(str(x) for x in error["loc"])
+        error_messages.append(f"{loc}: {error['msg']}")
+
+    error_msg = "Validation failed: " + "; ".join(error_messages)
+
+    return JSONResponse(
+        status_code=422,
+        content=error_response(
+            error=error_msg,
+            code=422
+        )
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle unexpected exceptions with unified response format."""
+    logger.error("Unexpected error: %s", exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content=error_response(
+            error=f"Internal server error: {str(exc)}",
+            code=500
+        )
+    )
+
+
+# =============================================================================
+# Health and Root Endpoints
+# =============================================================================
+
 @app.get("/health", tags=["health"])
 async def health_check():
     """
     Health check endpoint.
     
     Returns:
-        {"status": "healthy", "redis": "connected"}
+        {"code": 200, "status": "succeed", "data": {"health": "ok", "redis": "connected"}}
     """
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
@@ -139,20 +195,36 @@ async def health_check():
         manager = get_job_manager(redis_url)
         # Quick Redis check
         manager.get_queue_length()
-        return {"status": "healthy", "redis": "connected"}
+        return JSONResponse(
+            status_code=200,
+            content=success_response(
+                data={"health": "ok", "redis": "connected"}
+            )
+        )
     except Exception as e:
-        return {"status": "unhealthy", "redis": f"error: {str(e)}"}
+        return JSONResponse(
+            status_code=503,
+            content=error_response(
+                error=f"Service unhealthy: Redis error - {str(e)}",
+                code=503
+            )
+        )
 
 
 @app.get("/", tags=["root"])
 async def root():
     """Root endpoint with API info."""
-    return {
-        "name": "Training Job Manager API",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "health": "/health"
-    }
+    return JSONResponse(
+        status_code=200,
+        content=success_response(
+            data={
+                "name": "Training Job Manager API",
+                "version": "1.0.0",
+                "docs": "/docs",
+                "health": "/health"
+            }
+        )
+    )
 
 
 # Entry point for running directly

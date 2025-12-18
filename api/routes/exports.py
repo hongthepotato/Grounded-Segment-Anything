@@ -10,14 +10,15 @@ import os
 import logging
 from pathlib import Path
 from typing import Optional
-
-from fastapi import APIRouter, HTTPException, Depends, Query
-from fastapi.responses import FileResponse
-from starlette.background import BackgroundTask
-from pydantic import BaseModel, Field
 import tempfile
 import zipfile
 
+from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
+from pydantic import BaseModel, Field
+
+from api.schemas import success_response
 from ml_engine.jobs import JobManager, get_job_manager
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ class ExportInfo(BaseModel):
     package_size_mb: Optional[float] = Field(default=None, description="Package size in MB")
 
 
-@router.get("/{job_id}/exports", response_model=ExportInfo)
+@router.get("/{job_id}/exports")
 async def list_exports(
     job_id: str,
     manager: JobManager = Depends(get_manager)
@@ -51,9 +52,13 @@ async def list_exports(
         
     Returns:
         {
-            "available": ["merged_pth"],
-            "exportable": [],
-            "package_size_mb": 1850.5
+            "code": 200,
+            "message": "success",
+            "data": {
+                "available": ["merged_pth"],
+                "exportable": [],
+                "package_size_mb": 1850.5
+            }
         }
     """
     job = manager.get_job(job_id)
@@ -83,10 +88,16 @@ async def list_exports(
     if lora_dir.exists():
         available.append("lora_adapters")
 
-    return ExportInfo(
+    response_data = ExportInfo(
         available=available,
         exportable=[],  # Future: ONNX, TorchScript
         package_size_mb=round(package_size_mb, 1) if package_size_mb else None
+    )
+    return JSONResponse(
+        status_code=200,
+        content=success_response(
+            data=response_data.model_dump(mode='json')
+        )
     )
 
 

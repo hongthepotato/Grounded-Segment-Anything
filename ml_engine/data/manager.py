@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from core.config import load_json, save_json
-from core.constants import transform_image_path, IMAGE_PATH_FRONTEND_PREFIX
+from core.constants import transform_image_path
 from ml_engine.data.inspection import inspect_dataset, get_required_models
 from ml_engine.data.validators import (
     validate_coco_format,
@@ -171,9 +171,9 @@ class DataManager:
         """
         Build mapping from COCO file_name to actual filesystem path.
         
-        Frontend sends paths like: /profile/upload/2025/12/16/xxx.jpeg
-        COCO file_name contains:   /upload/2025/12/16/xxx.jpeg
-        Actual filesystem path:    /srv/shared/images/upload/2025/12/16/xxx.jpeg
+        Frontend sends paths like: upload/2025/12/17/xxx.png
+        COCO file_name contains:   upload/2025/12/17/xxx.png (same format)
+        Actual filesystem path:    /srv/shared/images/upload/2025/12/17/xxx.png
         
         Args:
             image_paths: List of image paths from frontend
@@ -184,15 +184,10 @@ class DataManager:
         path_map = {}
         for path in image_paths:
             # Transform to actual filesystem path
+            # upload/... -> /srv/shared/images/upload/...
             actual_path = transform_image_path(path)
-
-            # Extract file_name key (the COCO-style path without /profile/)
-            # /profile/upload/2025/12/16/xxx.jpeg -> /upload/2025/12/16/xxx.jpeg
-            if path.startswith(IMAGE_PATH_FRONTEND_PREFIX):
-                # Strip /profile/ prefix, keep leading /
-                file_name = '/' + path[len(IMAGE_PATH_FRONTEND_PREFIX):]
-            else:
-                file_name = path
+            # Use path directly as the key (matches COCO file_name format)
+            file_name = path
             path_map[file_name] = actual_path
         return path_map
 

@@ -28,8 +28,6 @@ EXPERIMENT_CONFIGS_DIR = CONFIGS_DIR / 'experiments'
 # Image Path Transformation
 # ============================================================================
 
-# Frontend sends paths with /profile/ prefix that need to be transformed
-IMAGE_PATH_FRONTEND_PREFIX = '/profile/'
 # Actual filesystem base path for images
 IMAGE_PATH_BASE = '/srv/shared/images/'
 
@@ -38,22 +36,18 @@ def transform_image_path(path: str) -> str:
     """
     Transform frontend/COCO image path to actual filesystem path.
     
-    Examples:
-        /profile/upload/2025/12/16/xxx.jpeg -> /srv/shared/images/upload/2025/12/16/xxx.jpeg
-        /upload/2025/12/16/xxx.jpeg -> /srv/shared/images/upload/2025/12/16/xxx.jpeg
+    Frontend sends paths like: upload/2025/12/17/xxx.png
+    Transforms to:            /srv/shared/images/upload/2025/12/17/xxx.png
     
     Args:
-        path: Image path from frontend or COCO file_name
+        path: Image path from frontend or COCO file_name (e.g., "upload/...")
         
     Returns:
         Actual filesystem path
     """
-    if path.startswith(IMAGE_PATH_FRONTEND_PREFIX):
-        # /profile/upload/... -> /srv/shared/images/upload/...
-        return IMAGE_PATH_BASE + path[len(IMAGE_PATH_FRONTEND_PREFIX):]
-    if path.startswith('/upload/'):
-        # /upload/... -> /srv/shared/images/upload/...
-        return IMAGE_PATH_BASE + path.lstrip('/')
+    if path.startswith('upload/'):
+        # upload/... -> /srv/shared/images/upload/...
+        return IMAGE_PATH_BASE + path
     return path  # Return as-is if no transform needed
 
 
