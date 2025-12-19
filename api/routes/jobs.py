@@ -11,7 +11,9 @@ Provides:
 """
 
 import os
+import json
 import logging
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -29,6 +31,39 @@ from api.schemas import (
 from ml_engine.jobs import JobManager, get_job_manager, Job
 
 logger = logging.getLogger(__name__)
+
+
+def get_job_accuracy(output_dir: Optional[str]) -> Optional[float]:
+    """
+    Read accuracy score from evaluation report if available.
+    
+    Args:
+        output_dir: Job output directory
+        
+    Returns:
+        Accuracy score (0-100) or None if not available
+    """
+    if not output_dir:
+        return None
+
+    # Look for grounding_dino evaluation report
+    report_path = Path(output_dir) / "evaluation" / "grounding_dino_report.json"
+
+    if not report_path.exists():
+        return None
+
+    try:
+        with open(report_path, 'r', encoding='utf-8') as f:
+            report = json.load(f)
+
+        # Get overall_score from simple_metrics
+        accuracy = report.get("simple_metrics", {}).get("overall_score")
+        if accuracy is not None:
+            return float(accuracy)
+    except (IOError, json.JSONDecodeError, ValueError) as e:
+        logger.warning("Failed to read evaluation report: %s", e)
+
+    return None
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -123,6 +158,11 @@ def job_to_response(job: Job) -> JobResponse:
             message=job.progress.message,
         )
 
+    # Get accuracy from evaluation report (only for completed jobs)
+    accuracy = None
+    if job.status.value == "completed":
+        accuracy = get_job_accuracy(job.output_dir)
+
     return JobResponse(
         id=job.id,
         type=job.type,
@@ -134,6 +174,7 @@ def job_to_response(job: Job) -> JobResponse:
         finished_at=job.finished_at,
         error_message=job.error_message,
         output_dir=job.output_dir,
+        accuracy=accuracy,
         # Commented out - not needed by frontend for now
         # priority=job.priority,
         # tags=job.tags,
@@ -183,9 +224,9 @@ async def submit_job(
         )
         logger.info("Submitted job %s (type=%s)", job.id[:8], request.job_type)
         return JSONResponse(
-            status_code=201,
+            status_code=200,
             content=success_response(
-                data=job_to_response(job).model_dump(mode='json'),
+                data={"jobs": [job_to_response(job).model_dump(mode='json')]},
                 code=201
             )
         )
@@ -254,7 +295,7 @@ async def get_job(
     return JSONResponse(
         status_code=200,
         content=success_response(
-            data=job_to_response(job).model_dump(mode='json')
+            data={"jobs": [job_to_response(job).model_dump(mode='json')]}
         )
     )
 
@@ -293,7 +334,7 @@ async def cancel_job(
     return JSONResponse(
         status_code=200,
         content=success_response(
-            data=job_to_response(job).model_dump(mode='json')
+            data={"jobs": [job_to_response(job).model_dump(mode='json')]}
         )
     )
 
