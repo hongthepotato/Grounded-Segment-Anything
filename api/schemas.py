@@ -157,6 +157,7 @@ class JobResponse(BaseModel):
             "status": "running",
             "progress": {"current_epoch": 5, "total_epochs": 50, ...},
             "created_at": "2024-01-01T12:00:00Z",
+            "accuracy": 85.5,
             ...
         }
     """
@@ -170,6 +171,7 @@ class JobResponse(BaseModel):
     finished_at: Optional[datetime] = Field(default=None, description="Completion timestamp")
     error_message: Optional[str] = Field(default=None, description="Error message if failed")
     output_dir: Optional[str] = Field(default=None, description="Output directory")
+    accuracy: Optional[float] = Field(default=None, description="Model accuracy score (0-100) from evaluation")
     # Commented out - not needed by frontend for now
     # priority: int = Field(default=0, description="Job priority")
     # tags: List[str] = Field(default_factory=list, description="Job tags")
