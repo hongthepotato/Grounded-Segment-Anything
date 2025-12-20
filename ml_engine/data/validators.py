@@ -944,18 +944,33 @@ def _random_split(
     splits: Dict[str, float],
     random_seed: int
 ) -> Dict[str, set]:
-    """Perform random split without stratification."""
+    """Perform random split without stratification.
+    
+    Uses round() instead of int() truncation to fairly allocate images.
+    Example: 4 images with 70/15/15 split
+      - int():   train=2, val=0, test=0  (loses 2 images, val/test empty!)
+      - round(): train=2, val=1, test=1  (correct distribution)
+    """
     np.random.seed(random_seed)
 
     shuffled_ids = np.array(image_ids)
     np.random.shuffle(shuffled_ids)
 
     n_total = len(shuffled_ids)
+
+    # Use round() for fair allocation instead of int() truncation
+    split_sizes = {name: round(n_total * ratio) for name, ratio in splits.items()}
+
+    # Adjust for rounding errors - modify largest split to absorb difference
+    total_allocated = sum(split_sizes.values())
+    if total_allocated != n_total:
+        largest_split = max(split_sizes.keys(), key=lambda k: split_sizes[k])
+        split_sizes[largest_split] += n_total - total_allocated
+
+    # Create split IDs
     split_ids = {}
     current_idx = 0
-
-    for split_name, ratio in splits.items():
-        n_split = int(n_total * ratio)
+    for split_name, n_split in split_sizes.items():
         split_ids[split_name] = set(shuffled_ids[current_idx:current_idx + n_split])
         current_idx += n_split
 

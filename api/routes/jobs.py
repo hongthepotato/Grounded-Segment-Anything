@@ -227,7 +227,7 @@ async def submit_job(
             status_code=200,
             content=success_response(
                 data={"jobs": [job_to_response(job).model_dump(mode='json')]},
-                code=201
+                code=200
             )
         )
 
