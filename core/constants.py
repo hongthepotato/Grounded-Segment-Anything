@@ -31,6 +31,13 @@ EXPERIMENT_CONFIGS_DIR = CONFIGS_DIR / 'experiments'
 # Actual filesystem base path for images
 IMAGE_PATH_BASE = '/srv/shared/images/'
 
+# ============================================================================
+# Translation Model
+# ============================================================================
+
+# Path to Chinese-English translation model (Helsinki-NLP/opus-mt-zh-en)
+TRANSLATION_MODEL_PATH = PRETRAINED_MODELS_DIR / 'opus-mt-zh-en'
+
 
 def transform_image_path(path: str) -> str:
     """
