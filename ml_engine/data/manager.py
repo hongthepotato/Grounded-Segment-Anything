@@ -19,11 +19,15 @@ from typing import Dict, Any, Optional, List
 
 from core.config import load_json, save_json
 from core.constants import transform_image_path, TRANSLATION_MODEL_PATH
+<<<<<<< HEAD
 from ml_engine.data.inspection import (
     inspect_dataset,
     detect_annotation_mode,
     get_required_models_from_mode
 )
+=======
+from ml_engine.data.inspection import inspect_dataset, get_required_models
+>>>>>>> translation from chinese to english added
 from ml_engine.data.translator import CategoryTranslator, has_chinese_characters
 from ml_engine.data.validators import (
     validate_coco_format,
