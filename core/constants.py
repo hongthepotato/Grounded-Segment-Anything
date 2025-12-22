@@ -140,6 +140,14 @@ DEFAULT_DINO_LORA_CONFIG = {
 }
 
 # Teacher training (SAM with LoRA)
+# LoRA is applied to mask_decoder's transformer attention layers
+# Target modules use simple string matching (PEFT style):
+#   - q_proj, k_proj, v_proj, out_proj: All Linear projections in Attention layers
+# This covers:
+#   - mask_decoder.transformer.layers[*].self_attn.*
+#   - mask_decoder.transformer.layers[*].cross_attn_token_to_image.*
+#   - mask_decoder.transformer.layers[*].cross_attn_image_to_token.*
+#   - mask_decoder.transformer.final_attn_token_to_image.*
 DEFAULT_SAM_LORA_CONFIG = {
     'learning_rate': 5e-4,
     'batch_size': 16,
@@ -152,10 +160,10 @@ DEFAULT_SAM_LORA_CONFIG = {
         'lora_alpha': 16,
         'lora_dropout': 0.05,
         'target_modules': [
-            'mask_decoder.transformer.layers.*.self_attn.q_proj',
-            'mask_decoder.transformer.layers.*.self_attn.k_proj',
-            'mask_decoder.transformer.layers.*.self_attn.v_proj',
-            'mask_decoder.output_upscaling.*.weight'
+            'q_proj',
+            'k_proj', 
+            'v_proj',
+            'out_proj'
         ]
     }
 }
