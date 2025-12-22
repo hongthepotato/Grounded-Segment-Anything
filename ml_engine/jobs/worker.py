@@ -3,12 +3,22 @@ Training Worker for job execution.
 
 This module provides the TrainingWorker class that:
 - Polls Redis queue for pending jobs
-- Executes training jobs via TeacherTrainer
+- Executes training jobs in ISOLATED SUBPROCESSES
 - Reports progress to Redis with pub/sub
-- Handles cancellation and errors gracefully
+- Handles cancellation by killing subprocess (guaranteed resource cleanup)
+
+Architecture:
+    Worker Process (long-lived, lightweight)
+    └── Training Subprocess (short-lived, isolated)
+        └── TeacherTrainer (GPU, DataLoaders, etc.)
+
+Why subprocess isolation?
+- Process death = OS automatically frees ALL resources
+- GPU memory released by CUDA driver on process exit
+- DataLoader workers terminated with parent
+- No manual cleanup code needed
 
 Usage:
-    # Start a worker
     worker = TrainingWorker(
         redis_url="redis://localhost:6379",
         gpu_id=0
@@ -20,6 +30,7 @@ import logging
 import os
 import signal
 import socket
+import time
 import traceback
 import uuid
 from datetime import datetime
@@ -27,24 +38,20 @@ from typing import Dict, Any, Optional
 
 from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo, JobType
 from ml_engine.jobs.redis_store import RedisJobStore
-from ml_engine.training.teacher_trainer import TeacherTrainer, TrainingCancelledException
-from ml_engine.data.manager import DataManager
-from core.config import load_config, merge_configs
-from core.constants import DEFAULT_CONFIGS_DIR, transform_image_path
+from ml_engine.jobs.subprocess_runner import TrainingSubprocess
 
 logger = logging.getLogger(__name__)
 
 
 class TrainingWorker:
     """
-    Worker that polls Redis queue and executes training jobs.
+    Worker that polls Redis queue and executes training jobs in subprocesses.
     
-    Features:
-    - Blocking poll on Redis queue
-    - Progress reporting to Redis
-    - Graceful cancellation via cancel_check
+    Key Features:
+    - Training runs in isolated subprocess (not in worker process)
+    - Cancel = kill subprocess = 100% reliable resource cleanup
+    - Worker stays lightweight (only scheduling logic)
     - Heartbeat for worker health monitoring
-    - Handles multiple job types (teacher training, distillation)
     
     Example:
         >>> worker = TrainingWorker(redis_url="redis://localhost:6379")
@@ -55,6 +62,10 @@ class TrainingWorker:
     HEARTBEAT_INTERVAL = 10
     # Queue poll timeout in seconds
     POLL_TIMEOUT = 5
+    # Progress poll interval when job is running
+    PROGRESS_POLL_INTERVAL = 0.5
+    # Cancel check interval when job is running
+    CANCEL_CHECK_INTERVAL = 1.0
 
     def __init__(
         self,
@@ -79,7 +90,7 @@ class TrainingWorker:
 
         # Current job state
         self.current_job: Optional[Job] = None
-        self._cancel_requested = False
+        self.current_subprocess: Optional[TrainingSubprocess] = None
         self._shutdown_requested = False
 
         # Worker info
@@ -89,9 +100,6 @@ class TrainingWorker:
             hostname=socket.gethostname(),
             status="idle"
         )
-
-        # Set CUDA device
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
         # Setup signal handlers
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -104,15 +112,16 @@ class TrainingWorker:
         logger.info("Received signal %s, initiating shutdown...", signum)
         self._shutdown_requested = True
 
-        # If running a job, request cancellation
-        if self.current_job:
-            self._cancel_requested = True
+        # If running a job, cancel the subprocess
+        if self.current_subprocess and self.current_subprocess.is_alive():
+            logger.info("Cancelling current subprocess due to shutdown signal")
+            self.current_subprocess.cancel()
 
     def run(self):
         """
         Main worker loop.
         
-        Polls Redis queue for jobs and executes them.
+        Polls Redis queue for jobs and executes them in subprocesses.
         Blocks until shutdown signal received.
         """
         logger.info("Worker %s starting main loop", self.worker_id)
@@ -143,7 +152,7 @@ class TrainingWorker:
                     logger.info("Skipping cancelled job %s", job_id[:8])
                     continue
 
-                # Execute job
+                # Execute job in subprocess
                 self._execute_job(job)
 
         finally:
@@ -155,28 +164,38 @@ class TrainingWorker:
 
     def _execute_job(self, job: Job):
         """
-        Execute a training job.
+        Execute a training job in an isolated subprocess.
+
+        The subprocess:
+        1. Allocates all GPU resources
+        2. Runs training
+        3. Reports progress via IPC queue
+        4. On cancel: gets killed, OS frees all resources
 
         Args:
             job: Job to execute
         """
         self.current_job = job
-        self._cancel_requested = False
 
         logger.info("=" * 60)
-        logger.info("Starting job %s (%s)", job.id[:8], job.type)
+        logger.info("Starting job %s (%s) in subprocess", job.id[:8], job.type)
         logger.info("=" * 60)
+
+        # Build output directory
+        job_subdir = f"{job.type}_{job.id[:8]}"
+        base_dir = job.output_dir or "experiments"
+        output_dir = f"{base_dir}/{job_subdir}"
+
+        # Keep local object in sync with what we persist
+        job.output_dir = output_dir
 
         # Update job status to RUNNING
-        job.status = JobStatus.RUNNING
-        job.started_at = datetime.now()
-        job.worker_id = self.worker_id
-
         self.store.update_job(
             job.id,
             status=JobStatus.RUNNING,
-            started_at=job.started_at,
-            worker_id=self.worker_id
+            started_at=datetime.now(),
+            worker_id=self.worker_id,
+            output_dir=output_dir
         )
 
         # Update worker status
@@ -190,168 +209,109 @@ class TrainingWorker:
             "timestamp": datetime.now().isoformat()
         })
 
+        # Create and start subprocess
+        subprocess_runner = TrainingSubprocess(
+            job_id=job.id,
+            job_type=job.type,
+            job_config=job.config,
+            output_dir=output_dir,
+            gpu_id=self.gpu_id
+        )
+        self.current_subprocess = subprocess_runner
+
         try:
-            # Route to appropriate trainer
-            if job.type == JobType.TEACHER_TRAINING.value:
-                self._run_teacher_training(job)
-            elif job.type == JobType.STUDENT_DISTILLATION.value:
-                self._run_student_distillation(job)
+            subprocess_runner.start()
+            # Monitor subprocess: forward progress, check for cancellation
+            self._monitor_subprocess(job, subprocess_runner)
+            # Get result
+            result = subprocess_runner.get_result()
+            if result.success:
+                self._complete_job(job, result.output_dir)
+            elif result.cancelled:
+                self._cancel_job(job)
             else:
-                raise ValueError(f"Unknown job type: {job.type}")
-
-            # Job completed successfully
-            self._complete_job(job)
-
-        except TrainingCancelledException:
-            self._cancel_job(job)
+                self._fail_job(job, result.error_message or "Unknown error")
 
         except Exception as e:
-            self._fail_job(job, e)
+            logger.error("Exception during job execution: %s", e)
+            logger.debug("Traceback:\n%s", traceback.format_exc())
+
+            # Make sure subprocess is killed
+            if subprocess_runner.is_alive():
+                subprocess_runner.cancel()
+
+            self._fail_job(job, str(e))
 
         finally:
+            # Cleanup IPC resources
+            subprocess_runner.cleanup()
+            self.current_subprocess = None
             self.current_job = None
             self.store.update_worker_status(self.worker_id, "idle")
 
-    def _run_teacher_training(self, job: Job):
+    def _monitor_subprocess(self, job: Job, subprocess_runner: TrainingSubprocess):
         """
-        Run teacher model training.
+        Monitor running subprocess.
         
-        Builds complete config by:
-        1. Loading shared defaults from teacher_training.yaml
-        2. Loading model-specific configs based on dataset
-        3. Merging with user-provided overrides from job config
-        
-        Args:
-            job: Job with teacher training config
-        """
-        job_config = job.config
-
-        # Extract paths from config and transform to actual filesystem paths
-        data_path_raw = job_config.get("data_path")
-        data_path = transform_image_path(data_path_raw) if data_path_raw else None
-        image_paths = job_config.get("image_paths", [])
-        # Build output directory with job-specific subdirectory
-        job_subdir = f"{job.type}_{job.id[:8]}"
-        base_dir = job.output_dir or "experiments"
-        output_dir = f"{base_dir}/{job_subdir}"
-        # Update job's output_dir so API responses show actual path
-        self.store.update_job(job.id, output_dir=output_dir)
-
-        if not data_path:
-            raise ValueError("data_path required in job config")
-
-        if not image_paths:
-            raise ValueError("image_paths required in job config")
-
-        # Create DataManager
-        split_config = job_config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
-        data_manager = DataManager(
-            data_path=data_path,
-            image_paths=image_paths,
-            split_config=split_config,
-            auto_preprocess=True
-        )
-
-        # Build complete config like CLI does
-        config = self._build_teacher_config(data_manager, job_config)
-
-        # Create trainer with callbacks
-        trainer = TeacherTrainer(
-            data_manager=data_manager,
-            output_dir=output_dir,
-            config=config,
-            progress_callback=lambda p: self._on_progress(job.id, p),
-            cancel_check=lambda: self._cancel_requested
-        )
-
-        # Run training
-        trainer.train()
-
-    def _build_teacher_config(
-        self,
-        data_manager: DataManager,
-        job_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Build complete teacher training config from defaults + job overrides.
-        
-        Mirrors the config building logic in cli/train_teacher.py to ensure
-        consistent behavior between CLI and API.
+        - Forward progress updates to Redis
+        - Check for cancellation requests
+        - Update heartbeat
         
         Args:
-            data_manager: DataManager with dataset info
-            job_config: User-provided job configuration
-            
-        Returns:
-            Complete training config with all required keys
+            job: The job being executed
+            subprocess_runner: The subprocess wrapper
         """
-        # Step 1: Load shared training defaults
-        shared_config_path = DEFAULT_CONFIGS_DIR / 'teacher_training.yaml'
-        shared_config = load_config(str(shared_config_path))
-        logger.info("Loaded shared training config from %s", shared_config_path)
+        last_cancel_check = time.time()
+        last_heartbeat = time.time()
 
-        # Step 2: Load model-specific configs based on dataset
-        dataset_info = data_manager.get_dataset_info()
-        required_models = data_manager.get_required_models()
-        logger.info("Required teacher models: %s", required_models)
+        while subprocess_runner.is_alive():
+            current_time = time.time()
 
-        model_configs = {}
-        if 'grounding_dino' in required_models:
-            dino_config_path = DEFAULT_CONFIGS_DIR / 'teacher_grounding_dino_lora.yaml'
-            model_configs['grounding_dino'] = load_config(str(dino_config_path))
-            logger.info("Loaded Grounding DINO config")
+            # Forward all available progress updates
+            while True:
+                progress_info = subprocess_runner.get_progress()
+                if progress_info is None:
+                    break
+                self._forward_progress(job.id, progress_info)
 
-        if 'sam' in required_models:
-            sam_config_path = DEFAULT_CONFIGS_DIR / 'teacher_sam_lora.yaml'
-            model_configs['sam'] = load_config(str(sam_config_path))
-            logger.info("Loaded SAM config")
+            # Check for cancellation request from Redis
+            if current_time - last_cancel_check >= self.CANCEL_CHECK_INTERVAL:
+                last_cancel_check = current_time
+                # Check if shutdown was requested
+                if self._shutdown_requested:
+                    logger.info("Shutdown requested, cancelling subprocess")
+                    subprocess_runner.cancel()
+                    break
+                # Check Redis for cancel request
+                updated_job = self.store.get_job(job.id)
+                if updated_job and updated_job.status == JobStatus.CANCELLING:
+                    logger.info("Cancel requested for job %s, killing subprocess", job.id[:8])
+                    subprocess_runner.cancel()
+                    break
 
-        if not model_configs:
-            raise ValueError("No models to train! Dataset has no valid annotations.")
+            # Update heartbeat
+            if current_time - last_heartbeat >= self.HEARTBEAT_INTERVAL:
+                last_heartbeat = current_time
+                self.store.update_worker_heartbeat(self.worker_id)
 
-        # Step 3: Build base config (same structure as CLI)
-        config = {
-            **shared_config['training'],
-            'num_classes': dataset_info['num_classes'],
-            'class_names': list(dataset_info['class_mapping'].values()),
-            'class_mapping': dataset_info['class_mapping'],
-            'augmentation': shared_config.get('augmentation'),
-            'evaluation': shared_config.get('evaluation'),
-            'checkpointing': shared_config.get('checkpointing'),
-            'models': model_configs
-        }
+            # Brief sleep to avoid busy loop
+            time.sleep(self.PROGRESS_POLL_INTERVAL)
 
-        # Step 4: Merge user overrides from job config
-        user_overrides = job_config.get("training", {})
-        if user_overrides:
-            config = merge_configs(config, user_overrides)
-            logger.info("Applied user config overrides")
+        # Drain any remaining progress updates
+        while True:
+            progress_info = subprocess_runner.get_progress()
+            if progress_info is None:
+                break
+            self._forward_progress(job.id, progress_info)
 
-        return config
-
-    def _run_student_distillation(self, job: Job):
+    def _forward_progress(self, job_id: str, progress_info: Dict[str, Any]):
         """
-        Run student model distillation.
-        
-        Args:
-            job: Job with distillation config
-        """
-        # TODO: Implement when StudentDistiller is ready
-        raise NotImplementedError("Student distillation not yet implemented")
-
-    def _on_progress(self, job_id: str, progress_info: Dict[str, Any]):
-        """
-        Progress callback - updates Redis and publishes event.
+        Forward progress update from subprocess to Redis.
         
         Args:
             job_id: Job ID
-            progress_info: Progress information from trainer
+            progress_info: Progress information from subprocess
         """
-        # Check if cancellation was requested via Redis
-        job = self.store.get_job(job_id)
-        if job and job.status == JobStatus.CANCELLING:
-            self._cancel_requested = True
-
         # Create progress object
         progress = JobProgress(
             current_epoch=progress_info.get("current_epoch", 0),
@@ -373,14 +333,11 @@ class TrainingWorker:
             "timestamp": datetime.now().isoformat()
         })
 
-        # Update heartbeat
-        self.store.update_worker_heartbeat(self.worker_id)
-
         logger.debug("Progress: epoch %d/%d, step %d/%d",
                     progress.current_epoch, progress.total_epochs,
                     progress.current_step, progress.total_steps)
 
-    def _complete_job(self, job: Job):
+    def _complete_job(self, job: Job, output_dir: Optional[str] = None):
         """Mark job as completed."""
         logger.info("Job %s completed successfully", job.id[:8])
 
@@ -393,7 +350,7 @@ class TrainingWorker:
         self.store.publish_event(job.id, {
             "type": "job_completed",
             "job_id": job.id,
-            "output_dir": job.output_dir,
+            "output_dir": output_dir or job.output_dir,
             "timestamp": datetime.now().isoformat()
         })
 
@@ -413,23 +370,21 @@ class TrainingWorker:
             "timestamp": datetime.now().isoformat()
         })
 
-    def _fail_job(self, job: Job, error: Exception):
+    def _fail_job(self, job: Job, error_message: str):
         """Mark job as failed with error message."""
-        error_msg = f"{type(error).__name__}: {str(error)}"
-        logger.error("Job %s failed: %s", job.id[:8], error_msg)
-        logger.debug("Traceback:\n%s", traceback.format_exc())
+        logger.error("Job %s failed: %s", job.id[:8], error_message)
 
         self.store.update_job(
             job.id,
             status=JobStatus.FAILED,
             finished_at=datetime.now(),
-            error_message=error_msg
+            error_message=error_message
         )
 
         self.store.publish_event(job.id, {
             "type": "job_failed",
             "job_id": job.id,
-            "error": error_msg,
+            "error": error_message,
             "timestamp": datetime.now().isoformat()
         })
 
@@ -437,6 +392,12 @@ class TrainingWorker:
 def main():
     """Entry point for worker process."""
     import argparse
+    import multiprocessing as mp
+
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # Already set
 
     parser = argparse.ArgumentParser(description="Training Worker")
     parser.add_argument("--redis-url", default="redis://localhost:6379",

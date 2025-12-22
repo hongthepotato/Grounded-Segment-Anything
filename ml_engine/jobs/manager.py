@@ -135,7 +135,7 @@ class JobManager:
             JobType(job_type)
         except ValueError:
             valid_types = [t.value for t in JobType]
-            raise ValueError(f"Invalid job type: {job_type}. Must be one of: {valid_types}")
+            raise ValueError("Invalid job type: %s. Must be one of: %s", job_type, valid_types)
 
         # Create job
         job = Job(
