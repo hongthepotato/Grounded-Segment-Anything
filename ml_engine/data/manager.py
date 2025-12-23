@@ -114,14 +114,8 @@ class DataManager:
             raise ValueError(f"Invalid COCO format: {len(errors)} errors found")
         logger.info(" Dataset format is valid")
 
-        # Step 3: Auto-preprocess (generate bbox from masks, etc.)
-        if auto_preprocess:
-            logger.info("Auto-preprocessing dataset...")
-            self.raw_data = preprocess_coco_dataset(self.raw_data, in_place=True)
-            logger.info(" Auto-preprocessing complete")
-
-        # Step 4: Inspect dataset ONCE (cache results)
-        logger.info("Inspecting dataset...")
+        # Step 3: Inspect dataset FIRST (before preprocessing)
+        # This captures the ORIGINAL annotation intent (what user provided)
         self.dataset_info = inspect_dataset(self.raw_data)
         logger.info(" Dataset inspection complete:")
         logger.info("  - Annotation mode: %s", self.dataset_info['annotation_mode'])
@@ -129,6 +123,12 @@ class DataManager:
         logger.info("  - Has masks: %s", self.dataset_info['has_masks'])
         logger.info("  - Num classes: %d", self.dataset_info['num_classes'])
         logger.info("  - Classes: %s", list(self.dataset_info['class_mapping'].values()))
+
+        # Step 4: Auto-preprocess (generate bbox from masks, etc.)
+        if auto_preprocess:
+            logger.info("Auto-preprocessing dataset...")
+            self.raw_data = preprocess_coco_dataset(self.raw_data, in_place=True)
+            logger.info(" Auto-preprocessing complete")
 
         # Step 5: Quality check
         logger.info("Checking data quality...")
