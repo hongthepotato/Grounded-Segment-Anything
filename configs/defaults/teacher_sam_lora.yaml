@@ -8,26 +8,33 @@ model:
   base_checkpoint: "data/models/pretrained/sam_vit_h_4b8939.pth"
   model_type: "vit_h"     # Options: vit_h, vit_l, vit_b
 
-# LoRA Configuration (PEFT) - SAM specific
+# CRITICAL: SAM architecture has different attention layer names:
+#   - image_encoder uses: attn.qkv (combined), attn.proj
+#   - mask_decoder uses: self_attn.q_proj, self_attn.k_proj, etc.
+# Since these names are DIFFERENT, using "attn.qkv" will ONLY match image_encoder!
 lora:
   enabled: true
-  r: 8                     # Lower rank for SAM decoder (smaller than DINO)
-  lora_alpha: 16           # Scaling factor
-  target_modules:          # Apply LoRA to mask decoder only
-    - "mask_decoder.transformer.layers.*.self_attn.q_proj"
-    - "mask_decoder.transformer.layers.*.self_attn.k_proj"
-    - "mask_decoder.transformer.layers.*.self_attn.v_proj"
-    - "mask_decoder.output_upscaling.*.weight"
-  lora_dropout: 0.05       # Lower dropout for SAM
+  r: 16                      # Higher rank for encoder (more capacity needed)
+  lora_alpha: 32             # Scaling factor (alpha/r = 2 is common)
+  target_modules:            # Apply LoRA ONLY to image_encoder attention layers
+    - "attn.qkv"             # Combined Q/K/V projection (only in image_encoder ViT)
+    - "attn.proj"            # Output projection (only in image_encoder ViT)
+  lora_dropout: 0.1          # Standard dropout for encoder
   bias: "none"
 
-# Freezing strategy (Partial Freeze + LoRA)
-freeze_image_encoder: true   # Keep ViT backbone frozen (308M params)
-freeze_prompt_encoder: true  # Keep prompt encoder frozen (3.8M params)
-train_mask_decoder: true     # Fine-tune decoder with LoRA (4.1M → 0.4M trainable)
+# Training mode for each component
+# Options: "frozen" | "lora" | "full"
+#   - frozen: No training, all parameters frozen
+#   - lora: LoRA adapters trainable, base weights frozen (requires target_modules match)
+#   - full: All parameters trainable (full fine-tuning)
+image_encoder_mode: "lora"     # LoRA on ViT backbone (~1.5M trainable)
+prompt_encoder_mode: "frozen"  # Completely frozen (~3.8M frozen)
+mask_decoder_mode: "full"      # Full fine-tune (~4.1M trainable)
 
 # Model-specific training settings
-learning_rate: 5.0e-4        # SAM-specific LR (higher than DINO)
+# Use different LRs for LoRA vs full fine-tune
+learning_rate: 1.0e-4        # Base LR for LoRA adapters
+mask_decoder_lr_multiplier: 0.1  # Lower LR for mask_decoder (pretrained weights)
 
 # Prompt strategy during fine-tuning
 prompt_type: "boxes"         # Use GT boxes as prompts (auto-gen if masks-only)
