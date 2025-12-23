@@ -254,7 +254,6 @@ class TeacherTrainer:
 
             logger.info("Loading SAM with LoRA...")
 
-            # Checkpoint and model type are optional (sensible defaults exist)
             model_section = sam_config.get('model', {})
             base_ckpt = model_section.get(
                 'base_checkpoint',
@@ -262,20 +261,27 @@ class TeacherTrainer:
             )
             model_type = model_section.get('model_type', 'vit_h')
 
-            # LoRA config is REQUIRED for LoRA training
             if 'lora' not in sam_config:
                 raise ValueError(
                     "LoRA training requires 'models.sam.lora' config!\n"
                     "Expected keys: r, lora_alpha, target_modules, lora_dropout"
                 )
 
+            image_encoder_mode = sam_config.get('image_encoder_mode', 'lora')
+            prompt_encoder_mode = sam_config.get('prompt_encoder_mode', 'frozen')
+            mask_decoder_mode = sam_config.get('mask_decoder_mode', 'full')
+
             self.models['sam'] = load_sam_with_lora(
                 base_checkpoint=base_ckpt,
                 model_type=model_type,
-                lora_config=sam_config['lora']
+                lora_config=sam_config['lora'],
+                image_encoder_mode=image_encoder_mode,
+                prompt_encoder_mode=prompt_encoder_mode,
+                mask_decoder_mode=mask_decoder_mode
             ).to(self.device)
 
-            logger.info("SAM loaded")
+            logger.info("SAM loaded (modes: encoder=%s, prompt=%s, decoder=%s)",
+                       image_encoder_mode, prompt_encoder_mode, mask_decoder_mode)
 
         # Set models to training mode
         for model in self.models.values():

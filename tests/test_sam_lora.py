@@ -231,14 +231,13 @@ class TestSAMLoRAForwardPass:
         
         # Patch the model loading to use our mock
         with patch.object(SAMLoRA, '_load_base_model', return_value=mock_sam):
-            with patch.object(SAMLoRA, '_apply_lora'):
-                with patch.object(SAMLoRA, '_unfreeze_mask_decoder_heads'):
-                    with patch('ml_engine.training.peft_utils.verify_freezing'):
-                        model = SAMLoRA(
-                            base_checkpoint='dummy.pth',
-                            model_type='vit_h',
-                            lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj', 'k_proj']}
-                        )
+            with patch.object(SAMLoRA, '_apply_training_modes'):
+                with patch('ml_engine.training.peft_utils.verify_freezing'):
+                    model = SAMLoRA(
+                        base_checkpoint='dummy.pth',
+                        model_type='vit_h',
+                        lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj', 'k_proj']}
+                    )
         
         # Create mock inputs
         batch_size = 2
@@ -262,14 +261,13 @@ class TestSAMLoRAForwardPass:
         from ml_engine.models.teacher.sam_lora import SAMLoRA
         
         with patch.object(SAMLoRA, '_load_base_model', return_value=mock_sam):
-            with patch.object(SAMLoRA, '_apply_lora'):
-                with patch.object(SAMLoRA, '_unfreeze_mask_decoder_heads'):
-                    with patch('ml_engine.training.peft_utils.verify_freezing'):
-                        model = SAMLoRA(
-                            base_checkpoint='dummy.pth',
-                            model_type='vit_h',
-                            lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj']}
-                        )
+            with patch.object(SAMLoRA, '_apply_training_modes'):
+                with patch('ml_engine.training.peft_utils.verify_freezing'):
+                    model = SAMLoRA(
+                        base_checkpoint='dummy.pth',
+                        model_type='vit_h',
+                        lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj']}
+                    )
         
         batch_size = 2
         num_objects = 3
@@ -357,14 +355,13 @@ class TestGradientFlow:
         from ml_engine.training.losses import SegmentationLoss
         
         with patch.object(SAMLoRA, '_load_base_model', return_value=mock_sam):
-            with patch.object(SAMLoRA, '_apply_lora'):
-                with patch.object(SAMLoRA, '_unfreeze_mask_decoder_heads'):
-                    with patch('ml_engine.training.peft_utils.verify_freezing'):
-                        model = SAMLoRA(
-                            base_checkpoint='dummy.pth',
-                            model_type='vit_h',
-                            lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj']}
-                        )
+            with patch.object(SAMLoRA, '_apply_training_modes'):
+                with patch('ml_engine.training.peft_utils.verify_freezing'):
+                    model = SAMLoRA(
+                        base_checkpoint='dummy.pth',
+                        model_type='vit_h',
+                        lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj']}
+                    )
         
         batch_size = 2
         num_objects = 2
@@ -401,4 +398,11 @@ class TestGradientFlow:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+
+
+
+
+
 

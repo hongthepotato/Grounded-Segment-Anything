@@ -308,7 +308,9 @@ def partial_freeze_for_lora(
         model: Base model
         freeze_modules: List of module names to freeze
         lora_config: LoRA configuration
-        lora_modules: Optional list of module names to apply LoRA to
+        lora_modules: Optional list of module names where LoRA should be applied.
+                      Only used with full-path target_modules (containing dots).
+                      Simple names like 'q_proj' are matched by PEFT directly.
     
     Returns:
         Model with partial freeze + LoRA applied
@@ -330,16 +332,24 @@ def partial_freeze_for_lora(
             logger.info(f"❄️  Frozen module: {name}")
     
     # Apply LoRA
+    # Note: lora_modules filtering is only needed for full-path target_modules.
+    # Simple names like 'q_proj' are matched by PEFT directly via substring matching.
+    # Since we've already frozen the modules we don't want, PEFT will only
+    # create LoRA adapters for matching modules in non-frozen parts.
     if lora_modules:
-        # Filter target modules to only those in lora_modules
         lora_config = lora_config.copy()
-        lora_config['target_modules'] = [
-            tm for tm in lora_config['target_modules']
-            if any(lm in tm for lm in lora_modules)
-        ]
-    
+        target_modules = lora_config.get('target_modules', [])
+
+        # Only filter if target_modules use full paths (contain dots)
+        has_full_paths = any('.' in tm for tm in target_modules)
+        if has_full_paths:
+            lora_config['target_modules'] = [
+                tm for tm in target_modules
+                if any(lm in tm for lm in lora_modules)
+            ]
+
     model = apply_lora(model, lora_config)
-    
+
     return model
 
 
