@@ -30,7 +30,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from ml_engine.data.inspection import load_and_inspect_dataset, print_dataset_report
 from ml_engine.data.validators import (
     validate_coco_format,
-    preprocess_coco_dataset,
+    normalize_coco_annotations,
     check_data_quality,
     split_dataset
 )
@@ -134,7 +134,7 @@ def main():
     # Step 2: Auto-fix missing fields
     if args.fix_missing or not args.check_format:
         logger.info("\n🔧 Step 2: Auto-generating missing bbox/area...")
-        coco_data = preprocess_coco_dataset(coco_data, in_place=True)
+        coco_data = normalize_coco_annotations(coco_data, in_place=True)
     
     # Step 3: Dataset inspection
     logger.info("\n📊 Step 3: Inspecting dataset...")
