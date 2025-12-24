@@ -140,43 +140,18 @@ class COCODataset(Dataset):
                 sample['boxes'].append(bbox)
 
             # Segmentation mask
+            # Data is normalized to compressed RLE by normalize_coco_annotations
             if self.return_masks and 'segmentation' in ann:
                 segmentation = ann['segmentation']
 
-                # Convert to binary mask
-                if isinstance(segmentation, list):
-                    # Polygon format
-                    mask = self._polygon_to_mask(segmentation, orig_height, orig_width)
-                elif isinstance(segmentation, dict):
-                    # RLE format
-                    mask = mask_utils.decode(segmentation)
-                else:
-                    raise ValueError(f"Unknown segmentation format: {type(segmentation)}")
+                # Debug assertion to catch non-normalized data
+                assert isinstance(segmentation, dict) and isinstance(segmentation.get('counts'), bytes), \
+                    f"Segmentation not normalized - must be compressed RLE, got {type(segmentation)}"
 
+                mask = mask_utils.decode(segmentation)
                 sample['masks'].append(mask)
 
         return sample
-
-    def _polygon_to_mask(self, segmentation: List, height: int, width: int) -> np.ndarray:
-        """
-        Convert polygon segmentation to binary mask.
-        
-        Args:
-            segmentation: List of polygon coordinates [x1,y1,x2,y2,...]
-            height: Image height
-            width: Image width
-        
-        Returns:
-            Binary mask as numpy array
-        """
-        # Create RLE from polygon
-        rles = mask_utils.frPyObjects(segmentation, height, width)
-        rle = mask_utils.merge(rles)
-
-        # Decode to binary mask
-        mask = mask_utils.decode(rle)
-
-        return mask
 
 
 class TeacherDataset(COCODataset):
