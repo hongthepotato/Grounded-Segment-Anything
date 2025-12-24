@@ -194,18 +194,32 @@ def main():
     logger.info("=" * 60)
 
     # Verify image directory exists
-    if not Path(args.images).exists():
+    image_dir = Path(args.images)
+    if not image_dir.exists():
         logger.error("Image directory not found: %s", args.images)
         sys.exit(1)
 
+    # Get all image paths from directory
+    image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
+    image_paths = [
+        str(p) for p in image_dir.rglob('*')
+        if p.suffix.lower() in image_extensions
+    ]
+    
+    if not image_paths:
+        logger.error("No images found in directory: %s", args.images)
+        sys.exit(1)
+    
+    logger.info("Found %d images in %s", len(image_paths), args.images)
+
     # Step 1: Create DataManager
+    # Note: Normalization (bbox from masks, etc.) is always applied during loading
     logger.info("\n Step 1: Initializing DataManager...")
 
     data_manager = DataManager(
         data_path=args.data,
-        image_dir=args.images,
-        split_config={'train': 0.7, 'val': 0.15, 'test': 0.15},
-        auto_preprocess=True
+        image_paths=image_paths,
+        split_config={'train': 0.7, 'val': 0.15, 'test': 0.15}
     )
 
     # Get inspection results (cached in manager)
