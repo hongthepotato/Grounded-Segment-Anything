@@ -26,7 +26,7 @@ from ml_engine.evaluation.evaluator import ModelEvaluator
 from ml_engine.evaluation.report import ModelReportGenerator
 from ml_engine.export import create_export_package
 from ml_engine.models.teacher.grounding_dino_lora import load_grounding_dino_with_lora
-from ml_engine.models.teacher.sam_lora import load_sam_with_lora
+from ml_engine.models.teacher.sam_lora import load_sam_hq_with_lora
 from ml_engine.training.losses import build_criterion, SegmentationLoss
 from ml_engine.training.training_manager import TrainingManager
 from ml_engine.training.checkpoint_manager import CheckpointManager
@@ -128,8 +128,15 @@ class TeacherTrainer:
         (self.output_dir / 'teachers').mkdir(exist_ok=True)
 
         # Setup device
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # CRITICAL: When CUDA_VISIBLE_DEVICES is set (by subprocess_runner),
+        # PyTorch sees only the visible GPUs and remaps them starting from 0.
+        # Example: CUDA_VISIBLE_DEVICES=3 → PyTorch cuda:0 = Physical GPU 3
+        # So we always use cuda:0 here, which maps to the correct physical GPU.
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         logger.info("Using device: %s", self.device)
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            logger.info("GPU: %s", gpu_name)
 
         self.dataset_info = data_manager.get_dataset_info()
 
@@ -252,7 +259,7 @@ class TeacherTrainer:
         if 'sam' in self.required_models:
             sam_config = self.config['models']['sam']
 
-            logger.info("Loading SAM with LoRA...")
+            logger.info("Loading SAM-HQ with LoRA...")
 
             model_section = sam_config.get('model', {})
             base_ckpt = model_section.get(
@@ -271,7 +278,7 @@ class TeacherTrainer:
             prompt_encoder_mode = sam_config.get('prompt_encoder_mode', 'frozen')
             mask_decoder_mode = sam_config.get('mask_decoder_mode', 'full')
 
-            self.models['sam'] = load_sam_with_lora(
+            self.models['sam'] = load_sam_hq_with_lora(
                 base_checkpoint=base_ckpt,
                 model_type=model_type,
                 lora_config=sam_config['lora'],
@@ -280,7 +287,7 @@ class TeacherTrainer:
                 mask_decoder_mode=mask_decoder_mode
             ).to(self.device)
 
-            logger.info("SAM loaded (modes: encoder=%s, prompt=%s, decoder=%s)",
+            logger.info("SAM-HQ loaded (modes: encoder=%s, prompt=%s, decoder=%s)",
                        image_encoder_mode, prompt_encoder_mode, mask_decoder_mode)
 
         # Set models to training mode

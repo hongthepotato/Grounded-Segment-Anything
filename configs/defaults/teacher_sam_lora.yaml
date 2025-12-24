@@ -5,7 +5,7 @@
 # Model configuration
 model:
   name: "sam"
-  base_checkpoint: "data/models/pretrained/sam_vit_h_4b8939.pth"
+  base_checkpoint: "data/models/pretrained/sam_hq_vit_h.pth"
   model_type: "vit_h"     # Options: vit_h, vit_l, vit_b
 
 # CRITICAL: SAM architecture has different attention layer names:

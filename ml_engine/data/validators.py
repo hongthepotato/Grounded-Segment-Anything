@@ -728,10 +728,6 @@ def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
                         img_info['height'],
                         img_info['width']
                     )
-
-                    # If bbox area is significantly larger than mask area,
-                    # likely multiple disconnected objects in one annotation
-                    # Threshold: bbox area > 2.5x mask area
                     if mask_area > 0 and bbox_area > mask_area * 2.5:
                         results['suspicious_bboxes'] += 1
                 except Exception:
