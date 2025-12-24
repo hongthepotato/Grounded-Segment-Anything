@@ -525,6 +525,10 @@ def create_dataloader(
     """
     Create a DataLoader with appropriate settings.
     
+    CRITICAL: Uses 'spawn' multiprocessing context to ensure worker processes
+    correctly inherit CUDA_VISIBLE_DEVICES. With 'fork' (default on Linux),
+    workers inherit the parent's CUDA context, which causes GPU conflicts.
+    
     Args:
         dataset: PyTorch Dataset instance
         batch_size: Batch size
@@ -535,11 +539,18 @@ def create_dataloader(
     Returns:
         DataLoader instance
     """
+    import torch.multiprocessing as mp
+    
+    # Use 'spawn' to ensure clean CUDA context in workers
+    # This is critical when CUDA_VISIBLE_DEVICES is set programmatically
+    mp_context = mp.get_context('spawn') if num_workers > 0 else None
+    
     return torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        collate_fn=collate_fn
+        collate_fn=collate_fn,
+        multiprocessing_context=mp_context  # Use spawn, not fork
     )
