@@ -462,6 +462,7 @@ def compute_bbox_from_mask(segmentation: Any, height: int, width: int) -> List[f
     
     Args:
         segmentation: Polygon list or RLE dict (compressed or uncompressed)
+                     If already compressed RLE (bytes), no conversion needed.
         height: Image height (used to clip/validate bbox)
         width: Image width (used to clip/validate bbox)
     
@@ -477,9 +478,18 @@ def compute_bbox_from_mask(segmentation: Any, height: int, width: int) -> List[f
         >>> # RLE format (compressed or uncompressed)
         >>> seg = {'counts': [...], 'size': [480, 640]}
         >>> bbox = compute_bbox_from_mask(seg, height=480, width=640)
+        
+        >>> # Already compressed RLE (most efficient)
+        >>> seg = {'counts': b'...', 'size': [480, 640]}
+        >>> bbox = compute_bbox_from_mask(seg, height=480, width=640)
     """
-    # Normalize to compressed RLE, then decode to binary mask
-    rle = _normalize_to_rle(segmentation, height, width)
+    # If already compressed RLE, use directly
+    if isinstance(segmentation, dict) and isinstance(segmentation.get('counts'), bytes):
+        rle = segmentation
+    else:
+        rle = _normalize_to_rle(segmentation, height, width)
+
+    # Decode to binary mask
     mask = mask_utils.decode(rle)
 
     # Find bounding box from binary mask
@@ -513,6 +523,7 @@ def compute_area_from_mask(segmentation: Any, height: int, width: int) -> float:
     
     Args:
         segmentation: Polygon list or RLE dict (compressed or uncompressed)
+                     If already compressed RLE (bytes), no conversion needed.
         height: Image height (used to compute area)
         width: Image width (used to compute area)
     
@@ -522,34 +533,50 @@ def compute_area_from_mask(segmentation: Any, height: int, width: int) -> float:
     Example:
         >>> seg = [[x1,y1,x2,y2,x3,y3,x4,y4]]
         >>> area = compute_area_from_mask(seg, height=480, width=640)
+        
+        >>> # Already compressed RLE (most efficient)
+        >>> seg = {'counts': b'...', 'size': [480, 640]}
+        >>> area = compute_area_from_mask(seg, height=480, width=640)
     """
-    # Normalize to compressed RLE, then compute area
-    rle = _normalize_to_rle(segmentation, height, width)
+    # If already compressed RLE, use directly
+    if isinstance(segmentation, dict) and isinstance(segmentation.get('counts'), bytes):
+        rle = segmentation
+    else:
+        rle = _normalize_to_rle(segmentation, height, width)
+
     return float(mask_utils.area(rle))
 
 
-def preprocess_coco_dataset(coco_data: Dict[str, Any], in_place: bool = True) -> Dict[str, Any]:
+def normalize_coco_annotations(coco_data: Dict[str, Any], in_place: bool = True) -> Dict[str, Any]:
     """
-    Auto-generate missing bbox and area fields from segmentation masks.
+    Normalize COCO annotations to canonical form.
     
-    This runs during dataset validation (python cli/validate_dataset.py).
-    Frontend annotation tools don't need to compute boxes - the platform
-    handles this automatically.
+    This is the CANONICAL FORM function that ensures all annotations are in a
+    consistent, normalized state after loading. It performs:
     
-    CRITICAL: Each mask annotation generates ONE tight bounding box.
-    Multiple disconnected objects should be separate annotations.
+    1. Auto-generate missing bbox from segmentation masks
+    2. Auto-compute missing area from masks or bboxes
+    3. Normalize all segmentation formats to compressed RLE
+    
+    After this function, ALL segmentations are guaranteed to be in compressed RLE
+    format: {'counts': b'...', 'size': [h, w]}. This eliminates format handling
+    complexity in downstream consumers (loaders, preprocessors, etc.).
     
     Args:
         coco_data: COCO format dictionary
         in_place: Whether to modify coco_data in place (default: True)
     
     Returns:
-        Preprocessed COCO data (same reference if in_place=True)
+        Normalized COCO data with:
+        - All annotations have valid bbox [x, y, w, h]
+        - All annotations have valid area (float)
+        - All segmentations are compressed RLE format
     
     Example:
         >>> coco_data = load_json('annotations.json')
-        >>> coco_data = preprocess_coco_dataset(coco_data)
-        >>> # Now all annotations have bbox and area fields
+        >>> coco_data = normalize_coco_annotations(coco_data)
+        >>> # Now all annotations are in canonical form
+        >>> # Segmentations are all compressed RLE (bytes counts)
     """
     if not in_place:
         coco_data = copy.deepcopy(coco_data)
@@ -560,6 +587,7 @@ def preprocess_coco_dataset(coco_data: Dict[str, Any], in_place: bool = True) ->
     annotations = coco_data['annotations']
     bbox_generated = 0
     area_generated = 0
+    seg_normalized = 0
 
     for ann in annotations:
         image_id = ann['image_id']
@@ -572,21 +600,34 @@ def preprocess_coco_dataset(coco_data: Dict[str, Any], in_place: bool = True) ->
         height = img_info.get('height')
         width = img_info.get('width')
 
-        # Auto-generate bbox from segmentation if missing
-        # Check: (1) segmentation exists, (2) is valid (not None/empty), (3) bbox missing or invalid
-        has_valid_seg = has_valid_list_field(ann, 'segmentation')
-        has_valid_bbox = has_valid_list_field(ann, 'bbox')
+        # Check for valid segmentation (polygon list or RLE dict)
+        seg = ann.get('segmentation')
+        has_valid_seg = seg is not None and seg != [] and isinstance(seg, (list, dict))
 
+        # STEP 1: Normalize segmentation to compressed RLE FIRST
+        # This avoids duplicate normalization in bbox/area computation
+        if has_valid_seg:
+            # Check if already compressed RLE (bytes counts)
+            if isinstance(seg, dict) and isinstance(seg.get('counts'), bytes):
+                pass
+            else:
+                seg = _normalize_to_rle(seg, height, width)
+                ann['segmentation'] = seg
+                seg_normalized += 1
+                logger.debug("Normalized segmentation for annotation %s", ann['id'])
+
+        # STEP 2: Generate bbox from normalized segmentation (no duplicate normalization)
+        has_valid_bbox = has_valid_list_field(ann, 'bbox')
         if has_valid_seg and not has_valid_bbox:
-            bbox = compute_bbox_from_mask(ann['segmentation'], height, width)
+            bbox = compute_bbox_from_mask(seg, height, width)
             ann['bbox'] = bbox
             bbox_generated += 1
             logger.debug("Generated bbox for annotation %s", ann['id'])
 
+        # STEP 3: Generate area from normalized segmentation
         has_valid_area = has_valid_numeric_field(ann, 'area', 0)
-
         if has_valid_seg and not has_valid_area:
-            area = compute_area_from_mask(ann['segmentation'], height, width)
+            area = compute_area_from_mask(seg, height, width)
             ann['area'] = area
             area_generated += 1
             logger.debug("Generated area for annotation %s", ann['id'])
@@ -598,12 +639,12 @@ def preprocess_coco_dataset(coco_data: Dict[str, Any], in_place: bool = True) ->
             area_generated += 1
 
     if bbox_generated > 0:
-        logger.info(" Auto-generated %d bounding boxes from masks", bbox_generated)
+        logger.info("  Auto-generated %d bounding boxes from masks", bbox_generated)
     if area_generated > 0:
-        logger.info(" Auto-computed %d areas", area_generated)
-
+        logger.info("  Auto-computed %d areas", area_generated)
+    if seg_normalized > 0:
+        logger.info("  Normalized %d segmentations to compressed RLE", seg_normalized)
     return coco_data
-
 
 def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
     """

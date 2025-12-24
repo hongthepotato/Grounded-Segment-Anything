@@ -11,7 +11,7 @@ from .validators import (
     validate_coco_format,
     compute_bbox_from_mask,
     compute_area_from_mask,
-    preprocess_coco_dataset,
+    normalize_coco_annotations,
     check_data_quality,
     split_dataset
 )
@@ -42,7 +42,7 @@ __all__ = [
     'validate_coco_format',
     'compute_bbox_from_mask',
     'compute_area_from_mask',
-    'preprocess_coco_dataset',
+    'normalize_coco_annotations',
     'check_data_quality',
     'split_dataset',
     # Loading
@@ -60,4 +60,3 @@ __all__ = [
     'YOLOPreprocessor',
     'create_preprocessor_from_models'
 ]
-
