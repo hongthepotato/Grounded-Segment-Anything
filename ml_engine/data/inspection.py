@@ -47,13 +47,13 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
 
     has_boxes = any(
         'bbox' in ann and 
-        ann['bbox'] is not None and 
+        ann['bbox'] is not None and
         ann['bbox'] != []
         for ann in annotations
     )
     has_masks = any(
         'segmentation' in ann and 
-        ann['segmentation'] is not None and 
+        ann['segmentation'] is not None and
         ann['segmentation'] != []
         for ann in annotations
     )
@@ -101,6 +101,88 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
         'class_counts': class_counts
     }
 
+
+def detect_annotation_mode(coco_data: Dict[str, Any]) -> str:
+    """
+    Detect original annotation mode BEFORE normalization.
+    
+    This function captures the ORIGINAL user intent - what type of annotations
+    were provided. It is used for MODEL SELECTION (which teachers to load).
+    
+    IMPORTANT: Call this BEFORE normalize_coco_annotations() to capture
+    the original state. After normalization, boxes may be auto-generated
+    from masks, which would change the detected mode.
+    
+    Args:
+        coco_data: COCO format dictionary (before normalization)
+    
+    Returns:
+        str: One of 'detection', 'segmentation', or 'combined'
+        - 'detection': Only bounding boxes provided
+        - 'segmentation': Only segmentation masks provided  
+        - 'combined': Both boxes and masks provided
+    
+    Raises:
+        ValueError: If no valid annotations found
+    
+    Example:
+        >>> mode = detect_annotation_mode(coco_data)
+        >>> if mode == 'segmentation':
+        >>>     # User provided masks only, load SAM
+        >>>     models = ['sam']
+    """
+    annotations = coco_data.get('annotations', [])
+
+    has_boxes = any(
+        'bbox' in ann and ann['bbox'] is not None and ann['bbox'] != []
+        for ann in annotations
+    )
+    has_masks = any(
+        'segmentation' in ann and ann['segmentation'] is not None and ann['segmentation'] != []
+        for ann in annotations
+    )
+
+    if has_boxes and has_masks:
+        return 'combined'
+    if has_boxes:
+        return 'detection'
+    if has_masks:
+        return 'segmentation'
+    raise ValueError("No valid annotations found in dataset")
+
+
+def get_required_models_from_mode(annotation_mode: str) -> List[str]:
+    """
+    Determine which models to load based on ORIGINAL annotation mode.
+    
+    This function maps the annotation mode to the required teacher models.
+    It should be used with the mode returned by detect_annotation_mode().
+    
+    Args:
+        annotation_mode: One of 'detection', 'segmentation', or 'combined'
+    
+    Returns:
+        List of model names to load:
+        - 'detection' -> ['grounding_dino']
+        - 'segmentation' -> ['sam']
+        - 'combined' -> ['grounding_dino', 'sam']
+    
+    Raises:
+        ValueError: If unknown annotation mode
+    
+    Example:
+        >>> mode = detect_annotation_mode(coco_data)
+        >>> models = get_required_models_from_mode(mode)
+        >>> for model_name in models:
+        >>>     load_model(model_name)
+    """
+    if annotation_mode == 'combined':
+        return ['grounding_dino', 'sam']
+    if annotation_mode == 'detection':
+        return ['grounding_dino']
+    if annotation_mode == 'segmentation':
+        return ['sam']
+    raise ValueError(f"Unknown annotation mode: {annotation_mode}")
 
 def load_and_inspect_dataset(json_path: str) -> Dict[str, Any]:
     """

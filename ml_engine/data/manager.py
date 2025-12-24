@@ -19,10 +19,14 @@ from typing import Dict, Any, Optional, List
 
 from core.config import load_json, save_json
 from core.constants import transform_image_path
-from ml_engine.data.inspection import inspect_dataset, get_required_models
+from ml_engine.data.inspection import (
+    inspect_dataset,
+    detect_annotation_mode,
+    get_required_models_from_mode
+)
 from ml_engine.data.validators import (
     validate_coco_format,
-    preprocess_coco_dataset,
+    normalize_coco_annotations,
     split_dataset,
     check_data_quality
 )
@@ -72,18 +76,23 @@ class DataManager:
         self,
         data_path: str,
         image_paths: List[str],
-        split_config: Optional[Dict[str, float]] = None,
-        auto_preprocess: bool = True
+        split_config: Optional[Dict[str, float]] = None
     ):
         """
         Initialize DataManager - loads and processes data once.
+        
+        Data is always normalized to canonical form during initialization:
+        - Original annotation mode is captured FIRST (for model selection)
+        - Data is then normalized (bboxes generated from masks if missing)
+        - Inspection happens on normalized data (for data loading decisions)
+        
+        This ensures no temporal coupling between mode detection and data state.
         
         Args:
             data_path: Path to COCO JSON file
             image_paths: List of image paths from frontend (with /profile/ prefix)
             split_config: Optional split ratios, e.g., {'train': 0.7, 'val': 0.2, 'test': 0.1}
                          If None, uses all data as single split
-            auto_preprocess: Whether to auto-generate missing bbox/area from masks
         """
         self.data_path = Path(data_path)
         self.split_config = split_config
@@ -100,11 +109,9 @@ class DataManager:
         self.image_path_map = self._build_image_path_map(image_paths)
         logger.info("  Image path map built with %d entries", len(self.image_path_map))
 
-        # Step 1: Load JSON
         logger.info("Loading dataset: %s", self.data_path)
         self.raw_data = load_json(str(self.data_path))
 
-        # Step 2: Validate COCO format
         logger.info("Validating COCO format...")
         is_valid, errors = validate_coco_format(self.raw_data)
         if not is_valid:
@@ -114,23 +121,24 @@ class DataManager:
             raise ValueError(f"Invalid COCO format: {len(errors)} errors found")
         logger.info(" Dataset format is valid")
 
-        # Step 3: Inspect dataset FIRST (before preprocessing)
-        # This captures the ORIGINAL annotation intent (what user provided)
+        # Detect original annotation mode BEFORE normalization
+        self.original_annotation_mode = detect_annotation_mode(self.raw_data)
+        logger.info(" Original annotation mode: %s", self.original_annotation_mode)
+
+        # This generates bboxes from masks if missing, ensuring canonical form
+        logger.info("Normalizing annotations...")
+        self.raw_data = normalize_coco_annotations(self.raw_data, in_place=True)
+        logger.info(" Normalization complete")
+
+        # Now has_boxes/has_masks reflect actual data state (for DATA LOADING)
         self.dataset_info = inspect_dataset(self.raw_data)
         logger.info(" Dataset inspection complete:")
-        logger.info("  - Annotation mode: %s", self.dataset_info['annotation_mode'])
         logger.info("  - Has boxes: %s", self.dataset_info['has_boxes'])
         logger.info("  - Has masks: %s", self.dataset_info['has_masks'])
         logger.info("  - Num classes: %d", self.dataset_info['num_classes'])
         logger.info("  - Classes: %s", list(self.dataset_info['class_mapping'].values()))
 
-        # Step 4: Auto-preprocess (generate bbox from masks, etc.)
-        if auto_preprocess:
-            logger.info("Auto-preprocessing dataset...")
-            self.raw_data = preprocess_coco_dataset(self.raw_data, in_place=True)
-            logger.info(" Auto-preprocessing complete")
-
-        # Step 5: Quality check
+        # Step 6: Quality check
         logger.info("Checking data quality...")
         self.quality_report = check_data_quality(self.raw_data)
 
@@ -144,7 +152,7 @@ class DataManager:
         else:
             logger.info("  No data quality issues found")
 
-        # Step 6: Split dataset (if configured)
+        # Step 7: Split dataset (if configured)
         if split_config:
             logger.info("Splitting dataset: %s", split_config)
             self.splits = split_dataset(
@@ -183,10 +191,7 @@ class DataManager:
         """
         path_map = {}
         for path in image_paths:
-            # Transform to actual filesystem path
-            # upload/... -> /srv/shared/images/upload/...
             actual_path = transform_image_path(path)
-            # Use path directly as the key (matches COCO file_name format)
             file_name = path
             path_map[file_name] = actual_path
         return path_map
@@ -258,14 +263,19 @@ class DataManager:
 
     def get_required_models(self) -> List[str]:
         """
-        Get list of required models based on dataset annotations.
+        Get list of required models based on ORIGINAL annotation mode.
         
-        Data-driven: Determines which models to load based on available annotations.
+        This uses the annotation mode captured BEFORE normalization to determine
+        which teacher models should be loaded. This ensures model selection
+        reflects user intent, not auto-generated data.
         
         Returns:
             List of model names, e.g., ['grounding_dino', 'sam']
+            - 'detection' mode -> ['grounding_dino']
+            - 'segmentation' mode -> ['sam']
+            - 'combined' mode -> ['grounding_dino', 'sam']
         """
-        return get_required_models(self.dataset_info)
+        return get_required_models_from_mode(self.original_annotation_mode)
 
     def get_quality_report(self) -> Dict[str, Any]:
         """
@@ -292,7 +302,7 @@ class DataManager:
         if split_name not in self.splits:
             available = list(self.splits.keys())
             raise ValueError(f"Split '{split_name}' not found. Available: {available}")
-        
+
         return self.splits[split_name]
 
     def save_splits(self, output_dir: str) -> None:
@@ -313,12 +323,12 @@ class DataManager:
         """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
-        
+
         for split_name, split_data in self.splits.items():
             output_file = output_path / f'{split_name}.json'
             save_json(split_data, str(output_file))
             logger.info("Saved %s split to: %s", split_name, output_file)
-    
+
     def __repr__(self) -> str:
         """String representation of DataManager."""
         splits_info = ', '.join([f"{k}: {len(v['images'])}" for k, v in self.splits.items()])
