@@ -235,11 +235,11 @@ class TestModelLoading(unittest.TestCase):
         self.assertIsNotNone(model)
     
     def test_load_sam_placeholder(self):
-        """Test loading SAM (placeholder)."""
-        from ml_engine.models.teacher.sam_lora import SAMLoRA
+        """Test loading SAM-HQ (placeholder)."""
+        from ml_engine.models.teacher.sam_lora import SAMHQLoRA
         
         # This will use placeholder since actual model may not be available
-        model = SAMLoRA(
+        model = SAMHQLoRA(
             base_checkpoint='dummy.pth',  # Will use placeholder
             model_type='vit_h',
             lora_config={'r': 4, 'lora_alpha': 8, 'target_modules': ['q_proj']}

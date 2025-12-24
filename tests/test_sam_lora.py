@@ -2,7 +2,7 @@
 Integration tests for SAM LoRA fine-tuning pipeline.
 
 Tests:
-1. SAMLoRA model instantiation with LoRA adapters
+1. SAMHQLoRA model instantiation with LoRA adapters
 2. Forward pass with proper 3-stage pipeline
 3. Gradient flow through LoRA adapters
 4. SegmentationLoss compatibility
@@ -201,7 +201,7 @@ def mock_sam():
     return MockSAM()
 
 
-class TestSAMLoRAConfig:
+class TestSAMHQLoRAConfig:
     """Test LoRA configuration for SAM."""
     
     def test_lora_target_modules_format(self):
@@ -222,18 +222,18 @@ class TestSAMLoRAConfig:
         assert 'out_proj' in target_modules
 
 
-class TestSAMLoRAForwardPass:
-    """Test SAMLoRA forward pass implementation."""
+class TestSAMHQLoRAForwardPass:
+    """Test SAMHQLoRA forward pass implementation."""
     
     def test_forward_returns_expected_keys(self, mock_sam):
         """Test that forward returns expected output keys."""
-        from ml_engine.models.teacher.sam_lora import SAMLoRA
+        from ml_engine.models.teacher.sam_lora import SAMHQLoRA
         
         # Patch the model loading to use our mock
-        with patch.object(SAMLoRA, '_load_base_model', return_value=mock_sam):
-            with patch.object(SAMLoRA, '_apply_training_modes'):
+        with patch.object(SAMHQLoRA, '_load_base_model', return_value=mock_sam):
+            with patch.object(SAMHQLoRA, '_apply_training_modes'):
                 with patch('ml_engine.training.peft_utils.verify_freezing'):
-                    model = SAMLoRA(
+                    model = SAMHQLoRA(
                         base_checkpoint='dummy.pth',
                         model_type='vit_h',
                         lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj', 'k_proj']}
@@ -258,12 +258,12 @@ class TestSAMLoRAForwardPass:
     
     def test_forward_with_multimask_output(self, mock_sam):
         """Test forward with multimask_output=True."""
-        from ml_engine.models.teacher.sam_lora import SAMLoRA
+        from ml_engine.models.teacher.sam_lora import SAMHQLoRA
         
-        with patch.object(SAMLoRA, '_load_base_model', return_value=mock_sam):
-            with patch.object(SAMLoRA, '_apply_training_modes'):
+        with patch.object(SAMHQLoRA, '_load_base_model', return_value=mock_sam):
+            with patch.object(SAMHQLoRA, '_apply_training_modes'):
                 with patch('ml_engine.training.peft_utils.verify_freezing'):
-                    model = SAMLoRA(
+                    model = SAMHQLoRA(
                         base_checkpoint='dummy.pth',
                         model_type='vit_h',
                         lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj']}
@@ -282,17 +282,17 @@ class TestSAMLoRAForwardPass:
 
 
 class TestSegmentationLossCompatibility:
-    """Test that SAMLoRA outputs are compatible with SegmentationLoss."""
+    """Test that SAMHQLoRA outputs are compatible with SegmentationLoss."""
     
     def test_loss_with_sam_output_format(self):
-        """Test SegmentationLoss with SAMLoRA output format."""
+        """Test SegmentationLoss with SAMHQLoRA output format."""
         from ml_engine.training.losses import SegmentationLoss
         
         batch_size = 2
         num_objects = 3
         H, W = 1024, 1024
         
-        # Mock SAMLoRA output
+        # Mock SAMHQLoRA output
         predictions = {
             'pred_masks': torch.randn(batch_size, num_objects, H, W),
             'iou_predictions': torch.rand(batch_size, num_objects)
@@ -351,13 +351,13 @@ class TestGradientFlow:
     
     def test_gradients_flow_through_mask_decoder(self, mock_sam):
         """Test that gradients flow through mask decoder during training."""
-        from ml_engine.models.teacher.sam_lora import SAMLoRA
+        from ml_engine.models.teacher.sam_lora import SAMHQLoRA
         from ml_engine.training.losses import SegmentationLoss
         
-        with patch.object(SAMLoRA, '_load_base_model', return_value=mock_sam):
-            with patch.object(SAMLoRA, '_apply_training_modes'):
+        with patch.object(SAMHQLoRA, '_load_base_model', return_value=mock_sam):
+            with patch.object(SAMHQLoRA, '_apply_training_modes'):
                 with patch('ml_engine.training.peft_utils.verify_freezing'):
-                    model = SAMLoRA(
+                    model = SAMHQLoRA(
                         base_checkpoint='dummy.pth',
                         model_type='vit_h',
                         lora_config={'r': 8, 'lora_alpha': 16, 'target_modules': ['q_proj']}
