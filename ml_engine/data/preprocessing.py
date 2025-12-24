@@ -181,7 +181,10 @@ class SAMPreprocessor(BaseModelPreprocessor):
         boxes: np.ndarray,
         metadata: Dict[str, Any]
     ) -> np.ndarray:
-        """Use SAM's official apply_boxes method."""
+        """Use SAM's official apply_boxes method.
+        
+        Returns boxes in xyxy format as expected by SAM's prompt encoder.
+        """
         if len(boxes) == 0:
             return np.zeros((0, 4), dtype=np.float32)
 
@@ -190,20 +193,14 @@ class SAMPreprocessor(BaseModelPreprocessor):
         boxes_xyxy[:, 2] = boxes[:, 0] + boxes[:, 2]  # x2 = x + w
         boxes_xyxy[:, 3] = boxes[:, 1] + boxes[:, 3]  # y2 = y + h
 
-        # Use SAM's official transformation!
         sam_transformer = metadata['sam_transformer']
         orig_h, orig_w = metadata['original_size']  # (H, W)
         transformed_xyxy = sam_transformer.apply_boxes(
-            boxes_xyxy, 
+            boxes_xyxy,
             original_size=(orig_h, orig_w)
         )
 
-        # Convert back to COCO format
-        transformed_coco = transformed_xyxy.copy()
-        transformed_coco[:, 2] = transformed_xyxy[:, 2] - transformed_xyxy[:, 0]  # w
-        transformed_coco[:, 3] = transformed_xyxy[:, 3] - transformed_xyxy[:, 1]  # h
-
-        return transformed_coco.astype(np.float32)
+        return transformed_xyxy.astype(np.float32)
 
     def transform_masks(
         self,
