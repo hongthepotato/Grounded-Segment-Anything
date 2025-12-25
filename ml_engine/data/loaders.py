@@ -7,6 +7,7 @@ datasets with support for multiple model types (Grounding DINO, SAM, YOLO).
 
 from typing import Dict, List, Any, Callable
 from pathlib import Path
+import random
 import torch
 from torch.utils.data import Dataset
 from PIL import Image
@@ -219,7 +220,8 @@ class TeacherDataset(COCODataset):
         preprocessor: MultiModelPreprocessor=None,
         augmentation_pipeline: ConfigurableAugmentationPipeline=None,
         return_boxes: bool = True,
-        return_masks: bool = True
+        return_masks: bool = True,
+        sam_single_object_sampling: bool = False
     ):
         super().__init__(
             coco_data=coco_data,
@@ -230,6 +232,7 @@ class TeacherDataset(COCODataset):
 
         self.preprocessor = preprocessor
         self.augmentation_pipeline = augmentation_pipeline
+        self.sam_single_object_sampling = sam_single_object_sampling
         # class_names inherited from parent (self.class_names)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
@@ -286,13 +289,30 @@ class TeacherDataset(COCODataset):
         for model_name, (image_tensor, metadata) in preprocessed_dict.items():
             model_preprocessor = self.preprocessor.get_preprocessor(model_name)
 
-            if self.return_boxes and boxes_np is not None and len(boxes_np) > 0:
-                model_boxes = model_preprocessor.transform_boxes(boxes_np, metadata)
+            # Determine which annotations to use for this model
+            if model_name == 'sam' and self.sam_single_object_sampling:
+                # SAM single object sampling: pick 1 random object
+                # This follows original SAM-HQ training strategy for memory efficiency
+                if masks_np is not None and len(masks_np) > 0:
+                    idx = random.randint(0, len(masks_np) - 1)
+                    use_boxes = boxes_np[idx:idx+1] if boxes_np is not None else None
+                    use_masks = masks_np[idx:idx+1]
+                    use_labels = [sample_labels[idx]] if sample_labels else []
+                else:
+                    use_boxes, use_masks, use_labels = None, None, []
+            else:
+                # Default: use all objects (DINO and SAM without sampling)
+                use_boxes = boxes_np
+                use_masks = masks_np
+                use_labels = sample_labels
+
+            if self.return_boxes and use_boxes is not None and len(use_boxes) > 0:
+                model_boxes = model_preprocessor.transform_boxes(use_boxes, metadata)
             else:
                 model_boxes = np.zeros((0, 4), dtype=np.float32)
 
-            if self.return_masks and masks_np is not None and len(masks_np) > 0:
-                model_masks = model_preprocessor.transform_masks(masks_np, metadata)
+            if self.return_masks and use_masks is not None and len(use_masks) > 0:
+                model_masks = model_preprocessor.transform_masks(use_masks, metadata)
             else:
                 h, w = metadata['final_size']
                 model_masks = np.zeros((0, h, w), dtype=np.float32)
@@ -302,7 +322,7 @@ class TeacherDataset(COCODataset):
                 'image': image_tensor,
                 'boxes': model_boxes,
                 'masks': model_masks,
-                'labels': np.array(sample_labels, dtype=np.int64),
+                'labels': np.array(use_labels, dtype=np.int64),
                 'metadata': metadata
             }
 
@@ -404,8 +424,9 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
                     masks_tensor = torch.cat([masks_tensor, padding], dim=0)
             else:
                 # Default size based on model
+                # SAM uses 256x256 (native decoder output resolution for training)
                 if model_name == 'sam':
-                    masks_tensor = torch.zeros((max_objs, 1024, 1024), dtype=torch.float32)
+                    masks_tensor = torch.zeros((max_objs, 256, 256), dtype=torch.float32)
                 else:
                     # For DINO or others, use a reasonable default
                     masks_tensor = torch.zeros((max_objs, 256, 256), dtype=torch.float32)

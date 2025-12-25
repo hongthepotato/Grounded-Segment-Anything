@@ -225,10 +225,13 @@ class SAMHQLoRA(nn.Module):
         """Get the mask decoder (has LoRA adapters)."""
         return self._get_base_model().mask_decoder
 
-    @torch.no_grad()
     def _encode_images(self, images: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """
-        Encode images using the frozen image encoder.
+        Encode images using the image encoder.
+        
+        Note: Gradient flow is controlled by the caller based on image_encoder_mode.
+        If mode='frozen', caller wraps with torch.no_grad().
+        If mode='lora' or 'full', gradients flow through.
         
         Args:
             images: Input images [B, 3, H, W], already preprocessed (normalized, padded)
@@ -283,8 +286,7 @@ class SAMHQLoRA(nn.Module):
         box_prompts: Optional[torch.Tensor] = None,
         point_prompts: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         multimask_output: bool = False,
-        return_features: bool = False,
-        return_low_res: bool = False
+        return_features: bool = False
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass with SAM-HQ 3-stage pipeline.
@@ -300,13 +302,11 @@ class SAMHQLoRA(nn.Module):
             point_prompts: Tuple of (points [B, N, P, 2], labels [B, N, P])
             multimask_output: Whether to output multiple masks per prompt
             return_features: Whether to return intermediate features
-            return_low_res: Whether to return low-res masks (256x256)
         
         Returns:
             Dict with:
-                - pred_masks: [B, N, H, W] predicted masks (upscaled to input size)
+                - pred_masks: [B, N, 256, 256] predicted masks
                 - iou_predictions: [B, N] IoU quality predictions
-                - low_res_masks: [B, N, 256, 256] optional low-res logits
                 - features: [B, 256, 64, 64] optional image features
         
         Note:
@@ -314,6 +314,7 @@ class SAMHQLoRA(nn.Module):
             - Box coordinates should be in the preprocessed image space
             - For training, use multimask_output=False (single best mask)
             - SAM-HQ processes prompts individually due to interm_embeddings constraints
+            - Use upscale_masks() to upscale to full resolution for inference
         """
         batch_size = images.shape[0]
 
@@ -321,11 +322,17 @@ class SAMHQLoRA(nn.Module):
         mask_decoder = self._get_mask_decoder()
         prompt_encoder = self._get_prompt_encoder()
 
-        # === Stage 1: Image Encoding (frozen, no gradients needed) ===
-        with torch.no_grad():
-            # SAM-HQ returns (features, interm_embeddings)
-            # interm_embeddings: 4 intermediate ViT features for high-quality masks
-            image_embeddings, interm_embeddings = self._encode_images(images)  # [B, 256, 64, 64]
+        # === Stage 1: Image Encoding ===
+        # Gradient flow depends on image_encoder_mode:
+        # - "frozen": no gradients (wrapped in no_grad)
+        # - "lora" or "full": gradients flow through
+        encoder_mode = self.component_modes.get('image_encoder', 'frozen')
+        if encoder_mode == 'frozen':
+            with torch.no_grad():
+                image_embeddings, interm_embeddings = self._encode_images(images)
+        else:
+            # "lora" or "full" - allow gradients
+            image_embeddings, interm_embeddings = self._encode_images(images)
 
         # Get positional encoding for dense features
         image_pe = prompt_encoder.get_dense_pe()  # [1, 256, 64, 64]
@@ -337,7 +344,6 @@ class SAMHQLoRA(nn.Module):
         # Allocate output tensors
         all_masks = []
         all_iou_predictions = []
-        all_low_res_masks = []
 
         # === Stage 2 & 3: Process each image in batch ===
         for b in range(batch_size):
@@ -409,45 +415,32 @@ class SAMHQLoRA(nn.Module):
                 best_masks = low_res_masks[:, 0:1, :, :]  # [N, 1, 256, 256]
                 best_iou = iou_predictions[:, 0:1]  # [N, 1]
 
-            # Upscale masks to input resolution (1024x1024)
-            input_size = images.shape[-2:]  # (1024, 1024)
-            upscaled_masks = torch.nn.functional.interpolate(
-                best_masks,
-                size=input_size,
-                mode='bilinear',
-                align_corners=False
-            )  # [N, 1, 1024, 1024] or [N, 3, 1024, 1024]
-
-            # Store results
-            all_masks.append(upscaled_masks)
+            # Use upscale_masks() post-processing for inference if full resolution needed
+            all_masks.append(best_masks)
             all_iou_predictions.append(best_iou)
-            if return_low_res:
-                all_low_res_masks.append(best_masks)
-
-        # Stack results across batch
-        # all_masks: list of [N, num_masks, H, W] tensors
-        # Need to pad to max_objects if different images have different valid counts
 
         # For now, assume all images have same number of prompts (padded in dataloader)
-        pred_masks = torch.stack(all_masks, dim=0)  # [B, N, num_masks, H, W]
+        pred_masks = torch.stack(all_masks, dim=0)  # [B, N, num_masks, 256, 256]
         iou_predictions = torch.stack(all_iou_predictions, dim=0)  # [B, N, num_masks]
 
         # Squeeze mask dimension if single mask output
         if not multimask_output:
-            pred_masks = pred_masks.squeeze(2)  # [B, N, H, W]
+            pred_masks = pred_masks.squeeze(2)  # [B, N, 256, 256]
             iou_predictions = iou_predictions.squeeze(2)  # [B, N]
 
-        # Build output dict
+        if log_memory:
+            mem_after_decode = _get_memory_mb()
+            logger.info(f"  After mask_decode: {mem_after_decode:.1f} MB (+{mem_after_decode-mem_start:.1f})")
+            logger.info(f"  pred_masks.requires_grad: {pred_masks.requires_grad}")
+            logger.info(f"  pred_masks.grad_fn: {pred_masks.grad_fn}")
+            logger.info(f"  num_prompts processed: {num_prompts}, batch_size: {batch_size}")
+
+        # Note: pred_masks are at native 256x256 resolution
+        # Use upscale_masks() for inference if full resolution needed
         outputs = {
             'pred_masks': pred_masks,
             'iou_predictions': iou_predictions
         }
-
-        if return_low_res:
-            low_res_masks = torch.stack(all_low_res_masks, dim=0)
-            if not multimask_output:
-                low_res_masks = low_res_masks.squeeze(2)
-            outputs['low_res_masks'] = low_res_masks
 
         if return_features:
             outputs['features'] = image_embeddings
@@ -457,6 +450,37 @@ class SAMHQLoRA(nn.Module):
     def get_trainable_parameters(self) -> List[nn.Parameter]:
         """Get list of trainable parameters (LoRA adapters only)."""
         return [p for p in self.model.parameters() if p.requires_grad]
+
+    @staticmethod
+    def upscale_masks(
+        masks: torch.Tensor,
+        target_size: Tuple[int, int]
+    ) -> torch.Tensor:
+        """
+        Upscale masks from native 256x256 to target resolution.
+        
+        This is a post-processing utility for inference. The forward() method
+        returns masks at native decoder resolution (256x256) for memory efficiency.
+        Use this method to upscale to full resolution for visualization or output.
+        
+        Args:
+            masks: Predicted masks [B, N, 256, 256] or [B, N, num_masks, 256, 256]
+            target_size: Target (height, width), e.g., (1024, 1024) or original image size
+        
+        Returns:
+            Upscaled masks at target resolution
+        
+        Example:
+            >>> outputs = model(images, box_prompts=boxes)
+            >>> pred_masks_256 = outputs['pred_masks']  # [B, N, 256, 256]
+            >>> pred_masks_full = SAMHQLoRA.upscale_masks(pred_masks_256, (1024, 1024))
+        """
+        return torch.nn.functional.interpolate(
+            masks,
+            size=target_size,
+            mode='bilinear',
+            align_corners=False
+        )
 
     def save_lora_adapters(self, output_dir: str):
         """Save only LoRA adapters."""

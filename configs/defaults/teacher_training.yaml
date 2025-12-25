@@ -6,7 +6,7 @@
 
 # Training hyperparameters (shared across all teacher models)
 training:
-  batch_size: 1              # Reduced for SAM-HQ (interm_embeddings are memory-intensive)
+  batch_size: 4              # Reduced for SAM-HQ (interm_embeddings are memory-intensive)
   epochs: 5                 # Same training loop
   num_workers: 4             # Same dataloader workers
   
