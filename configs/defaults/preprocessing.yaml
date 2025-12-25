@@ -21,6 +21,7 @@ preprocessing:
     input_size:
       height: 1024          # SAM requires square input
       width: 1024
+    mask_output_size: 256   # Native decoder output resolution for training
     normalization:
       mean: [123.675, 116.28, 103.53]   # NOT ImageNet! Pixel-range values
       std: [58.395, 57.12, 57.375]       # Different from ImageNet!
