@@ -2,6 +2,12 @@
 # This config contains ONLY SAM-specific settings.
 # Shared training params are in teacher_training.yaml
 
+# Training strategy
+training:
+  # Enable SAM-HQ style training: 1 random object per image
+  # This significantly reduces memory usage and matches original SAM-HQ training
+  single_object_sampling: true
+
 # Model configuration
 model:
   name: "sam"
@@ -27,7 +33,7 @@ lora:
 #   - frozen: No training, all parameters frozen
 #   - lora: LoRA adapters trainable, base weights frozen (requires target_modules match)
 #   - full: All parameters trainable (full fine-tuning)
-image_encoder_mode: "lora"     # LoRA on ViT backbone (~1.5M trainable)
+image_encoder_mode: "frozen"     # LoRA on ViT backbone (~1.5M trainable)
 prompt_encoder_mode: "frozen"  # Completely frozen (~3.8M frozen)
 mask_decoder_mode: "full"      # Full fine-tune (~4.1M trainable)
 

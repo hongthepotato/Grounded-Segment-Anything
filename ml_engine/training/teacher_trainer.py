@@ -179,6 +179,14 @@ class TeacherTrainer:
         train_data = self.data_manager.get_split('train')
         val_data = self.data_manager.get_split('val')
 
+        # Check if SAM single object sampling is enabled (for SAM-HQ style training)
+        # This reduces memory by training with 1 random object per image
+        # Config location: config['models']['sam']['training']['single_object_sampling']
+        sam_config = self.config.get('models', {}).get('sam', {})
+        sam_single_object_sampling = sam_config.get('training', {}).get('single_object_sampling', False)
+        if sam_single_object_sampling:
+            logger.info("SAM single object sampling enabled (1 object per image)")
+
         # Create training dataset with augmentation
         self.train_dataset = DatasetFactory.create_dataset(
             coco_data=train_data,
@@ -186,17 +194,20 @@ class TeacherTrainer:
             dataset_info=self.dataset_info,
             model_names=self.required_models,
             augmentation_config=self.config['augmentation'],
-            is_training=True
+            is_training=True,
+            sam_single_object_sampling=sam_single_object_sampling
         )
 
         # Create validation dataset without augmentation
+        # Note: Validation always uses all objects (no sampling)
         self.val_dataset = DatasetFactory.create_dataset(
             coco_data=val_data,
             image_path_resolver=self.data_manager.get_image_path,
             dataset_info=self.dataset_info,
             model_names=self.required_models,
             augmentation_config=None,  # No augmentation for validation
-            is_training=False
+            is_training=False,
+            sam_single_object_sampling=False  # Always evaluate on all objects
         )
 
         # Create dataloaders
@@ -1027,17 +1038,41 @@ class TeacherTrainer:
 
         return result
 
+    # Class-level step counter for SAM memory diagnostics
+    _sam_batch_step = 0
+    _sam_memory_log_interval = 50  # Log every N steps
+    
     def _train_sam_batch(self, batch: Dict[str, Any]) -> float:
         """Train SAM on a batch."""
         model = self.models['sam']
         manager = self.training_managers['sam']
+        
+        # Memory diagnostics
+        TeacherTrainer._sam_batch_step += 1
+        log_memory = (TeacherTrainer._sam_batch_step % TeacherTrainer._sam_memory_log_interval == 0)
+        
+        def _get_memory_gb():
+            if torch.cuda.is_available():
+                return torch.cuda.memory_allocated() / 1024 / 1024 / 1024
+            return 0
+        
+        def _get_reserved_gb():
+            if torch.cuda.is_available():
+                return torch.cuda.memory_reserved() / 1024 / 1024 / 1024
+            return 0
+        
+        if log_memory:
+            mem_before = _get_memory_gb()
+            reserved_before = _get_reserved_gb()
+            logger.info(f"[SAM Batch {TeacherTrainer._sam_batch_step}] BEFORE: "
+                       f"allocated={mem_before:.2f}GB, reserved={reserved_before:.2f}GB")
 
         def compute_loss(batch):
             # Get preprocessed SAM data (already transformed by official transforms)
             sam_data = batch['preprocessed']['sam']
             images = sam_data['images'].to(self.device)     # [B, 3, 1024, 1024]
             boxes = sam_data['boxes'].to(self.device)       # [B, max_objs, 4] already in SAM space!
-            masks = sam_data['masks'].to(self.device)       # [B, max_objs, 1024, 1024]
+            masks = sam_data['masks'].to(self.device)       # [B, max_objs, 256, 256]
             labels = sam_data['labels'].to(self.device)     # [B, max_objs]
 
             # Create validity mask
@@ -1058,6 +1093,23 @@ class TeacherTrainer:
 
         # Training step with gradient management
         loss_dict = manager.training_step(batch, compute_loss)
+        
+        if log_memory:
+            mem_after = _get_memory_gb()
+            reserved_after = _get_reserved_gb()
+            logger.info(f"[SAM Batch {TeacherTrainer._sam_batch_step}] AFTER: "
+                       f"allocated={mem_after:.2f}GB (+{mem_after-mem_before:.3f}), "
+                       f"reserved={reserved_after:.2f}GB (+{reserved_after-reserved_before:.3f})")
+            
+            # Force garbage collection and cache clear every 500 steps to check if memory is reclaimable
+            if TeacherTrainer._sam_batch_step % 500 == 0:
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                mem_after_gc = _get_memory_gb()
+                reserved_after_gc = _get_reserved_gb()
+                logger.info(f"[SAM Batch {TeacherTrainer._sam_batch_step}] AFTER GC: "
+                           f"allocated={mem_after_gc:.2f}GB, reserved={reserved_after_gc:.2f}GB")
 
         return loss_dict['loss'].item()
 

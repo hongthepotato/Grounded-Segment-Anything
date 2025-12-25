@@ -55,7 +55,8 @@ class DatasetFactory:
         dataset_info: Dict[str, Any],
         model_names: List[str],
         augmentation_config: Optional[Dict[str, Any]] = None,
-        is_training: bool = True
+        is_training: bool = True,
+        sam_single_object_sampling: bool = False
     ) -> TeacherDataset:
         """
         Create a complete PyTorch dataset with preprocessing and augmentation.
@@ -78,6 +79,9 @@ class DatasetFactory:
                                 Pass None to disable augmentation
             is_training: Whether this is a training dataset
                         Augmentation only applied if is_training=True
+            sam_single_object_sampling: If True, SAM training uses 1 random object
+                                       per image (original SAM-HQ training strategy).
+                                       Does not affect DINO or other models.
 
         Returns:
             TeacherDataset instance ready for use in DataLoader
@@ -135,7 +139,8 @@ class DatasetFactory:
             preprocessor=preprocessor,
             augmentation_pipeline=augmentation_pipeline,
             return_boxes=dataset_info['has_boxes'],
-            return_masks=dataset_info['has_masks']
+            return_masks=dataset_info['has_masks'],
+            sam_single_object_sampling=sam_single_object_sampling
         )
 
         split_type = "training" if is_training else "validation"
