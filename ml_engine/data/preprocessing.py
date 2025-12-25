@@ -108,7 +108,7 @@ class SAMPreprocessor(BaseModelPreprocessor):
 
     def __init__(self, model_name: str, config: Dict[str, Any]):
         super().__init__(model_name, config)
-        
+
         from segment_anything.utils.transforms import ResizeLongestSide
         self.sam_transformer = ResizeLongestSide(
             target_length=config['input_size']['height']
@@ -119,6 +119,7 @@ class SAMPreprocessor(BaseModelPreprocessor):
         self.mean = torch.tensor(norm_cfg['mean']).view(3, 1, 1)
         self.std = torch.tensor(norm_cfg['std']).view(3, 1, 1)
         self.pad_value = config.get('padding_value', 0)
+        self.mask_output_size = config.get('mask_output_size', 256)
 
     def preprocess(
         self,
@@ -207,38 +208,30 @@ class SAMPreprocessor(BaseModelPreprocessor):
         masks: np.ndarray,
         metadata: Dict[str, Any]
     ) -> np.ndarray:
-        """Transform masks using resize + padding."""
+        """
+        Transform masks to match SAM decoder output resolution.
+        
+        Uses mask_output_size (default 256) instead of final_size (1024) to 
+        save memory during training. SAM's decoder natively outputs 256x256.
+        """
         import cv2
 
+        # Use mask_output_size for training efficiency (256x256 instead of 1024x1024)
+        target_size = self.mask_output_size
+
         if len(masks) == 0:
-            h, w = metadata['final_size']
-            return np.zeros((0, h, w), dtype=np.uint8)
+            return np.zeros((0, target_size, target_size), dtype=np.uint8)
 
-        # Get transformation parameters from SAM
-        sam_transformer = metadata['sam_transformer']
-        orig_h, orig_w = metadata['original_size']  # (H, W)
-
-        # Calculate target size after resize (before padding)
-        scale = sam_transformer.target_length / max(orig_h, orig_w)
-        new_h = int(orig_h * scale + 0.5)
-        new_w = int(orig_w * scale + 0.5)
-
-        # Transform each mask
+        # Transform each mask directly to target size
         transformed_masks = []
         for mask in masks:
-            # Resize mask
+            # Resize mask directly to target output size
             resized = cv2.resize(
                 mask.astype(np.uint8),
-                (new_w, new_h),
+                (target_size, target_size),
                 interpolation=cv2.INTER_NEAREST
             )
-
-            # Pad to final size
-            final_h, final_w = metadata['final_size']
-            padded = np.zeros((final_h, final_w), dtype=np.uint8)
-            padded[:new_h, :new_w] = resized
-
-            transformed_masks.append(padded)
+            transformed_masks.append(resized)
 
         return np.stack(transformed_masks, axis=0)
 
