@@ -143,12 +143,25 @@ class GroundingDINOLoRA(nn.Module):
                 raise FileNotFoundError(
                     f"Local BERT model not found: {bert_path}\n"
                 )
-            logger.info("Using local BERT model from: %s", bert_path)
+            # Extract model name from path for clear logging
+            bert_model_name = bert_path.name
+            logger.info("=" * 50)
+            logger.info("BERT Text Encoder Configuration")
+            logger.info("=" * 50)
+            logger.info("  Source: Local filesystem")
+            logger.info("  Model:  %s", bert_model_name)
+            logger.info("  Path:   %s", bert_path.absolute())
+            logger.info("=" * 50)
             # Set bert_base_uncased_path, NOT text_encoder_type!
             args.bert_base_uncased_path = str(bert_path.absolute())
         else:
-            logger.info("BERT will be downloaded from HuggingFace: %s", args.text_encoder_type)
-            logger.warning("No local BERT path provided. If offline, download BERT first!")
+            logger.info("=" * 50)
+            logger.info("BERT Text Encoder Configuration")
+            logger.info("=" * 50)
+            logger.info("  Source: HuggingFace (online)")
+            logger.info("  Model:  %s", args.text_encoder_type)
+            logger.info("=" * 50)
+            logger.warning("No local BERT path provided. Model will be downloaded from HuggingFace.")
             # Ensure bert_base_uncased_path is None for online mode
             if not hasattr(args, 'bert_base_uncased_path'):
                 args.bert_base_uncased_path = None
