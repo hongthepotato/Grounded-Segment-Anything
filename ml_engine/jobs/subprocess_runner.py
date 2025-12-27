@@ -356,6 +356,17 @@ def _training_entry_point(
         result_queue: Queue to send final result
         cancel_event: Event to check for cancellation
     """
+    # CRITICAL: Set up sys.path BEFORE any imports
+    # Subprocess with 'spawn' starts fresh, doesn't inherit sys.path
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent.parent
+    deps_segment_anything = project_root / "deps" / "segment_anything"
+    deps_groundingdino = project_root / "GroundingDINO"
+    
+    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino)]:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    
     # CRITICAL: Set CUDA_VISIBLE_DEVICES BEFORE any torch imports
     # This ensures PyTorch only sees the assigned GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
