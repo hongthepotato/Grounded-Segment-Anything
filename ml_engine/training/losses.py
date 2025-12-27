@@ -587,41 +587,6 @@ def build_criterion(
     return criterion
 
 
-# # Example usage
-# if __name__ == "__main__":
-#     # Build criterion
-#     criterion = build_criterion(num_classes=80, num_decoder_layers=6)
-    
-#     # Dummy data
-#     B, N, num_tokens = 2, 900, 256
-#     outputs = {
-#         'pred_logits': torch.randn(B, N, num_tokens),
-#         'pred_boxes': torch.rand(B, N, 4),
-#         'aux_outputs': [
-#             {'pred_logits': torch.randn(B, N, num_tokens), 'pred_boxes': torch.rand(B, N, 4)}
-#             for _ in range(5)
-#         ],
-#         'enc_outputs': {
-#             'pred_logits': torch.randn(B, N, num_tokens),
-#             'pred_boxes': torch.rand(B, N, 4)
-#         }
-#     }
-    
-#     targets = [
-#         {'labels': torch.randint(0, 80, (5,)), 'boxes': torch.rand(5, 4)},
-#         {'labels': torch.randint(0, 80, (3,)), 'boxes': torch.rand(3, 4)}
-#     ]
-    
-#     # Compute losses
-#     losses = criterion(outputs, targets)
-    
-#     # Total loss
-#     total_loss = sum(losses[k] * criterion.weight_dict[k] for k in losses if k in criterion.weight_dict)
-    
-#     print(f"Total loss: {total_loss.item():.4f}")
-#     print(f"Loss components: {list(losses.keys())}")
-
-
 class SegmentationLoss(nn.Module):
     """
     Segmentation loss for SAM fine-tuning.

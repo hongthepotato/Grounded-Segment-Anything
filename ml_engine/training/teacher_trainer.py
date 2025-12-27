@@ -356,16 +356,6 @@ class TeacherTrainer:
             # Get trainable parameters
             trainable_params = [p for p in model.parameters() if p.requires_grad]
 
-            # ===================================================================
-            # Following prints are for debugging purposes
-            # ===================================================================
-            print("#" * 60)
-            num_trainable = sum(p.numel() for p in trainable_params)
-            print(f"Model: {model_name}")
-            print(f"Trainable parameters: {num_trainable:,} ({num_trainable / 1e6:.2f}M)")
-            print(f"Number of trainable tensors: {len(trainable_params)}")
-            print("#" * 60)
-
             # Create optimizer
             if optimizer_type == 'AdamW':
                 optimizer = torch.optim.AdamW(
