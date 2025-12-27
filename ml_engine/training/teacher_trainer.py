@@ -30,7 +30,6 @@ from ml_engine.models.teacher.sam_lora import load_sam_hq_with_lora
 from ml_engine.training.losses import build_criterion, SegmentationLoss
 from ml_engine.training.training_manager import TrainingManager
 from ml_engine.training.checkpoint_manager import CheckpointManager
-from ml_engine.training.memory_monitor import GPUMemoryMonitor, log_memory_snapshot
 from core.logger import TensorBoardLogger, log_config, log_metrics
 from core.constants import DEFAULT_CONFIGS_DIR
 
@@ -158,10 +157,6 @@ class TeacherTrainer:
         self._init_loggers()
         self._init_visualizer()
         
-        # Initialize memory monitor for leak detection
-        self.memory_monitor = GPUMemoryMonitor(device=self.device)
-        logger.info("✓ GPU memory monitor initialized")
-
         # Resume from checkpoint if provided
         if resume_from:
             self._resume_from_checkpoint(resume_from)
@@ -759,8 +754,6 @@ class TeacherTrainer:
         total_steps = len(self.train_loader)
         
         # Memory monitoring
-        self.memory_monitor.record('epoch_start')
-        log_memory_snapshot(f"[Epoch {epoch+1}] Start - ")
 
         # Training loop
         pbar = tqdm(self.train_loader, desc=f"Train Epoch {epoch + 1}")
@@ -769,25 +762,8 @@ class TeacherTrainer:
             if self.cancel_check and self.cancel_check():
                 logger.info("Training cancelled during epoch %d, step %d", epoch + 1, step)
                 raise TrainingCancelledException("Training cancelled by user")
-            
-            # Memory check before batch
-            if step % 50 == 0:  # Check every 50 steps
-                self.memory_monitor.record('batch_start')
 
             batch_losses = self._train_batch(batch)
-            
-            # Memory check after batch
-            if step % 50 == 0:
-                self.memory_monitor.record('batch_end')
-                
-                # Check for leaks every 100 steps
-                if step > 0 and step % 100 == 0:
-                    if self.memory_monitor.check_leak('batch_end', threshold_gb=1.0):
-                        logger.warning("Memory leak detected! Forcing garbage collection...")
-                        import gc
-                        gc.collect()
-                        torch.cuda.empty_cache()
-
             # Accumulate losses (dynamically add new keys)
             for key, value in batch_losses.items():
                 if key not in epoch_losses:
@@ -817,13 +793,6 @@ class TeacherTrainer:
                         'message': f"Epoch {epoch + 1}, Step {step + 1}/{total_steps}"
                     })
 
-        # Memory monitoring at epoch end
-        self.memory_monitor.record('epoch_end')
-        log_memory_snapshot(f"[Epoch {epoch+1}] End - ")
-        
-        # Report memory statistics
-        if (epoch + 1) % 5 == 0:  # Report every 5 epochs
-            self.memory_monitor.report()
 
         # Compute average metrics
         train_metrics = {}
@@ -1037,26 +1006,6 @@ class TeacherTrainer:
         model = self.models['sam']
         manager = self.training_managers['sam']
         
-        # Memory diagnostics
-        TeacherTrainer._sam_batch_step += 1
-        log_memory = (TeacherTrainer._sam_batch_step % TeacherTrainer._sam_memory_log_interval == 0)
-        
-        def _get_memory_gb():
-            if torch.cuda.is_available():
-                return torch.cuda.memory_allocated() / 1024 / 1024 / 1024
-            return 0
-        
-        def _get_reserved_gb():
-            if torch.cuda.is_available():
-                return torch.cuda.memory_reserved() / 1024 / 1024 / 1024
-            return 0
-        
-        if log_memory:
-            mem_before = _get_memory_gb()
-            reserved_before = _get_reserved_gb()
-            logger.info(f"[SAM Batch {TeacherTrainer._sam_batch_step}] BEFORE: "
-                       f"allocated={mem_before:.2f}GB, reserved={reserved_before:.2f}GB")
-
         def compute_loss(batch):
             # Get preprocessed SAM data (already transformed by official transforms)
             sam_data = batch['preprocessed']['sam']
@@ -1083,24 +1032,6 @@ class TeacherTrainer:
 
         # Training step with gradient management
         loss_dict = manager.training_step(batch, compute_loss)
-        
-        if log_memory:
-            mem_after = _get_memory_gb()
-            reserved_after = _get_reserved_gb()
-            logger.info(f"[SAM Batch {TeacherTrainer._sam_batch_step}] AFTER: "
-                       f"allocated={mem_after:.2f}GB (+{mem_after-mem_before:.3f}), "
-                       f"reserved={reserved_after:.2f}GB (+{reserved_after-reserved_before:.3f})")
-            
-            # Force garbage collection and cache clear every 500 steps to check if memory is reclaimable
-            if TeacherTrainer._sam_batch_step % 500 == 0:
-                import gc
-                gc.collect()
-                torch.cuda.empty_cache()
-                mem_after_gc = _get_memory_gb()
-                reserved_after_gc = _get_reserved_gb()
-                logger.info(f"[SAM Batch {TeacherTrainer._sam_batch_step}] AFTER GC: "
-                           f"allocated={mem_after_gc:.2f}GB, reserved={reserved_after_gc:.2f}GB")
-
         return loss_dict['loss'].item()
 
     @torch.no_grad()

@@ -428,13 +428,6 @@ class SAMHQLoRA(nn.Module):
             pred_masks = pred_masks.squeeze(2)  # [B, N, 256, 256]
             iou_predictions = iou_predictions.squeeze(2)  # [B, N]
 
-        if log_memory:
-            mem_after_decode = _get_memory_mb()
-            logger.info(f"  After mask_decode: {mem_after_decode:.1f} MB (+{mem_after_decode-mem_start:.1f})")
-            logger.info(f"  pred_masks.requires_grad: {pred_masks.requires_grad}")
-            logger.info(f"  pred_masks.grad_fn: {pred_masks.grad_fn}")
-            logger.info(f"  num_prompts processed: {num_prompts}, batch_size: {batch_size}")
-
         # Note: pred_masks are at native 256x256 resolution
         # Use upscale_masks() for inference if full resolution needed
         outputs = {
