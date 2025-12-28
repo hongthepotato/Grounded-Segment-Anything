@@ -2,149 +2,123 @@
 SAM (Segment Anything Model) with LoRA integration.
 
 This module provides a wrapper for SAM with:
-- LoRA parameter-efficient fine-tuning
-- Partial freezing strategy (freeze encoder, train decoder with LoRA)
+- LoRA image_encoder
+- Full fine-tuning on mask_decoder
+- Completely frozen prompt_encoder
 - Box and point prompt support
 """
 
-import torch
-import torch.nn as nn
-from typing import Dict, Optional, List, Tuple, Union
+from typing import Dict, Optional, List, Tuple
 from pathlib import Path
 import logging
-from ml_engine.training.peft_utils import load_lora_model
+import torch
+from torch import nn
+from segment_anything import sam_hq_model_registry  # Use SAM-HQ
+from ml_engine.training.peft_utils import (
+    apply_lora, freeze_module, unfreeze_module, load_lora_model, verify_freezing
+)
 
 logger = logging.getLogger(__name__)
 
 
-class SAMLoRA(nn.Module):
+class SAMHQLoRA(nn.Module):
     """
-    SAM with LoRA fine-tuning.
+    SAM-HQ (High Quality) with configurable training modes per component.
     
-    Freezing Strategy:
-    1. PEFT automatically freezes ALL parameters when applying LoRA
-    2. PEFT unfreezes ONLY LoRA adapters in target_modules (mask decoder transformer layers)
-    3. We manually UNFREEZE mask decoder prediction heads (IoU head, output layers)
-    4. Image encoder and prompt encoder remain frozen by default
+    SAM-HQ improves mask quality using intermediate ViT features.
+    Each component can be independently set to: "frozen" | "lora" | "full"
     
-    Final Architecture:
-    - Image encoder (ViT): ❄️  FROZEN (default, ~308M params)
-    - Prompt encoder: ❄️  FROZEN (default, ~3.8M params)
-    - Mask decoder transformer: ✅ LoRA adapters TRAINABLE (~0.3M params)
-    - Mask decoder heads (IoU, output): ✅ TRAINABLE (~0.1M params)
+    Default Configuration (LoRA encoder + Full decoder):
+    - image_encoder: "lora" - LoRA adapters trainable (~1.5M), base weights frozen
+    - prompt_encoder: "frozen" - Completely frozen (~3.8M)
+    - mask_decoder: "full" - All parameters trainable (~4.1M + HQ layers)
     
-    This reduces trainable parameters from 316M to ~0.4M (0.13%) while keeping
-    prediction heads trainable for better domain adaptation.
+    CRITICAL: target_modules in lora_config determines WHERE LoRA is applied!
+    - image_encoder layers: "attn.qkv", "attn.proj"
+    - mask_decoder layers: "self_attn.q_proj", "self_attn.k_proj", etc.
     
     Example:
-        >>> model = SAMLoRA(
-        >>>     base_checkpoint='data/models/pretrained/sam_vit_h_4b8939.pth',
+        >>> model = SAMHQLoRA(
+        >>>     base_checkpoint='sam_vit_h_4b8939.pth',
         >>>     model_type='vit_h',
-        >>>     lora_config={'r': 8, 'lora_alpha': 16},
-        >>>     freeze_image_encoder=True  # Keep encoder frozen (efficient LoRA training)
-        >>> )
-        >>> 
-        >>> # Forward pass
-        >>> outputs = model(
-        >>>     images=images,
-        >>>     box_prompts=boxes
+        >>>     lora_config={
+        >>>         'r': 16, 'lora_alpha': 32,
+        >>>         'target_modules': ['attn.qkv', 'attn.proj']
+        >>>     },
+        >>>     image_encoder_mode='lora',
+        >>>     prompt_encoder_mode='frozen',
+        >>>     mask_decoder_mode='full'
         >>> )
     """
-    
+
     def __init__(
         self,
         base_checkpoint: str,
         model_type: str = 'vit_h',
         lora_config: Dict = None,
-        freeze_image_encoder: bool = True,
-        freeze_prompt_encoder: bool = True
+        image_encoder_mode: str = 'lora',    # "frozen" | "lora" | "full"
+        prompt_encoder_mode: str = 'frozen', # "frozen" | "lora" | "full"
+        mask_decoder_mode: str = 'full'      # "frozen" | "lora" | "full"
     ):
         """
         Args:
             base_checkpoint: Path to pretrained SAM checkpoint
             model_type: SAM model type ('vit_h', 'vit_l', 'vit_b')
-            lora_config: LoRA configuration dictionary
-            freeze_image_encoder: Whether to freeze image encoder (default=True)
-            freeze_prompt_encoder: Whether to freeze prompt encoder (default=True)
+            lora_config: LoRA configuration dictionary. MUST include target_modules
+                         that match the intended modules (e.g., 'attn.qkv' for image_encoder)
+            image_encoder_mode: Training mode for image encoder
+            prompt_encoder_mode: Training mode for prompt encoder
+            mask_decoder_mode: Training mode for mask decoder
         
-        Note:
-            - The mask decoder prediction heads are ALWAYS trainable
-            - LoRA adapters in the mask decoder transformer are also trainable
-            - Image/prompt encoders remain frozen by default for efficient training
+        Training modes:
+            - "frozen": No training, all parameters frozen
+            - "lora": LoRA adapters trainable, base weights frozen
+            - "full": All parameters trainable (full fine-tuning)
+        
+        Example configurations:
+            1. LoRA encoder + Full decoder (recommended):
+               - image_encoder_mode="lora", mask_decoder_mode="full"
+               - target_modules=['attn.qkv', 'attn.proj']
+            2. LoRA both:
+               - image_encoder_mode="lora", mask_decoder_mode="lora"
+               - target_modules=['attn.qkv', 'attn.proj', 'self_attn.q_proj', ...]
         """
         super().__init__()
-        
+
         self.model_type = model_type
         self.lora_config = lora_config or {}
-        
-        # Load base SAM model
-        logger.info(f"Loading SAM ({model_type}) from: {base_checkpoint}")
+        self.component_modes = {
+            'image_encoder': image_encoder_mode,
+            'prompt_encoder': prompt_encoder_mode,
+            'mask_decoder': mask_decoder_mode
+        }
+
+        logger.info("Loading SAM-HQ (%s) from: %s", model_type, base_checkpoint)
         self.model = self._load_base_model(base_checkpoint, model_type)
-        
-        # Apply LoRA (PEFT automatically freezes ALL parameters)
-        logger.info("Applying LoRA to SAM mask decoder...")
-        self._apply_lora()
-        
-        # Unfreeze mask decoder prediction heads (required for better adaptation)
-        # PEFT froze everything, but we need these trainable
-        self._unfreeze_mask_decoder_heads()
-        
-        # Optionally unfreeze encoders (if not using LoRA-only training)
-        if not freeze_image_encoder:
-            self._unfreeze_image_encoder()
-        if not freeze_prompt_encoder:
-            self._unfreeze_prompt_encoder()
-        
-        # Verify freezing
-        from ml_engine.training.peft_utils import verify_freezing
+
+        logger.info("Configuring training modes: %s", self.component_modes)
+        self._apply_training_modes()
+
+        # Verify freezing (non-strict because we intentionally unfreeze some modules)
         verify_freezing(self.model, strict=False)
-        
-        logger.info("✓ SAM with LoRA initialized")
-    
+
+        logger.info(" SAM-HQ with LoRA initialized")
+
     def _load_base_model(self, checkpoint_path: str, model_type: str) -> nn.Module:
         """
-        Load pretrained SAM model (PRODUCTION).
-        
-        This method loads the official Segment Anything Model (SAM).
-        Requires segment_anything library to be installed.
+        Load pretrained SAM-HQ model.
         
         Args:
             checkpoint_path: Path to pretrained checkpoint (.pth file)
             model_type: SAM model type ('vit_h', 'vit_l', 'vit_b')
         
         Returns:
-            Loaded SAM model
+            Loaded SAM-HQ model
             
         Raises:
-            ImportError: If segment_anything library is not installed
             FileNotFoundError: If checkpoint file not found
             ValueError: If model_type is invalid
-            RuntimeError: If model loading fails
         """
-        import sys
-        
-        # Add segment_anything to path
-        sam_path = Path(__file__).parent.parent.parent.parent / 'segment_anything'
-        if not sam_path.exists():
-            raise FileNotFoundError(
-                f"segment_anything library not found at {sam_path}\n"
-                f"Please clone it: git clone https://github.com/facebookresearch/segment-anything.git segment_anything\n"
-                f"Then install: cd segment_anything && pip install -e ."
-            )
-        
-        sys.path.insert(0, str(sam_path))
-        
-        # Import SAM utilities
-        try:
-            from segment_anything import sam_model_registry
-        except ImportError as e:
-            raise ImportError(
-                f"Failed to import segment_anything library: {e}\n"
-                f"Make sure segment_anything is properly installed:\n"
-                f"  cd {sam_path}\n"
-                f"  pip install -e ."
-            ) from e
-        
         # Validate model type
         valid_types = ['vit_h', 'vit_l', 'vit_b']
         if model_type not in valid_types:
@@ -152,140 +126,160 @@ class SAMLoRA(nn.Module):
                 f"Invalid model_type: {model_type}\n"
                 f"Valid types: {valid_types}"
             )
-        
+
         # Check checkpoint exists
         checkpoint_path = Path(checkpoint_path)
         if not checkpoint_path.exists():
             raise FileNotFoundError(
-                f"Checkpoint not found: {checkpoint_path}\n"
-                f"Download pretrained SAM weights from:\n"
-                f"  https://github.com/facebookresearch/segment-anything#model-checkpoints\n"
-                f"Available models:\n"
-                f"  - ViT-H: sam_vit_h_4b8939.pth (2.4GB)\n"
-                f"  - ViT-L: sam_vit_l_0b3195.pth (1.2GB)\n"
-                f"  - ViT-B: sam_vit_b_01ec64.pth (375MB)"
+                f"Checkpoint for SAM-HQ not found: {checkpoint_path}"
             )
-        
+
         # Load model
-        logger.info("Loading SAM %s model...", model_type)
+        logger.info("Loading SAM-HQ %s model...", model_type)
         logger.info("Checkpoint: %s", checkpoint_path)
-        
-        try:
-            sam = sam_model_registry[model_type](checkpoint=str(checkpoint_path))
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to load SAM model: {e}\n"
-                f"Model type: {model_type}\n"
-                f"Checkpoint: {checkpoint_path}"
-            ) from e
-        
-        # Verify model structure
-        required_attrs = ['image_encoder', 'prompt_encoder', 'mask_decoder']
-        for attr in required_attrs:
-            if not hasattr(sam, attr):
-                raise RuntimeError(
-                    f"Loaded SAM model is missing required attribute: {attr}\n"
-                    f"The checkpoint may be corrupted or incompatible."
-                )
-        
-        logger.info("✓ SAM model loaded successfully")
+
+        sam = sam_hq_model_registry[model_type](checkpoint=str(checkpoint_path))
+
+        logger.info("✓ SAM-HQ model loaded successfully")
         logger.info("  - Image encoder: %s", type(sam.image_encoder).__name__)
         logger.info("  - Prompt encoder: %s", type(sam.prompt_encoder).__name__)
-        logger.info("  - Mask decoder: %s", type(sam.mask_decoder).__name__)
-        
+        logger.info("  - Mask decoder: %s (HQ version)", type(sam.mask_decoder).__name__)
         return sam
-    
-    def _apply_lora(self):
+
+    def _apply_training_modes(self):
         """
-        Apply LoRA adapters to mask decoder transformer layers.
+        Apply training modes to each component.
         
-        Note: partial_freeze_for_lora() calls PEFT's get_peft_model() which:
-        1. Freezes ALL parameters
-        2. Unfreezes ONLY LoRA adapters in target_modules
+        Flow:
+        1. Apply LoRA first (freezes ALL base weights, adds LoRA adapters)
+        2. Then apply component-specific modes (frozen/full) by unfreezing as needed
+        
+        CRITICAL: target_modules in lora_config determines WHERE LoRA is applied!
+        - image_encoder: 'attn.qkv', 'attn.proj'
+        - mask_decoder: 'self_attn.q_proj', 'self_attn.k_proj', etc.
         """
-        from ml_engine.training.peft_utils import partial_freeze_for_lora
+        # Step 1: Apply LoRA if any component uses it (freezes all, adds LoRA adapters)
+        if 'lora' in self.component_modes.values():
+            self.model = apply_lora(self.model, self.lora_config)
+            logger.info("Applied LoRA to target_modules: %s",
+                        self.lora_config.get('target_modules', []))
+
+        # Step 2: Apply each component's mode (frozen/full handled by freeze/unfreeze)
+        for component, mode in self.component_modes.items():
+            self._apply_component_mode(component, mode)
+
+    def _apply_component_mode(self, component_name: str, mode: str):
+        """
+        Apply training mode to a specific component.
+
+        Args:
+            component_name: Name of the component ('image_encoder', 'prompt_encoder', 'mask_decoder')
+            mode: Training mode ('frozen', 'lora', 'full')
+        """
+        base_model = self._get_base_model()
+        component = getattr(base_model, component_name, None)
+
+        if component is None:
+            logger.warning("Component %s not found in model", component_name)
+            return
+
+        param_count = sum(p.numel() for p in component.parameters())
+        if mode == 'frozen':
+            freeze_module(component)
+            logger.info("  %s: frozen (%d params)", component_name, param_count)
+        elif mode == 'lora':
+            # LoRA already applied - count only LoRA params
+            lora_count = sum(p.numel() for n, p in component.named_parameters() 
+                           if 'lora_' in n and p.requires_grad)
+            logger.info("  %s: LoRA (%d trainable, %d frozen)",
+                       component_name, lora_count, param_count - lora_count)
+        elif mode == 'full':
+            unfreeze_module(component)
+            logger.info("  %s: full (%d params trainable)", component_name, param_count)
+        else:
+            raise ValueError(f"Invalid mode '{mode}' for {component_name}. "
+                           f"Must be 'frozen', 'lora', or 'full'")
+
+
+    def _get_base_model(self) -> nn.Module:
+        """
+        Get the base SAM model, unwrapping PEFT wrapper if present.
         
-        # Apply LoRA only to mask decoder
-        # Note: This will freeze everything except LoRA adapters
-        self.model = partial_freeze_for_lora(
-            self.model,
-            freeze_modules=['image_encoder', 'prompt_encoder'],
-            lora_config=self.lora_config,
-            lora_modules=['mask_decoder']
+        Returns:
+            The underlying SAM model with image_encoder, prompt_encoder, mask_decoder
+        """
+        if hasattr(self.model, 'base_model'):
+            # PEFT-wrapped model: self.model.base_model.model
+            return self.model.base_model.model
+        return self.model
+
+    def _get_image_encoder(self) -> nn.Module:
+        """Get the image encoder (frozen during LoRA training)."""
+        return self._get_base_model().image_encoder
+
+    def _get_prompt_encoder(self) -> nn.Module:
+        """Get the prompt encoder (frozen during LoRA training)."""
+        return self._get_base_model().prompt_encoder
+
+    def _get_mask_decoder(self) -> nn.Module:
+        """Get the mask decoder (has LoRA adapters)."""
+        return self._get_base_model().mask_decoder
+
+    def _encode_images(self, images: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+        """
+        Encode images using the image encoder.
+        
+        Note: Gradient flow is controlled by the caller based on image_encoder_mode.
+        If mode='frozen', caller wraps with torch.no_grad().
+        If mode='lora' or 'full', gradients flow through.
+        
+        Args:
+            images: Input images [B, 3, H, W], already preprocessed (normalized, padded)
+        
+        Returns:
+            Tuple of:
+                - Image embeddings [B, 256, 64, 64]
+                - Intermediate embeddings (list of 4 tensors, SAM-HQ specific) 
+                  each [B, 64, 64, 1280] for vit_h
+        """
+        # SAM-HQ image encoder returns (features, interm_embeddings)
+        image_embeddings, interm_embeddings = self._get_image_encoder()(images)
+
+        return image_embeddings, interm_embeddings
+
+    def _encode_prompts(
+        self,
+        boxes: Optional[torch.Tensor] = None,
+        points: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        masks: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode prompts using the prompt encoder.
+        
+        Args:
+            boxes: Box prompts [N, 4] in xyxy format for ONE image
+            points: Tuple of (coords [N, num_points, 2], labels [N, num_points])
+            masks: Optional mask inputs [N, 1, H, W]
+        
+        Returns:
+            Tuple of (sparse_embeddings, dense_embeddings)
+        """
+        prompt_encoder = self._get_prompt_encoder()
+
+        # Format points for prompt encoder
+        point_inputs = None
+        if points is not None:
+            coords, labels = points
+            point_inputs = (coords, labels)
+
+        sparse_embeddings, dense_embeddings = prompt_encoder(
+            points=point_inputs,
+            boxes=boxes,
+            masks=masks
         )
-    
-    def _unfreeze_mask_decoder_heads(self):
-        """
-        Unfreeze mask decoder prediction heads for better domain adaptation.
-        
-        PEFT freezes ALL parameters by default, but mask decoder prediction heads
-        (IoU prediction, output upscaling) should be trainable for better adaptation
-        to custom datasets and domains.
-        """
-        # Access the base model (PEFT wraps it)
-        base_model = self.model.base_model.model if hasattr(self.model, 'base_model') else self.model
-        
-        trainable_count = 0
-        
-        # Unfreeze mask decoder components
-        if hasattr(base_model, 'mask_decoder'):
-            mask_decoder = base_model.mask_decoder
-            
-            # Unfreeze IoU prediction head
-            if hasattr(mask_decoder, 'iou_prediction_head'):
-                for param in mask_decoder.iou_prediction_head.parameters():
-                    param.requires_grad = True
-                    trainable_count += param.numel()
-                logger.info("🔓 Unfrozen IoU prediction head")
-            
-            # Unfreeze output upscaling layers
-            if hasattr(mask_decoder, 'output_upscaling'):
-                for param in mask_decoder.output_upscaling.parameters():
-                    param.requires_grad = True
-                    trainable_count += param.numel()
-                logger.info("🔓 Unfrozen output upscaling layers")
-            
-            # Unfreeze mask tokens (if present)
-            if hasattr(mask_decoder, 'mask_tokens'):
-                mask_decoder.mask_tokens.requires_grad = True
-                trainable_count += mask_decoder.mask_tokens.numel()
-                logger.info("🔓 Unfrozen mask tokens")
-            
-            # Unfreeze IoU token (if present)
-            if hasattr(mask_decoder, 'iou_token'):
-                mask_decoder.iou_token.requires_grad = True
-                trainable_count += mask_decoder.iou_token.numel()
-                logger.info("🔓 Unfrozen IoU token")
-        
-        if trainable_count == 0:
-            logger.warning("⚠️  No mask decoder prediction heads found to unfreeze!")
-        else:
-            logger.info(f"✓ Unfroze {trainable_count:,} mask decoder head parameters")
-    
-    def _unfreeze_image_encoder(self):
-        """Unfreeze image encoder (if not using LoRA-only training)."""
-        # Access the base model (PEFT wraps it)
-        base_model = self.model.base_model.model if hasattr(self.model, 'base_model') else self.model
-        
-        if hasattr(base_model, 'image_encoder'):
-            for param in base_model.image_encoder.parameters():
-                param.requires_grad = True
-            logger.info("🔓 Unfrozen image encoder (full fine-tuning mode)")
-        else:
-            logger.warning("⚠️  Image encoder not found in model structure")
-    
-    def _unfreeze_prompt_encoder(self):
-        """Unfreeze prompt encoder (if not using LoRA-only training)."""
-        # Access the base model (PEFT wraps it)
-        base_model = self.model.base_model.model if hasattr(self.model, 'base_model') else self.model
-        
-        if hasattr(base_model, 'prompt_encoder'):
-            for param in base_model.prompt_encoder.parameters():
-                param.requires_grad = True
-            logger.info("🔓 Unfrozen prompt encoder (full fine-tuning mode)")
-        else:
-            logger.warning("⚠️  Prompt encoder not found in model structure")
-    
+
+        return sparse_embeddings, dense_embeddings
+
     def forward(
         self,
         images: torch.Tensor,
@@ -295,41 +289,197 @@ class SAMLoRA(nn.Module):
         return_features: bool = False
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass.
+        Forward pass with SAM-HQ 3-stage pipeline.
+
+        SAM-HQ architecture:
+        1. Image encoding (frozen): Encode images + extract 4 intermediate features
+        2. Prompt encoding (frozen): Encode box/point prompts to embeddings
+        3. Mask decoding (LoRA/Full): Predict high-quality masks using intermediate features
         
         Args:
-            images: Input images [B, 3, H, W]
+            images: Input images [B, 3, 1024, 1024] (preprocessed by SAMPreprocessor)
             box_prompts: Box prompts [B, N, 4] in [x1, y1, x2, y2] format
-            point_prompts: Tuple of (points [B, N, 2], labels [B, N])
-            multimask_output: Whether to output multiple masks
+            point_prompts: Tuple of (points [B, N, P, 2], labels [B, N, P])
+            multimask_output: Whether to output multiple masks per prompt
             return_features: Whether to return intermediate features
         
         Returns:
             Dict with:
-                - pred_masks: [B, N, H, W] or [B, 3, N, H, W] if multimask
-                - iou_predictions: [B, N] or [B, 3, N] if multimask
-                - features: Optional intermediate features
+                - pred_masks: [B, N, 256, 256] predicted masks
+                - iou_predictions: [B, N] IoU quality predictions
+                - features: [B, 256, 64, 64] optional image features
+        
+        Note:
+            - Images should already be preprocessed (resized, normalized, padded)
+            - Box coordinates should be in the preprocessed image space
+            - For training, use multimask_output=False (single best mask)
+            - SAM-HQ processes prompts individually due to interm_embeddings constraints
+            - Use upscale_masks() to upscale to full resolution for inference
         """
-        outputs = self.model(
-            images,
-            box_prompts=box_prompts,
-            point_prompts=point_prompts
-        )
-        
-        if return_features and hasattr(self.model, 'get_features'):
-            outputs['features'] = self.model.get_features()
-        
+        batch_size = images.shape[0]
+
+        # Get base model components
+        mask_decoder = self._get_mask_decoder()
+        prompt_encoder = self._get_prompt_encoder()
+
+        # === Stage 1: Image Encoding ===
+        # Gradient flow depends on image_encoder_mode:
+        # - "frozen": no gradients (wrapped in no_grad)
+        # - "lora" or "full": gradients flow through
+        encoder_mode = self.component_modes.get('image_encoder', 'frozen')
+        if encoder_mode == 'frozen':
+            with torch.no_grad():
+                image_embeddings, interm_embeddings = self._encode_images(images)
+        else:
+            # "lora" or "full" - allow gradients
+            image_embeddings, interm_embeddings = self._encode_images(images)
+
+        # Get positional encoding for dense features
+        image_pe = prompt_encoder.get_dense_pe()  # [1, 256, 64, 64]
+
+        # Validate prompts
+        if box_prompts is None and point_prompts is None:
+            raise ValueError("Either box_prompts or point_prompts must be provided")
+
+        # Allocate output tensors
+        all_masks = []
+        all_iou_predictions = []
+
+        # === Stage 2 & 3: Process each image in batch ===
+        for b in range(batch_size):
+            # Get image embedding for this batch element
+            curr_embedding = image_embeddings[b:b+1]  # [1, 256, 64, 64]
+
+            # Get prompts for this image
+            if box_prompts is not None:
+                # boxes: [N, 4] for this image
+                boxes = box_prompts[b]  # [N, 4]
+            else:
+                boxes = None
+
+            if point_prompts is not None:
+                # points: [N, P, 2], labels: [N, P]
+                points = (point_prompts[0][b], point_prompts[1][b])
+            else:
+                points = None
+
+            # === Stage 2: Prompt Encoding (frozen) ===
+            with torch.no_grad():
+                sparse_embeddings, dense_embeddings = self._encode_prompts(
+                    boxes=boxes,
+                    points=points
+                )
+            # sparse_embeddings: [N, num_tokens, 256]
+            # dense_embeddings: [N, 256, 64, 64]
+
+            num_prompts = sparse_embeddings.shape[0]
+
+            # Get intermediate embeddings for this batch element (SAM-HQ specific)
+            curr_interm_embeddings = [emb[b:b+1] for emb in interm_embeddings]
+
+            # === Stage 3: Mask Decoding (with LoRA, gradients flow here) ===
+            # SAM-HQ's MaskDecoderHQ doesn't handle batched prompts well with interm_embeddings
+            # due to internal feature fusion operations. Process each prompt individually.
+            prompt_masks = []
+            prompt_ious = []
+
+            for p in range(num_prompts):
+                # Get single prompt embeddings
+                sparse_single = sparse_embeddings[p:p+1]  # [1, num_tokens, 256]
+                dense_single = dense_embeddings[p:p+1]    # [1, 256, 64, 64]
+
+                low_res_mask, iou_pred = mask_decoder(
+                    image_embeddings=curr_embedding,  # [1, 256, 64, 64]
+                    image_pe=image_pe,                # [1, 256, 64, 64]
+                    sparse_prompt_embeddings=sparse_single,
+                    dense_prompt_embeddings=dense_single,
+                    multimask_output=multimask_output,
+                    hq_token_only=False,
+                    interm_embeddings=curr_interm_embeddings,
+                )
+                # low_res_mask: [1, num_masks, 256, 256]
+                # iou_pred: [1, num_masks]
+
+                prompt_masks.append(low_res_mask)
+                prompt_ious.append(iou_pred)
+
+            # Stack results: [N, num_masks, 256, 256]
+            low_res_masks = torch.cat(prompt_masks, dim=0)
+            iou_predictions = torch.cat(prompt_ious, dim=0)
+
+            # Select best mask if multimask (based on IoU prediction)
+            if multimask_output:
+                best_masks = low_res_masks  # [N, 3, 256, 256]
+                best_iou = iou_predictions  # [N, 3]
+            else:
+                best_masks = low_res_masks[:, 0:1, :, :]  # [N, 1, 256, 256]
+                best_iou = iou_predictions[:, 0:1]  # [N, 1]
+
+            # Use upscale_masks() post-processing for inference if full resolution needed
+            all_masks.append(best_masks)
+            all_iou_predictions.append(best_iou)
+
+        # For now, assume all images have same number of prompts (padded in dataloader)
+        pred_masks = torch.stack(all_masks, dim=0)  # [B, N, num_masks, 256, 256]
+        iou_predictions = torch.stack(all_iou_predictions, dim=0)  # [B, N, num_masks]
+
+        # Squeeze mask dimension if single mask output
+        if not multimask_output:
+            pred_masks = pred_masks.squeeze(2)  # [B, N, 256, 256]
+            iou_predictions = iou_predictions.squeeze(2)  # [B, N]
+
+        # Note: pred_masks are at native 256x256 resolution
+        # Use upscale_masks() for inference if full resolution needed
+        outputs = {
+            'pred_masks': pred_masks,
+            'iou_predictions': iou_predictions
+        }
+
+        if return_features:
+            outputs['features'] = image_embeddings
+
         return outputs
-    
+
     def get_trainable_parameters(self) -> List[nn.Parameter]:
         """Get list of trainable parameters (LoRA adapters only)."""
         return [p for p in self.model.parameters() if p.requires_grad]
-    
+
+    @staticmethod
+    def upscale_masks(
+        masks: torch.Tensor,
+        target_size: Tuple[int, int]
+    ) -> torch.Tensor:
+        """
+        Upscale masks from native 256x256 to target resolution.
+        
+        This is a post-processing utility for inference. The forward() method
+        returns masks at native decoder resolution (256x256) for memory efficiency.
+        Use this method to upscale to full resolution for visualization or output.
+        
+        Args:
+            masks: Predicted masks [B, N, 256, 256] or [B, N, num_masks, 256, 256]
+            target_size: Target (height, width), e.g., (1024, 1024) or original image size
+        
+        Returns:
+            Upscaled masks at target resolution
+        
+        Example:
+            >>> outputs = model(images, box_prompts=boxes)
+            >>> pred_masks_256 = outputs['pred_masks']  # [B, N, 256, 256]
+            >>> pred_masks_full = SAMHQLoRA.upscale_masks(pred_masks_256, (1024, 1024))
+        """
+        return torch.nn.functional.interpolate(
+            masks,
+            size=target_size,
+            mode='bilinear',
+            align_corners=False
+        )
+
     def save_lora_adapters(self, output_dir: str):
         """Save only LoRA adapters."""
         from ml_engine.training.peft_utils import save_lora_adapters
         save_lora_adapters(self.model, output_dir)
-    
+
     @classmethod
     def from_lora_checkpoint(
         cls,
@@ -337,74 +487,85 @@ class SAMLoRA(nn.Module):
         lora_adapter_path: str,
         model_type: str = 'vit_h',
         lora_config: Dict = None,
+        image_encoder_mode: str = 'lora',
+        prompt_encoder_mode: str = 'frozen',
+        mask_decoder_mode: str = 'full',
         merge: bool = False
-    ) -> 'SAMLoRA':
+    ) -> 'SAMHQLoRA':
         """
-        Load model with LoRA adapters.
+        Load model with LoRA adapters from checkpoint.
         
         Args:
             base_checkpoint: Path to base pretrained checkpoint
             lora_adapter_path: Path to LoRA adapter directory
             model_type: SAM model type
             lora_config: LoRA configuration
+            image_encoder_mode: "frozen" | "lora" | "full"
+            prompt_encoder_mode: "frozen" | "lora" | "full"
+            mask_decoder_mode: "frozen" | "lora" | "full"
+            merge: Whether to merge LoRA into base weights
         
         Returns:
             Model with LoRA adapters loaded
         """
-        # Create model
+        # Create model with specified modes
         model = cls(
             base_checkpoint=base_checkpoint,
             model_type=model_type,
-            lora_config=lora_config or {}
+            lora_config=lora_config or {},
+            image_encoder_mode=image_encoder_mode,
+            prompt_encoder_mode=prompt_encoder_mode,
+            mask_decoder_mode=mask_decoder_mode
         )
-        
+
         model.model = load_lora_model(
             model.model,
             lora_adapter_path,
             merge=merge
         )
-        
+
         return model
 
 
-def load_sam_with_lora(
+def load_sam_hq_with_lora(
     base_checkpoint: str,
     lora_adapter_path: Optional[str] = None,
     model_type: str = 'vit_h',
     lora_config: Optional[Dict] = None,
+    image_encoder_mode: str = 'lora',
+    prompt_encoder_mode: str = 'frozen',
+    mask_decoder_mode: str = 'full',
     merge: bool = False
-) -> SAMLoRA:
+) -> SAMHQLoRA:
     """
-    Factory function to load SAM with optional LoRA.
+    Factory function to load SAM-HQ with configurable training modes.
     
     Args:
         base_checkpoint: Path to pretrained checkpoint
         lora_adapter_path: Optional path to LoRA adapters
         model_type: SAM model type ('vit_h', 'vit_l', 'vit_b')
-        lora_config: LoRA configuration
+        lora_config: LoRA configuration (r, lora_alpha, target_modules, etc.)
+        image_encoder_mode: "frozen" | "lora" | "full"
+        prompt_encoder_mode: "frozen" | "lora" | "full"
+        mask_decoder_mode: "frozen" | "lora" | "full"
         merge: Whether to merge LoRA adapters into base model
     
     Returns:
-        SAMLoRA instance
+        SAMHQLoRA instance
     
     Example:
-        >>> # Load pretrained SAM and apply LoRA
-        >>> model = load_sam_with_lora(
+        >>> # LoRA encoder + Full decoder (recommended)
+        >>> model = load_sam_hq_with_lora(
         >>>     base_checkpoint='pretrained/sam_vit_h_4b8939.pth',
         >>>     model_type='vit_h',
-        >>>     lora_config={'r': 8, 'lora_alpha': 16}
-        >>> )
-        >>> 
-        >>> # Load fine-tuned LoRA adapters
-        >>> model = load_sam_with_lora(
-        >>>     base_checkpoint='pretrained/sam_vit_h_4b8939.pth',
-        >>>     lora_adapter_path='experiments/exp1/teachers/sam_lora/',
-        >>>     model_type='vit_h',
-        >>>     merge=True  # For distillation
+        >>>     lora_config={'r': 16, 'lora_alpha': 32, 'target_modules': ['attn.qkv', 'attn.proj']},
+        >>>     image_encoder_mode='lora',
+        >>>     prompt_encoder_mode='frozen',
+        >>>     mask_decoder_mode='full'
         >>> )
     """
     if lora_adapter_path:
-        return SAMLoRA.from_lora_checkpoint(
+        return SAMHQLoRA.from_lora_checkpoint(
             base_checkpoint=base_checkpoint,
             lora_adapter_path=lora_adapter_path,
             model_type=model_type,
@@ -414,11 +575,14 @@ def load_sam_with_lora(
     if lora_config is None:
         from core.constants import DEFAULT_SAM_LORA_CONFIG
         lora_config = DEFAULT_SAM_LORA_CONFIG['lora']
-    
-    return SAMLoRA(
+
+    return SAMHQLoRA(
         base_checkpoint=base_checkpoint,
         model_type=model_type,
-        lora_config=lora_config
+        lora_config=lora_config,
+        image_encoder_mode=image_encoder_mode,
+        prompt_encoder_mode=prompt_encoder_mode,
+        mask_decoder_mode=mask_decoder_mode
     )
 
 
@@ -475,7 +639,7 @@ class GroundedSAM(nn.Module):
         # Load SAM
         self.sam = None
         if sam_base:
-            self.sam = load_sam_with_lora(
+            self.sam = load_sam_hq_with_lora(
                 base_checkpoint=sam_base,
                 lora_adapter_path=sam_lora,
                 merge=use_merged
@@ -520,5 +684,3 @@ class GroundedSAM(nn.Module):
             **dino_outputs,
             **sam_outputs
         }
-
-

@@ -411,6 +411,49 @@ def _validate_referential_integrity(
 
     return errors
 
+
+def _normalize_to_rle(segmentation: Any, height: int, width: int) -> dict:
+    """
+    Normalize any segmentation format to compressed RLE.
+    
+    COCO segmentation can be in three formats:
+    1. Polygon: [[x1,y1,x2,y2,...], ...]
+    2. Uncompressed RLE: {'counts': [int, int, ...], 'size': [h, w]}
+    3. Compressed RLE: {'counts': b'...', 'size': [h, w]}
+    
+    pycocotools functions (decode, area, etc.) require compressed RLE.
+    This function normalizes all formats to compressed RLE.
+    
+    Args:
+        segmentation: Polygon list or RLE dict (compressed or uncompressed)
+        height: Image height
+        width: Image width
+    
+    Returns:
+        Compressed RLE dict with bytes counts
+    """
+    if isinstance(segmentation, list):
+        # Polygon format -> convert to compressed RLE
+        rles = mask_utils.frPyObjects(segmentation, height, width)
+        return mask_utils.merge(rles)
+
+    if isinstance(segmentation, dict):
+        counts = segmentation.get('counts')
+
+        # Already compressed (bytes or str) -> return as-is
+        if isinstance(counts, (bytes, str)):
+            return segmentation
+
+        # Uncompressed (list of ints) -> convert to compressed RLE
+        # frPyObjects handles uncompressed RLE dicts
+        return mask_utils.frPyObjects(segmentation, height, width)
+
+    raise TypeError(
+        f"Segmentation must be list (polygon) or dict (RLE), "
+        f"got {type(segmentation).__name__}"
+    )
+
+
 def compute_bbox_from_mask(segmentation: Any, height: int, width: int) -> List[float]:
     """
     Compute tight bounding box from segmentation mask.
@@ -418,7 +461,8 @@ def compute_bbox_from_mask(segmentation: Any, height: int, width: int) -> List[f
     This generates ONE tight box per mask annotation.
     
     Args:
-        segmentation: Polygon list or RLE dict
+        segmentation: Polygon list or RLE dict (compressed or uncompressed)
+                     If already compressed RLE (bytes), no conversion needed.
         height: Image height (used to clip/validate bbox)
         width: Image width (used to clip/validate bbox)
     
@@ -431,64 +475,46 @@ def compute_bbox_from_mask(segmentation: Any, height: int, width: int) -> List[f
         >>> bbox = compute_bbox_from_mask(seg, height=480, width=640)
         >>> print(bbox)  # [x, y, w, h]
         
-        >>> # RLE format
+        >>> # RLE format (compressed or uncompressed)
         >>> seg = {'counts': [...], 'size': [480, 640]}
-        >>> bbox = compute_bbox_from_mask(seg)
+        >>> bbox = compute_bbox_from_mask(seg, height=480, width=640)
+        
+        >>> # Already compressed RLE (most efficient)
+        >>> seg = {'counts': b'...', 'size': [480, 640]}
+        >>> bbox = compute_bbox_from_mask(seg, height=480, width=640)
     """
-    bbox = None
+    # If already compressed RLE, use directly
+    if isinstance(segmentation, dict) and isinstance(segmentation.get('counts'), bytes):
+        rle = segmentation
+    else:
+        rle = _normalize_to_rle(segmentation, height, width)
 
-    if isinstance(segmentation, list):
-        # Flatten all polygons
-        all_x = []
-        all_y = []
-        for poly in segmentation:
-            poly_array = np.array(poly).reshape(-1, 2)
-            all_x.extend(poly_array[:, 0])
-            all_y.extend(poly_array[:, 1])
+    # Decode to binary mask
+    mask = mask_utils.decode(rle)
 
-        x_min = np.min(all_x)
-        x_max = np.max(all_x)
-        y_min = np.min(all_y)
-        y_max = np.max(all_y)
+    # Find bounding box from binary mask
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
 
-        bbox = [x_min, y_min, x_max - x_min, y_max - y_min]
-
-    elif isinstance(segmentation, dict):
-        mask = mask_utils.decode(segmentation)
-
-        # Find bounding box
-        rows = np.any(mask, axis=1)
-        cols = np.any(mask, axis=0)
-
-        if not rows.any() or not cols.any():
-            raise ValueError(
-                f"RLE mask is completely empty (all zeros). "
-                f"Cannot generate bounding box from empty mask."
-            )
-
-        y_min, y_max = np.where(rows)[0][[0, -1]]
-        x_min, x_max = np.where(cols)[0][[0, -1]]
-
-        bbox = [x_min, y_min, x_max - x_min + 1, y_max - y_min + 1]
-
-    if bbox is None:
-        raise RuntimeError(
-            f"Failed to compute bbox from segmentation. "
-            f"This should not happen. Segmentation type: {type(segmentation)}"
+    if not rows.any() or not cols.any():
+        raise ValueError(
+            "Mask is completely empty (all zeros). "
+            "Cannot generate bounding box from empty mask."
         )
 
-    x, y, w, h = bbox
+    y_min, y_max = np.where(rows)[0][[0, -1]]
+    x_min, x_max = np.where(cols)[0][[0, -1]]
 
-    # Clip coordinates to [0, image_dimension]
+    x, y = float(x_min), float(y_min)
+    w, h = float(x_max - x_min + 1), float(y_max - y_min + 1)
+
+    # Clip coordinates to image bounds
     x = max(0, min(x, width))
     y = max(0, min(y, height))
-
-    # Adjust width and height to stay within bounds
     w = min(w, width - x)
     h = min(h, height - y)
 
-    bbox = [x, y, w, h]
-    return bbox
+    return [x, y, w, h]
 
 
 def compute_area_from_mask(segmentation: Any, height: int, width: int) -> float:
@@ -496,7 +522,8 @@ def compute_area_from_mask(segmentation: Any, height: int, width: int) -> float:
     Compute area from segmentation mask.
     
     Args:
-        segmentation: Polygon list or RLE dict
+        segmentation: Polygon list or RLE dict (compressed or uncompressed)
+                     If already compressed RLE (bytes), no conversion needed.
         height: Image height (used to compute area)
         width: Image width (used to compute area)
     
@@ -506,40 +533,50 @@ def compute_area_from_mask(segmentation: Any, height: int, width: int) -> float:
     Example:
         >>> seg = [[x1,y1,x2,y2,x3,y3,x4,y4]]
         >>> area = compute_area_from_mask(seg, height=480, width=640)
+        
+        >>> # Already compressed RLE (most efficient)
+        >>> seg = {'counts': b'...', 'size': [480, 640]}
+        >>> area = compute_area_from_mask(seg, height=480, width=640)
     """
-    if isinstance(segmentation, list):
-        # Polygon format - convert to RLE first
-        rles = mask_utils.frPyObjects(segmentation, height, width)
-        rle = mask_utils.merge(rles)
-        area = float(mask_utils.area(rle))
-        return area
-    elif isinstance(segmentation, dict):
-        area = float(mask_utils.area(segmentation))
-        return area
+    # If already compressed RLE, use directly
+    if isinstance(segmentation, dict) and isinstance(segmentation.get('counts'), bytes):
+        rle = segmentation
+    else:
+        rle = _normalize_to_rle(segmentation, height, width)
+
+    return float(mask_utils.area(rle))
 
 
-def preprocess_coco_dataset(coco_data: Dict[str, Any], in_place: bool = True) -> Dict[str, Any]:
+def normalize_coco_annotations(coco_data: Dict[str, Any], in_place: bool = True) -> Dict[str, Any]:
     """
-    Auto-generate missing bbox and area fields from segmentation masks.
+    Normalize COCO annotations to canonical form.
     
-    This runs during dataset validation (python cli/validate_dataset.py).
-    Frontend annotation tools don't need to compute boxes - the platform
-    handles this automatically.
+    This is the CANONICAL FORM function that ensures all annotations are in a
+    consistent, normalized state after loading. It performs:
     
-    CRITICAL: Each mask annotation generates ONE tight bounding box.
-    Multiple disconnected objects should be separate annotations.
+    1. Auto-generate missing bbox from segmentation masks
+    2. Auto-compute missing area from masks or bboxes
+    3. Normalize all segmentation formats to compressed RLE
+    
+    After this function, ALL segmentations are guaranteed to be in compressed RLE
+    format: {'counts': b'...', 'size': [h, w]}. This eliminates format handling
+    complexity in downstream consumers (loaders, preprocessors, etc.).
     
     Args:
         coco_data: COCO format dictionary
         in_place: Whether to modify coco_data in place (default: True)
     
     Returns:
-        Preprocessed COCO data (same reference if in_place=True)
+        Normalized COCO data with:
+        - All annotations have valid bbox [x, y, w, h]
+        - All annotations have valid area (float)
+        - All segmentations are compressed RLE format
     
     Example:
         >>> coco_data = load_json('annotations.json')
-        >>> coco_data = preprocess_coco_dataset(coco_data)
-        >>> # Now all annotations have bbox and area fields
+        >>> coco_data = normalize_coco_annotations(coco_data)
+        >>> # Now all annotations are in canonical form
+        >>> # Segmentations are all compressed RLE (bytes counts)
     """
     if not in_place:
         coco_data = copy.deepcopy(coco_data)
@@ -550,6 +587,7 @@ def preprocess_coco_dataset(coco_data: Dict[str, Any], in_place: bool = True) ->
     annotations = coco_data['annotations']
     bbox_generated = 0
     area_generated = 0
+    seg_normalized = 0
 
     for ann in annotations:
         image_id = ann['image_id']
@@ -562,21 +600,34 @@ def preprocess_coco_dataset(coco_data: Dict[str, Any], in_place: bool = True) ->
         height = img_info.get('height')
         width = img_info.get('width')
 
-        # Auto-generate bbox from segmentation if missing
-        # Check: (1) segmentation exists, (2) is valid (not None/empty), (3) bbox missing or invalid
-        has_valid_seg = has_valid_list_field(ann, 'segmentation')
-        has_valid_bbox = has_valid_list_field(ann, 'bbox')
+        # Check for valid segmentation (polygon list or RLE dict)
+        seg = ann.get('segmentation')
+        has_valid_seg = seg is not None and seg != [] and isinstance(seg, (list, dict))
 
+        # STEP 1: Normalize segmentation to compressed RLE FIRST
+        # This avoids duplicate normalization in bbox/area computation
+        if has_valid_seg:
+            # Check if already compressed RLE (bytes counts)
+            if isinstance(seg, dict) and isinstance(seg.get('counts'), bytes):
+                pass
+            else:
+                seg = _normalize_to_rle(seg, height, width)
+                ann['segmentation'] = seg
+                seg_normalized += 1
+                logger.debug("Normalized segmentation for annotation %s", ann['id'])
+
+        # STEP 2: Generate bbox from normalized segmentation (no duplicate normalization)
+        has_valid_bbox = has_valid_list_field(ann, 'bbox')
         if has_valid_seg and not has_valid_bbox:
-            bbox = compute_bbox_from_mask(ann['segmentation'], height, width)
+            bbox = compute_bbox_from_mask(seg, height, width)
             ann['bbox'] = bbox
             bbox_generated += 1
             logger.debug("Generated bbox for annotation %s", ann['id'])
 
+        # STEP 3: Generate area from normalized segmentation
         has_valid_area = has_valid_numeric_field(ann, 'area', 0)
-        
         if has_valid_seg and not has_valid_area:
-            area = compute_area_from_mask(ann['segmentation'], height, width)
+            area = compute_area_from_mask(seg, height, width)
             ann['area'] = area
             area_generated += 1
             logger.debug("Generated area for annotation %s", ann['id'])
@@ -588,12 +639,12 @@ def preprocess_coco_dataset(coco_data: Dict[str, Any], in_place: bool = True) ->
             area_generated += 1
 
     if bbox_generated > 0:
-        logger.info(" Auto-generated %d bounding boxes from masks", bbox_generated)
+        logger.info("  Auto-generated %d bounding boxes from masks", bbox_generated)
     if area_generated > 0:
-        logger.info(" Auto-computed %d areas", area_generated)
-
+        logger.info("  Auto-computed %d areas", area_generated)
+    if seg_normalized > 0:
+        logger.info("  Normalized %d segmentations to compressed RLE", seg_normalized)
     return coco_data
-
 
 def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -677,10 +728,6 @@ def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
                         img_info['height'],
                         img_info['width']
                     )
-
-                    # If bbox area is significantly larger than mask area,
-                    # likely multiple disconnected objects in one annotation
-                    # Threshold: bbox area > 2.5x mask area
                     if mask_area > 0 and bbox_area > mask_area * 2.5:
                         results['suspicious_bboxes'] += 1
                 except Exception:
@@ -773,7 +820,7 @@ def split_dataset(
     # Set default splits if not provided
     if splits is None:
         splits = {'train': 0.7, 'val': 0.15, 'test': 0.15}
-    
+
     # Step 1: Validate inputs
     _validate_split_ratios(splits)
 
@@ -851,26 +898,26 @@ def _stratified_split(
             n_images
         )
         return _random_split(image_with_ann_ids, splits, random_seed)
-    
+
     # Get number of classes from annotations
     all_classes = set()
     for img_id in image_with_ann_ids:
         anns = image_to_anns[img_id]
         for ann in anns:
             all_classes.add(ann['category_id'])
-    
+
     # num_classes = len(all_classes)
     max_class_id = max(all_classes)
-    
+
     # Build multi-label indicator matrix
     # Each row = image, each column = class, value = 1 if class present in image
     label_matrix = np.zeros((n_images, max_class_id + 1), dtype=int)
-    
+
     for idx, img_id in enumerate(image_with_ann_ids):
         anns = image_to_anns[img_id]
         for ann in anns:
             label_matrix[idx, ann['category_id']] = 1
-    
+
     # Check for label diversity (need different label combinations)
     unique_patterns = np.unique(label_matrix, axis=0)
     if len(unique_patterns) < 2:
@@ -879,12 +926,12 @@ def _stratified_split(
             "Falling back to random split."
         )
         return _random_split(image_with_ann_ids, splits, random_seed)
-    
+
     # Perform multi-label stratified splitting
     try:
         X = np.arange(n_images).reshape(-1, 1)
         y = label_matrix
-        
+
         # First split: train vs (val + test)
         train_size = splits.get('train')
         msss = MultilabelStratifiedShuffleSplit(
@@ -892,24 +939,24 @@ def _stratified_split(
             test_size=1 - train_size,
             random_state=random_seed
         )
-        
+
         train_idx, temp_idx = next(msss.split(X, y))
         train_ids = {image_with_ann_ids[i] for i in train_idx}
-        
+
         # Second split: val vs test
         if 'val' in splits and 'test' in splits:
             val_ratio = splits['val'] / (splits['val'] + splits['test'])
             X_temp = X[temp_idx]
             y_temp = y[temp_idx]
-            
+
             msss_val = MultilabelStratifiedShuffleSplit(
                 n_splits=1,
                 test_size=1 - val_ratio,
                 random_state=random_seed
             )
-            
+
             val_idx_local, test_idx_local = next(msss_val.split(X_temp, y_temp))
-            
+
             # Map back to original image IDs
             temp_img_ids = [image_with_ann_ids[i] for i in temp_idx]
             val_ids = {temp_img_ids[i] for i in val_idx_local}
@@ -917,18 +964,18 @@ def _stratified_split(
         else:
             val_ids = {image_with_ann_ids[i] for i in temp_idx}
             test_ids = set()
-        
+
         logger.info(
             "Multi-label stratified split successful "
             f"(train={len(train_ids)}, val={len(val_ids)}, test={len(test_ids)})"
         )
-        
+
         return {
             'train': train_ids,
             'val': val_ids,
             'test': test_ids
         }
-    
+
     except Exception as e:
         logger.warning(
             "Multi-label stratification failed: %s. "
@@ -1006,7 +1053,7 @@ def _create_split_datasets(
     """
     result = {}
     all_category_ids = {cat['id'] for cat in categories}
-    
+
     # Calculate overall class distribution for comparison
     total_class_counts = {}
     for ann in annotations:

@@ -26,7 +26,7 @@ from ml_engine.evaluation.evaluator import ModelEvaluator
 from ml_engine.evaluation.report import ModelReportGenerator
 from ml_engine.export import create_export_package
 from ml_engine.models.teacher.grounding_dino_lora import load_grounding_dino_with_lora
-from ml_engine.models.teacher.sam_lora import load_sam_with_lora
+from ml_engine.models.teacher.sam_lora import load_sam_hq_with_lora
 from ml_engine.training.losses import build_criterion, SegmentationLoss
 from ml_engine.training.training_manager import TrainingManager
 from ml_engine.training.checkpoint_manager import CheckpointManager
@@ -128,8 +128,15 @@ class TeacherTrainer:
         (self.output_dir / 'teachers').mkdir(exist_ok=True)
 
         # Setup device
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # CRITICAL: When CUDA_VISIBLE_DEVICES is set (by subprocess_runner),
+        # PyTorch sees only the visible GPUs and remaps them starting from 0.
+        # Example: CUDA_VISIBLE_DEVICES=3 → PyTorch cuda:0 = Physical GPU 3
+        # So we always use cuda:0 here, which maps to the correct physical GPU.
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         logger.info("Using device: %s", self.device)
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            logger.info("GPU: %s", gpu_name)
 
         self.dataset_info = data_manager.get_dataset_info()
 
@@ -149,7 +156,7 @@ class TeacherTrainer:
         self._init_checkpoint_manager()
         self._init_loggers()
         self._init_visualizer()
-
+        
         # Resume from checkpoint if provided
         if resume_from:
             self._resume_from_checkpoint(resume_from)
@@ -167,6 +174,14 @@ class TeacherTrainer:
         train_data = self.data_manager.get_split('train')
         val_data = self.data_manager.get_split('val')
 
+        # Check if SAM single object sampling is enabled (for SAM-HQ style training)
+        # This reduces memory by training with 1 random object per image
+        # Config location: config['models']['sam']['training']['single_object_sampling']
+        sam_config = self.config.get('models', {}).get('sam', {})
+        sam_single_object_sampling = sam_config.get('training', {}).get('single_object_sampling', False)
+        if sam_single_object_sampling:
+            logger.info("SAM single object sampling enabled (1 object per image)")
+
         # Create training dataset with augmentation
         self.train_dataset = DatasetFactory.create_dataset(
             coco_data=train_data,
@@ -174,17 +189,20 @@ class TeacherTrainer:
             dataset_info=self.dataset_info,
             model_names=self.required_models,
             augmentation_config=self.config['augmentation'],
-            is_training=True
+            is_training=True,
+            sam_single_object_sampling=sam_single_object_sampling
         )
 
         # Create validation dataset without augmentation
+        # Note: Validation always uses all objects (no sampling)
         self.val_dataset = DatasetFactory.create_dataset(
             coco_data=val_data,
             image_path_resolver=self.data_manager.get_image_path,
             dataset_info=self.dataset_info,
             model_names=self.required_models,
             augmentation_config=None,  # No augmentation for validation
-            is_training=False
+            is_training=False,
+            sam_single_object_sampling=False  # Always evaluate on all objects
         )
 
         # Create dataloaders
@@ -252,9 +270,8 @@ class TeacherTrainer:
         if 'sam' in self.required_models:
             sam_config = self.config['models']['sam']
 
-            logger.info("Loading SAM with LoRA...")
+            logger.info("Loading SAM-HQ with LoRA...")
 
-            # Checkpoint and model type are optional (sensible defaults exist)
             model_section = sam_config.get('model', {})
             base_ckpt = model_section.get(
                 'base_checkpoint',
@@ -262,20 +279,27 @@ class TeacherTrainer:
             )
             model_type = model_section.get('model_type', 'vit_h')
 
-            # LoRA config is REQUIRED for LoRA training
             if 'lora' not in sam_config:
                 raise ValueError(
                     "LoRA training requires 'models.sam.lora' config!\n"
                     "Expected keys: r, lora_alpha, target_modules, lora_dropout"
                 )
 
-            self.models['sam'] = load_sam_with_lora(
+            image_encoder_mode = sam_config.get('image_encoder_mode', 'lora')
+            prompt_encoder_mode = sam_config.get('prompt_encoder_mode', 'frozen')
+            mask_decoder_mode = sam_config.get('mask_decoder_mode', 'full')
+
+            self.models['sam'] = load_sam_hq_with_lora(
                 base_checkpoint=base_ckpt,
                 model_type=model_type,
-                lora_config=sam_config['lora']
+                lora_config=sam_config['lora'],
+                image_encoder_mode=image_encoder_mode,
+                prompt_encoder_mode=prompt_encoder_mode,
+                mask_decoder_mode=mask_decoder_mode
             ).to(self.device)
 
-            logger.info("SAM loaded")
+            logger.info("SAM-HQ loaded (modes: encoder=%s, prompt=%s, decoder=%s)",
+                       image_encoder_mode, prompt_encoder_mode, mask_decoder_mode)
 
         # Set models to training mode
         for model in self.models.values():
@@ -326,16 +350,6 @@ class TeacherTrainer:
             lr = model_config.get('learning_rate', 1e-4)
             # Get trainable parameters
             trainable_params = [p for p in model.parameters() if p.requires_grad]
-
-            # ===================================================================
-            # Following prints are for debugging purposes
-            # ===================================================================
-            print("#" * 60)
-            num_trainable = sum(p.numel() for p in trainable_params)
-            print(f"Model: {model_name}")
-            print(f"Trainable parameters: {num_trainable:,} ({num_trainable / 1e6:.2f}M)")
-            print(f"Number of trainable tensors: {len(trainable_params)}")
-            print("#" * 60)
 
             # Create optimizer
             if optimizer_type == 'AdamW':
@@ -738,6 +752,8 @@ class TeacherTrainer:
         # Metrics accumulator (dynamic keys)
         epoch_losses = {}
         total_steps = len(self.train_loader)
+        
+        # Memory monitoring
 
         # Training loop
         pbar = tqdm(self.train_loader, desc=f"Train Epoch {epoch + 1}")
@@ -748,7 +764,6 @@ class TeacherTrainer:
                 raise TrainingCancelledException("Training cancelled by user")
 
             batch_losses = self._train_batch(batch)
-
             # Accumulate losses (dynamically add new keys)
             for key, value in batch_losses.items():
                 if key not in epoch_losses:
@@ -777,6 +792,7 @@ class TeacherTrainer:
                         'metrics': {'avg_loss': avg_loss},
                         'message': f"Epoch {epoch + 1}, Step {step + 1}/{total_steps}"
                     })
+
 
         # Compute average metrics
         train_metrics = {}
@@ -981,17 +997,21 @@ class TeacherTrainer:
 
         return result
 
+    # Class-level step counter for SAM memory diagnostics
+    _sam_batch_step = 0
+    _sam_memory_log_interval = 50  # Log every N steps
+    
     def _train_sam_batch(self, batch: Dict[str, Any]) -> float:
         """Train SAM on a batch."""
         model = self.models['sam']
         manager = self.training_managers['sam']
-
+        
         def compute_loss(batch):
             # Get preprocessed SAM data (already transformed by official transforms)
             sam_data = batch['preprocessed']['sam']
             images = sam_data['images'].to(self.device)     # [B, 3, 1024, 1024]
             boxes = sam_data['boxes'].to(self.device)       # [B, max_objs, 4] already in SAM space!
-            masks = sam_data['masks'].to(self.device)       # [B, max_objs, 1024, 1024]
+            masks = sam_data['masks'].to(self.device)       # [B, max_objs, 256, 256]
             labels = sam_data['labels'].to(self.device)     # [B, max_objs]
 
             # Create validity mask
@@ -1012,7 +1032,6 @@ class TeacherTrainer:
 
         # Training step with gradient management
         loss_dict = manager.training_step(batch, compute_loss)
-
         return loss_dict['loss'].item()
 
     @torch.no_grad()

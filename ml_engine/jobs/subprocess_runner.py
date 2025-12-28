@@ -356,7 +356,19 @@ def _training_entry_point(
         result_queue: Queue to send final result
         cancel_event: Event to check for cancellation
     """
-    # Set GPU before any CUDA operations
+    # CRITICAL: Set up sys.path BEFORE any imports
+    # Subprocess with 'spawn' starts fresh, doesn't inherit sys.path
+    from pathlib import Path
+    project_root = Path(__file__).parent.parent.parent
+    deps_segment_anything = project_root / "deps" / "segment_anything"
+    deps_groundingdino = project_root / "GroundingDINO"
+    
+    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino)]:
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    
+    # CRITICAL: Set CUDA_VISIBLE_DEVICES BEFORE any torch imports
+    # This ensures PyTorch only sees the assigned GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
     # Setup logging for subprocess
@@ -367,6 +379,16 @@ def _training_entry_point(
     sub_logger = logging.getLogger(__name__)
 
     sub_logger.info("Training subprocess started (pid=%d, gpu=%d)", os.getpid(), gpu_id)
+    sub_logger.info("CUDA_VISIBLE_DEVICES set to: %s", os.environ.get("CUDA_VISIBLE_DEVICES"))
+    
+    # Verify GPU mapping after torch import
+    import torch
+    if torch.cuda.is_available():
+        sub_logger.info("PyTorch sees %d GPU(s)", torch.cuda.device_count())
+        sub_logger.info("PyTorch cuda:0 maps to physical GPU %d (%s)", 
+                       gpu_id, torch.cuda.get_device_name(0))
+    else:
+        sub_logger.warning("CUDA not available in subprocess!")
 
     try:
         _run_training_job(
@@ -429,12 +451,12 @@ def _run_training_job(
             raise ValueError("image_paths required in job config")
 
         # Create DataManager
+        # Note: Normalization (bbox from masks, etc.) is always applied during loading
         split_config = job_config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
         data_manager = DataManager(
             data_path=data_path,
             image_paths=image_paths,
-            split_config=split_config,
-            auto_preprocess=True
+            split_config=split_config
         )
 
         # Build config
