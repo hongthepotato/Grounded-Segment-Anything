@@ -362,8 +362,9 @@ def _training_entry_point(
     project_root = Path(__file__).parent.parent.parent
     deps_segment_anything = project_root / "deps" / "segment_anything"
     deps_groundingdino = project_root / "GroundingDINO"
+    deps_efficientsam = project_root / "EfficientSAM"
     
-    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino)]:
+    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino), str(deps_efficientsam)]:
         if path not in sys.path:
             sys.path.insert(0, path)
     

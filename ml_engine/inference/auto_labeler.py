@@ -33,7 +33,7 @@ import torchvision.ops
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "GroundingDINO"))
-sys.path.insert(0, str(project_root / "segment_anything"))
+sys.path.insert(0, str(project_root / "deps" / "segment_anything"))
 # EfficientSAM directory contains MobileSAM as a subdirectory
 sys.path.insert(0, str(project_root / "EfficientSAM"))
 
