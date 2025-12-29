@@ -20,9 +20,11 @@ Usage:
 import os
 import sys
 import logging
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+from collections import defaultdict
 
 import cv2
 import numpy as np
@@ -58,13 +60,213 @@ OUTPUT_MASKS_ONLY = "masks"
 OUTPUT_BOTH = "both"
 
 
+class PipelineProfiler:
+    """
+    Comprehensive profiler for auto-labeling pipeline.
+    
+    Tracks timing for all steps including model loading, image I/O,
+    preprocessing, inference, and post-processing.
+    
+    Usage:
+        profiler = PipelineProfiler(enabled=True)
+        
+        with profiler.measure("step_name"):
+            # code to profile
+            
+        profiler.print_summary()
+    """
+    
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+        self.timings: Dict[str, List[float]] = defaultdict(list)
+        self._start_times: Dict[str, float] = {}
+        self.total_images = 0
+        self.total_detections = 0
+        self.total_masks = 0
+    
+    def _sync_cuda(self):
+        """Synchronize CUDA for accurate timing."""
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+    
+    def start(self, name: str):
+        """Start timing a step."""
+        if self.enabled:
+            self._sync_cuda()
+            self._start_times[name] = time.perf_counter()
+    
+    def stop(self, name: str) -> float:
+        """Stop timing a step and record the duration."""
+        if self.enabled and name in self._start_times:
+            self._sync_cuda()
+            elapsed = (time.perf_counter() - self._start_times[name]) * 1000  # ms
+            self.timings[name].append(elapsed)
+            del self._start_times[name]
+            return elapsed
+        return 0.0
+    
+    class _TimingContext:
+        """Context manager for timing blocks."""
+        def __init__(self, profiler: 'PipelineProfiler', name: str):
+            self.profiler = profiler
+            self.name = name
+        
+        def __enter__(self):
+            self.profiler.start(self.name)
+            return self
+        
+        def __exit__(self, *args):
+            self.profiler.stop(self.name)
+    
+    def measure(self, name: str) -> _TimingContext:
+        """Context manager for timing a block of code."""
+        return self._TimingContext(self, name)
+    
+    def record(self, name: str, elapsed_ms: float):
+        """Manually record a timing."""
+        if self.enabled:
+            self.timings[name].append(elapsed_ms)
+    
+    def add_counts(self, images: int = 0, detections: int = 0, masks: int = 0):
+        """Track counts for summary."""
+        self.total_images += images
+        self.total_detections += detections
+        self.total_masks += masks
+    
+    def get_stats(self, name: str) -> Dict[str, float]:
+        """Get statistics for a timing step."""
+        times = self.timings.get(name, [])
+        if not times:
+            return {"total": 0, "mean": 0, "min": 0, "max": 0, "count": 0}
+        return {
+            "total": sum(times),
+            "mean": sum(times) / len(times),
+            "min": min(times),
+            "max": max(times),
+            "count": len(times)
+        }
+    
+    def print_summary(self):
+        """Print comprehensive timing summary."""
+        if not self.enabled or not self.timings:
+            return
+        
+        print("\n" + "=" * 80)
+        print("                    PIPELINE PROFILING SUMMARY")
+        print("=" * 80)
+        
+        # Overall stats
+        print(f"\n📊 Overall Statistics:")
+        print(f"   Images processed:    {self.total_images}")
+        print(f"   Total detections:    {self.total_detections}")
+        print(f"   Total masks:         {self.total_masks}")
+        
+        # Define step categories for organized output
+        model_loading_steps = ["load_grounding_dino", "load_mobile_sam", "model_loading_total"]
+        per_image_steps = [
+            "image_read", "image_color_convert", 
+            "dino_inference", "nms",
+            "sam_set_image", "sam_predict_single_mask", "sam_predict_all_masks",
+            "box_format_convert", "result_build",
+            "per_image_total"
+        ]
+        viz_steps = ["visualization"]
+        
+        # Print model loading times (one-time costs)
+        print(f"\n⏱️  Model Loading (one-time):")
+        print("-" * 80)
+        print(f"{'Step':<40} {'Time (ms)':>12}")
+        print("-" * 80)
+        
+        for step in model_loading_steps:
+            if step in self.timings:
+                stats = self.get_stats(step)
+                print(f"   {step:<37} {stats['total']:>12.2f}")
+        
+        # Print per-image inference times
+        print(f"\n⏱️  Per-Image Inference:")
+        print("-" * 80)
+        print(f"{'Step':<40} {'Total(ms)':>10} {'Mean(ms)':>10} {'Min':>8} {'Max':>8}")
+        print("-" * 80)
+        
+        inference_total = 0
+        for step in per_image_steps:
+            if step in self.timings:
+                stats = self.get_stats(step)
+                print(f"   {step:<37} {stats['total']:>10.2f} {stats['mean']:>10.2f} {stats['min']:>8.2f} {stats['max']:>8.2f}")
+                if step != "per_image_total":
+                    inference_total += stats['total']
+        
+        # Print visualization times
+        if any(step in self.timings for step in viz_steps):
+            print(f"\n⏱️  Visualization:")
+            print("-" * 80)
+            for step in viz_steps:
+                if step in self.timings:
+                    stats = self.get_stats(step)
+                    print(f"   {step:<37} {stats['total']:>10.2f} {stats['mean']:>10.2f} {stats['min']:>8.2f} {stats['max']:>8.2f}")
+        
+        # Print any other steps not in the predefined categories
+        all_known = set(model_loading_steps + per_image_steps + viz_steps)
+        other_steps = [s for s in self.timings.keys() if s not in all_known]
+        if other_steps:
+            print(f"\n⏱️  Other:")
+            print("-" * 80)
+            for step in other_steps:
+                stats = self.get_stats(step)
+                print(f"   {step:<37} {stats['total']:>10.2f} {stats['mean']:>10.2f}")
+        
+        # Summary
+        print("\n" + "=" * 80)
+        print("📈 SUMMARY")
+        print("=" * 80)
+        
+        if self.total_images > 0:
+            # Calculate key metrics
+            per_image_stats = self.get_stats("per_image_total")
+            avg_per_image = per_image_stats['mean'] if per_image_stats['count'] > 0 else 0
+            
+            if avg_per_image > 0:
+                fps = 1000.0 / avg_per_image
+                print(f"   Average time per image:  {avg_per_image:.2f} ms")
+                print(f"   Throughput:              {fps:.2f} FPS")
+            
+            # Breakdown
+            if inference_total > 0:
+                print(f"\n   Time Breakdown (inference only):")
+                breakdown_steps = ["dino_inference", "sam_set_image", "sam_predict_all_masks", "nms", "image_read"]
+                for step in breakdown_steps:
+                    if step in self.timings:
+                        stats = self.get_stats(step)
+                        pct = (stats['total'] / inference_total) * 100
+                        bar_len = int(pct / 2)
+                        bar = "█" * bar_len + "░" * (50 - bar_len)
+                        print(f"   {step:<25} {bar} {pct:>5.1f}%")
+        
+        print("=" * 80 + "\n")
+
+
+# Backend options
+BACKEND_PYTORCH = "pytorch"
+BACKEND_ONNX = "onnx"
+
+
 @dataclass
 class AutoLabelerConfig:
     """Configuration for AutoLabeler."""
-    # Model paths
+    # Backend selection: "pytorch" or "onnx"
+    # - "pytorch": Original PyTorch model (default)
+    # - "onnx": ONNX Runtime for faster inference
+    backend: str = BACKEND_PYTORCH
+    
+    # Model paths (PyTorch backend)
     grounding_dino_config: str = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
     grounding_dino_checkpoint: str = "data/models/pretrained/groundingdino_swint_ogc.pth"
     mobile_sam_checkpoint: str = "data/models/pretrained/mobile_sam.pt"
+    
+    # ONNX model paths (ONNX backend)
+    onnx_model_dir: str = "grounding-dino-tiny-ONNX"
+    onnx_model_variant: str = "fp16"  # "fp32", "fp16", "int8", "q4"
 
     # Detection thresholds
     box_threshold: float = 0.5
@@ -79,6 +281,9 @@ class AutoLabelerConfig:
 
     # Device
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Profiling: Enable detailed timing analysis
+    enable_profiling: bool = False
 
 
 class AutoLabeler:
@@ -109,50 +314,74 @@ class AutoLabeler:
         """
         self.config = config or AutoLabelerConfig()
         self.device = torch.device(self.config.device)
+        self.backend = self.config.backend
 
         # Models will be loaded lazily
-        self._grounding_dino = None
+        self._grounding_dino = None  # PyTorch model
+        self._onnx_detector = None   # ONNX model
         self._sam_predictor = None
         self._models_loaded = False
+        
+        # Profiler for timing analysis
+        self.profiler = PipelineProfiler(enabled=self.config.enable_profiling)
 
-        logger.info("AutoLabeler initialized (device: %s)", self.device)
+        logger.info("AutoLabeler initialized (backend: %s, device: %s, profiling: %s)", 
+                    self.backend, self.device, self.config.enable_profiling)
 
     def _load_models(self) -> None:
         """
         Load Grounding DINO and MobileSAM models.
         
-        Reuses existing model loading patterns from:
-        - grounded_sam_simple_demo.py (DINO)
-        - EfficientSAM/grounded_mobile_sam.py (MobileSAM)
+        Supports two backends:
+        - PyTorch: Original model from grounded_sam_simple_demo.py
+        - ONNX: HuggingFace ONNX model with ONNX Runtime
         
         Note: MobileSAM is only loaded if output_mode requires masks.
         """
         if self._models_loaded:
             return
 
-        logger.info("Loading Grounding DINO model...")
-        self._grounding_dino = GroundingDINOModel(
-            model_config_path=self.config.grounding_dino_config,
-            model_checkpoint_path=self.config.grounding_dino_checkpoint,
-            device=str(self.device)
-        )
+        self.profiler.start("model_loading_total")
+        
+        if self.backend == BACKEND_ONNX:
+            # Load ONNX model
+            logger.info("Loading ONNX Grounding DINO model...")
+            with self.profiler.measure("load_grounding_dino"):
+                from ml_engine.inference.onnx_grounding_dino import create_onnx_detector
+                self._onnx_detector = create_onnx_detector(
+                    model_dir=self.config.onnx_model_dir,
+                    model_variant=self.config.onnx_model_variant,
+                    device=str(self.device).split(":")[0],  # "cuda:0" -> "cuda"
+                )
+                self._onnx_detector.load()
+        else:
+            # Load PyTorch model (default)
+            logger.info("Loading PyTorch Grounding DINO model...")
+            with self.profiler.measure("load_grounding_dino"):
+                self._grounding_dino = GroundingDINOModel(
+                    model_config_path=self.config.grounding_dino_config,
+                    model_checkpoint_path=self.config.grounding_dino_checkpoint,
+                    device=str(self.device)
+                )
 
         # Only load SAM if we need masks
         if self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH):
             logger.info("Loading MobileSAM model...")
-            mobile_sam = setup_mobile_sam()
-            checkpoint = torch.load(self.config.mobile_sam_checkpoint, map_location="cpu")
-            mobile_sam.load_state_dict(checkpoint, strict=True)
-            mobile_sam.to(device=self.device)
-            mobile_sam.eval()
-            
-            self._sam_predictor = SamPredictor(mobile_sam)
+            with self.profiler.measure("load_mobile_sam"):
+                mobile_sam = setup_mobile_sam()
+                checkpoint = torch.load(self.config.mobile_sam_checkpoint, map_location="cpu")
+                mobile_sam.load_state_dict(checkpoint, strict=True)
+                mobile_sam.to(device=self.device)
+                mobile_sam.eval()
+                
+                self._sam_predictor = SamPredictor(mobile_sam)
         else:
             logger.info("Skipping MobileSAM (output_mode='boxes')")
             self._sam_predictor = None
         
+        self.profiler.stop("model_loading_total")
         self._models_loaded = True
-        logger.info("Models loaded successfully")
+        logger.info("Models loaded successfully (backend: %s)", self.backend)
     
     def _detect_objects(
         self,
@@ -169,24 +398,35 @@ class AutoLabeler:
         Returns:
             Tuple of (boxes_xyxy, confidences, class_ids) after NMS
         """
-        # Use DINO's predict_with_classes (from grounded_sam_simple_demo.py pattern)
-        detections = self._grounding_dino.predict_with_classes(
-            image=image,
-            classes=class_prompts,
-            box_threshold=self.config.box_threshold,
-            text_threshold=self.config.text_threshold
-        )
+        # Use appropriate backend
+        with self.profiler.measure("dino_inference"):
+            if self.backend == BACKEND_ONNX:
+                detections = self._onnx_detector.predict_with_classes(
+                    image=image,
+                    classes=class_prompts,
+                    box_threshold=self.config.box_threshold,
+                    text_threshold=self.config.text_threshold,
+                )
+            else:
+                # PyTorch backend (default)
+                detections = self._grounding_dino.predict_with_classes(
+                    image=image,
+                    classes=class_prompts,
+                    box_threshold=self.config.box_threshold,
+                    text_threshold=self.config.text_threshold
+                )
         
         # Check if any detections
         if len(detections.xyxy) == 0:
             return np.array([]), np.array([]), np.array([])
         
         # Apply NMS (from all demo patterns)
-        nms_idx = torchvision.ops.nms(
-            torch.from_numpy(detections.xyxy),
-            torch.from_numpy(detections.confidence),
-            self.config.nms_threshold
-        ).numpy().tolist()
+        with self.profiler.measure("nms"):
+            nms_idx = torchvision.ops.nms(
+                torch.from_numpy(detections.xyxy),
+                torch.from_numpy(detections.confidence),
+                self.config.nms_threshold
+            ).numpy().tolist()
         
         boxes = detections.xyxy[nms_idx]
         confidences = detections.confidence[nms_idx]
@@ -214,19 +454,25 @@ class AutoLabeler:
             return []
         
         # Set image (encodes once, from grounded_mobile_sam.py pattern)
-        self._sam_predictor.set_image(image)
+        with self.profiler.measure("sam_set_image"):
+            self._sam_predictor.set_image(image)
         
         masks = []
+        self.profiler.start("sam_predict_all_masks")
         for box in boxes:
             # Predict mask for this box
+            self.profiler.start("sam_predict_single_mask")
             mask_predictions, scores, _ = self._sam_predictor.predict(
                 box=box,
                 multimask_output=True
             )
+            self.profiler.stop("sam_predict_single_mask")
             # Select best mask (highest score)
             best_idx = np.argmax(scores)
             masks.append(mask_predictions[best_idx])
+        self.profiler.stop("sam_predict_all_masks")
         
+        self.profiler.add_counts(masks=len(masks))
         return masks
     
     def label_single_image(
@@ -250,47 +496,58 @@ class AutoLabeler:
                 - image_info: Dict with file_name, width, height
         """
         self._load_models()
+        
+        # Start per-image timing
+        self.profiler.start("per_image_total")
 
-        # Load image
-        image_bgr = cv2.imread(image_path)
+        # Load image from disk
+        with self.profiler.measure("image_read"):
+            image_bgr = cv2.imread(image_path)
         if image_bgr is None:
             raise ValueError(f"Could not load image: {image_path}")
 
-        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        with self.profiler.measure("image_color_convert"):
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         height, width = image_bgr.shape[:2]
 
-        # Detect objects
+        # Detect objects (profiling inside _detect_objects)
         boxes_xyxy, confidences, class_ids = self._detect_objects(image_bgr, class_prompts)
         
         # Convert boxes to COCO format [x, y, width, height]
-        boxes_coco = []
-        for box in boxes_xyxy:
-            x1, y1, x2, y2 = box
-            boxes_coco.append([float(x1), float(y1), float(x2 - x1), float(y2 - y1)])
+        with self.profiler.measure("box_format_convert"):
+            boxes_coco = []
+            for box in boxes_xyxy:
+                x1, y1, x2, y2 = box
+                boxes_coco.append([float(x1), float(y1), float(x2 - x1), float(y2 - y1)])
         
-        # Generate masks if needed
+        # Generate masks if needed (profiling inside _segment_boxes)
         masks = []
         if self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH):
             masks = self._segment_boxes(image_rgb, boxes_xyxy)
         
         # Build result based on output_mode
-        result = {
-            'class_ids': class_ids.tolist() if len(class_ids) > 0 else [],
-            'scores': confidences.tolist() if len(confidences) > 0 else [],
-            'image_info': {
-                'file_name': os.path.basename(image_path),
-                'width': width,
-                'height': height
+        with self.profiler.measure("result_build"):
+            result = {
+                'class_ids': class_ids.tolist() if len(class_ids) > 0 else [],
+                'scores': confidences.tolist() if len(confidences) > 0 else [],
+                'image_info': {
+                    'file_name': os.path.basename(image_path),
+                    'width': width,
+                    'height': height
+                }
             }
-        }
+            
+            # Include boxes if requested
+            if self.config.output_mode in (OUTPUT_BOXES_ONLY, OUTPUT_BOTH):
+                result['boxes'] = boxes_coco
+            
+            # Include masks if requested
+            if self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH):
+                result['masks'] = masks
         
-        # Include boxes if requested
-        if self.config.output_mode in (OUTPUT_BOXES_ONLY, OUTPUT_BOTH):
-            result['boxes'] = boxes_coco
-        
-        # Include masks if requested
-        if self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH):
-            result['masks'] = masks
+        # Stop per-image timing and record counts
+        self.profiler.stop("per_image_total")
+        self.profiler.add_counts(images=1, detections=len(boxes_xyxy))
         
         return result
     

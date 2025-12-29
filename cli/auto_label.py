@@ -193,6 +193,35 @@ Examples:
         action="store_true",
         help="Hide confidence scores in visualization"
     )
+    
+    # Profiling
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Enable detailed timing profiler for performance analysis"
+    )
+    
+    # Backend selection
+    parser.add_argument(
+        "--backend",
+        type=str,
+        choices=["pytorch", "onnx"],
+        default="pytorch",
+        help="Inference backend: 'pytorch' (default) or 'onnx' (faster)"
+    )
+    parser.add_argument(
+        "--onnx-model-dir",
+        type=str,
+        default="grounding-dino-tiny-ONNX",
+        help="Path to ONNX model directory (default: grounding-dino-tiny-ONNX)"
+    )
+    parser.add_argument(
+        "--onnx-variant",
+        type=str,
+        choices=["fp32", "fp16", "int8", "q4", "q4f16", "uint8", "quantized"],
+        default="fp16",
+        help="ONNX model variant: 'fp32', 'fp16' (default), 'int8', 'q4', 'q4f16', 'uint8', 'quantized'"
+    )
 
     return parser.parse_args()
 
@@ -262,9 +291,23 @@ def main():
 
     logger.info("Found %d images to process", len(image_paths))
 
-    # Validate model checkpoints exist
-    validate_file_exists(args.dino_config, "DINO config")
-    validate_file_exists(args.dino_checkpoint, "DINO checkpoint")
+    # Validate model checkpoints based on backend
+    if args.backend == "pytorch":
+        validate_file_exists(args.dino_config, "DINO config")
+        validate_file_exists(args.dino_checkpoint, "DINO checkpoint")
+    else:
+        # ONNX backend - validate ONNX model directory
+        onnx_model_path = Path(args.onnx_model_dir)
+        if not onnx_model_path.exists():
+            logger.error("ONNX model directory not found: %s", args.onnx_model_dir)
+            sys.exit(1)
+        variant_file = onnx_model_path / "onnx" / f"model_{args.onnx_variant}.onnx"
+        if args.onnx_variant == "fp32":
+            variant_file = onnx_model_path / "onnx" / "model.onnx"
+        if not variant_file.exists():
+            logger.error("ONNX model variant not found: %s", variant_file)
+            sys.exit(1)
+        logger.info("Using ONNX model: %s", variant_file)
 
     # Only validate SAM checkpoint if we need masks
     if args.output_mode in ("masks", "both"):
@@ -273,23 +316,32 @@ def main():
         logger.info("Skipping SAM checkpoint validation (output_mode='boxes')")
 
     config = AutoLabelerConfig(
+        backend=args.backend,
         grounding_dino_config=args.dino_config,
         grounding_dino_checkpoint=args.dino_checkpoint,
         mobile_sam_checkpoint=args.sam_checkpoint,
+        onnx_model_dir=args.onnx_model_dir,
+        onnx_model_variant=args.onnx_variant,
         box_threshold=args.box_threshold,
         text_threshold=args.text_threshold,
         nms_threshold=args.nms_threshold,
         output_mode=args.output_mode,
-        device=device
+        device=device,
+        enable_profiling=args.profile
     )
 
     print_section("Configuration")
-    print(f"  DINO checkpoint: {args.dino_checkpoint}")
+    print(f"  Backend:         {args.backend}")
+    if args.backend == "pytorch":
+        print(f"  DINO checkpoint: {args.dino_checkpoint}")
+    else:
+        print(f"  ONNX model:      {args.onnx_model_dir}/onnx/model_{args.onnx_variant}.onnx")
     print(f"  SAM checkpoint:  {args.sam_checkpoint}")
     print(f"  Box threshold:   {args.box_threshold}")
     print(f"  NMS threshold:   {args.nms_threshold}")
     print(f"  Output mode:     {args.output_mode}")
     print(f"  Device:          {device}")
+    print(f"  Profiling:       {'enabled' if args.profile else 'disabled'}")
     print()
 
     # Create labeler
@@ -334,16 +386,18 @@ def main():
             filename = Path(image_path).stem + "_viz.jpg"
             viz_path = str(Path(viz_dir) / filename)
             
-            visualize_detections(
-                image_path=image_path,
-                result=result,
-                class_prompts=class_prompts,
-                output_path=viz_path,
-                show_boxes=show_boxes,
-                show_masks=show_masks,
-                show_labels=not args.no_labels,
-                show_scores=not args.no_scores
-            )
+            # Profile visualization if enabled
+            with labeler.profiler.measure("visualization"):
+                visualize_detections(
+                    image_path=image_path,
+                    result=result,
+                    class_prompts=class_prompts,
+                    output_path=viz_path,
+                    show_boxes=show_boxes,
+                    show_masks=show_masks,
+                    show_labels=not args.no_labels,
+                    show_scores=not args.no_scores
+                )
             viz_count += 1
         
         logger.info(f"Saved {viz_count} visualizations to: {viz_dir}")
@@ -382,6 +436,10 @@ def main():
 
         for cat_name, count in sorted(category_counts.items()):
             print(f"  - {cat_name}: {count}")
+    
+    # Print profiler summary if enabled
+    if args.profile:
+        labeler.profiler.print_summary()
 
 
 if __name__ == "__main__":
