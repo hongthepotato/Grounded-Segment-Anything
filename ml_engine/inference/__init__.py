@@ -13,6 +13,7 @@ from ml_engine.inference.auto_labeler import (
     OUTPUT_BOTH,
     BACKEND_PYTORCH,
     BACKEND_ONNX,
+    BACKEND_CUSTOM_ONNX,
 )
 
 __all__ = [
@@ -27,5 +28,6 @@ __all__ = [
     'OUTPUT_BOTH',
     'BACKEND_PYTORCH',
     'BACKEND_ONNX',
+    'BACKEND_CUSTOM_ONNX',
 ]
 

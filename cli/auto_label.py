@@ -205,22 +205,36 @@ Examples:
     parser.add_argument(
         "--backend",
         type=str,
-        choices=["pytorch", "onnx"],
+        choices=["pytorch", "onnx", "custom_onnx"],
         default="pytorch",
-        help="Inference backend: 'pytorch' (default) or 'onnx' (faster)"
+        help="Inference backend: 'pytorch' (default), 'onnx' (HuggingFace), or 'custom_onnx' (our export)"
     )
     parser.add_argument(
         "--onnx-model-dir",
         type=str,
         default="grounding-dino-tiny-ONNX",
-        help="Path to ONNX model directory (default: grounding-dino-tiny-ONNX)"
+        help="Path to HuggingFace ONNX model directory (for --backend onnx)"
     )
     parser.add_argument(
         "--onnx-variant",
         type=str,
         choices=["fp32", "fp16", "int8", "q4", "q4f16", "uint8", "quantized"],
         default="fp16",
-        help="ONNX model variant: 'fp32', 'fp16' (default), 'int8', 'q4', 'q4f16', 'uint8', 'quantized'"
+        help="HuggingFace ONNX model variant (for --backend onnx)"
+    )
+    parser.add_argument(
+        "--custom-onnx-path",
+        type=str,
+        default="data/models/groundingdino_swint.onnx",
+        help="Path to custom ONNX model (for --backend custom_onnx)"
+    )
+    parser.add_argument(
+        "--input-size",
+        type=int,
+        nargs=2,
+        default=[800, 800],
+        metavar=('H', 'W'),
+        help="Input size (H W) for custom ONNX model (default: 800 800)"
     )
 
     return parser.parse_args()
@@ -295,8 +309,8 @@ def main():
     if args.backend == "pytorch":
         validate_file_exists(args.dino_config, "DINO config")
         validate_file_exists(args.dino_checkpoint, "DINO checkpoint")
-    else:
-        # ONNX backend - validate ONNX model directory
+    elif args.backend == "onnx":
+        # HuggingFace ONNX backend - validate ONNX model directory
         onnx_model_path = Path(args.onnx_model_dir)
         if not onnx_model_path.exists():
             logger.error("ONNX model directory not found: %s", args.onnx_model_dir)
@@ -307,7 +321,13 @@ def main():
         if not variant_file.exists():
             logger.error("ONNX model variant not found: %s", variant_file)
             sys.exit(1)
-        logger.info("Using ONNX model: %s", variant_file)
+        logger.info("Using HuggingFace ONNX model: %s", variant_file)
+    elif args.backend == "custom_onnx":
+        # Custom ONNX backend - validate custom ONNX model
+        if not Path(args.custom_onnx_path).exists():
+            logger.error("Custom ONNX model not found: %s", args.custom_onnx_path)
+            sys.exit(1)
+        logger.info("Using custom ONNX model: %s", args.custom_onnx_path)
 
     # Only validate SAM checkpoint if we need masks
     if args.output_mode in ("masks", "both"):
@@ -322,6 +342,8 @@ def main():
         mobile_sam_checkpoint=args.sam_checkpoint,
         onnx_model_dir=args.onnx_model_dir,
         onnx_model_variant=args.onnx_variant,
+        custom_onnx_path=args.custom_onnx_path,
+        custom_onnx_input_size=tuple(args.input_size),
         box_threshold=args.box_threshold,
         text_threshold=args.text_threshold,
         nms_threshold=args.nms_threshold,
@@ -334,8 +356,11 @@ def main():
     print(f"  Backend:         {args.backend}")
     if args.backend == "pytorch":
         print(f"  DINO checkpoint: {args.dino_checkpoint}")
-    else:
+    elif args.backend == "onnx":
         print(f"  ONNX model:      {args.onnx_model_dir}/onnx/model_{args.onnx_variant}.onnx")
+    elif args.backend == "custom_onnx":
+        print(f"  Custom ONNX:     {args.custom_onnx_path}")
+        print(f"  Input size:      {args.input_size[0]}x{args.input_size[1]}")
     print(f"  SAM checkpoint:  {args.sam_checkpoint}")
     print(f"  Box threshold:   {args.box_threshold}")
     print(f"  NMS threshold:   {args.nms_threshold}")

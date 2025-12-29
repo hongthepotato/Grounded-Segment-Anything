@@ -249,14 +249,16 @@ class PipelineProfiler:
 # Backend options
 BACKEND_PYTORCH = "pytorch"
 BACKEND_ONNX = "onnx"
+BACKEND_CUSTOM_ONNX = "custom_onnx"
 
 
 @dataclass
 class AutoLabelerConfig:
     """Configuration for AutoLabeler."""
-    # Backend selection: "pytorch" or "onnx"
+    # Backend selection: "pytorch", "onnx", or "custom_onnx"
     # - "pytorch": Original PyTorch model (default)
-    # - "onnx": ONNX Runtime for faster inference
+    # - "onnx": HuggingFace ONNX model with ONNX Runtime
+    # - "custom_onnx": Our custom-exported ONNX model
     backend: str = BACKEND_PYTORCH
     
     # Model paths (PyTorch backend)
@@ -264,9 +266,14 @@ class AutoLabelerConfig:
     grounding_dino_checkpoint: str = "data/models/pretrained/groundingdino_swint_ogc.pth"
     mobile_sam_checkpoint: str = "data/models/pretrained/mobile_sam.pt"
     
-    # ONNX model paths (ONNX backend)
+    # ONNX model paths (onnx backend - HuggingFace)
     onnx_model_dir: str = "grounding-dino-tiny-ONNX"
     onnx_model_variant: str = "fp16"  # "fp32", "fp16", "int8", "q4"
+    
+    # Custom ONNX model path (custom_onnx backend)
+    custom_onnx_path: str = "data/models/groundingdino_swint.onnx"
+    bert_path: str = "data/models/pretrained/bert-base-uncased"
+    custom_onnx_input_size: Tuple[int, int] = (800, 800)  # (H, W) for custom ONNX
 
     # Detection thresholds
     box_threshold: float = 0.5
@@ -332,9 +339,10 @@ class AutoLabeler:
         """
         Load Grounding DINO and MobileSAM models.
         
-        Supports two backends:
+        Supports three backends:
         - PyTorch: Original model from grounded_sam_simple_demo.py
         - ONNX: HuggingFace ONNX model with ONNX Runtime
+        - Custom ONNX: Our custom-exported ONNX model
         
         Note: MobileSAM is only loaded if output_mode requires masks.
         """
@@ -344,14 +352,26 @@ class AutoLabeler:
         self.profiler.start("model_loading_total")
         
         if self.backend == BACKEND_ONNX:
-            # Load ONNX model
-            logger.info("Loading ONNX Grounding DINO model...")
+            # Load HuggingFace ONNX model
+            logger.info("Loading HuggingFace ONNX Grounding DINO model...")
             with self.profiler.measure("load_grounding_dino"):
                 from ml_engine.inference.onnx_grounding_dino import create_onnx_detector
                 self._onnx_detector = create_onnx_detector(
                     model_dir=self.config.onnx_model_dir,
                     model_variant=self.config.onnx_model_variant,
                     device=str(self.device).split(":")[0],  # "cuda:0" -> "cuda"
+                )
+                self._onnx_detector.load()
+        elif self.backend == BACKEND_CUSTOM_ONNX:
+            # Load custom-exported ONNX model
+            logger.info("Loading custom ONNX Grounding DINO model...")
+            with self.profiler.measure("load_grounding_dino"):
+                from ml_engine.inference.custom_onnx_dino import CustomONNXGroundingDINO
+                self._onnx_detector = CustomONNXGroundingDINO(
+                    model_path=self.config.custom_onnx_path,
+                    bert_path=self.config.bert_path,
+                    device=str(self.device).split(":")[0],
+                    input_size=self.config.custom_onnx_input_size,
                 )
                 self._onnx_detector.load()
         else:
@@ -400,7 +420,7 @@ class AutoLabeler:
         """
         # Use appropriate backend
         with self.profiler.measure("dino_inference"):
-            if self.backend == BACKEND_ONNX:
+            if self.backend in (BACKEND_ONNX, BACKEND_CUSTOM_ONNX):
                 detections = self._onnx_detector.predict_with_classes(
                     image=image,
                     classes=class_prompts,
