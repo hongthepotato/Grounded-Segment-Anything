@@ -27,7 +27,6 @@ Usage:
 """
 
 import logging
-import os
 import signal
 import socket
 import time
@@ -36,7 +35,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo, JobType
+from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
 from ml_engine.jobs.subprocess_runner import TrainingSubprocess
 

@@ -362,8 +362,9 @@ def _training_entry_point(
     project_root = Path(__file__).parent.parent.parent
     deps_segment_anything = project_root / "deps" / "segment_anything"
     deps_groundingdino = project_root / "GroundingDINO"
+    deps_efficientsam = project_root / "EfficientSAM"
     
-    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino)]:
+    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino), str(deps_efficientsam)]:
         if path not in sys.path:
             sys.path.insert(0, path)
     
@@ -490,6 +491,9 @@ def _run_training_job(
     elif job_type == "student_distillation":
         raise NotImplementedError("Student distillation not yet implemented")
 
+    elif job_type == "auto_label":
+        _run_auto_label_job(job_config, output_dir, progress_queue, cancel_event)
+
     else:
         raise ValueError(f"Unknown job type: {job_type}")
 
@@ -551,3 +555,246 @@ def _build_teacher_config(
         logger.info("Applied user config overrides")
 
     return config
+
+
+def _run_auto_label_job(
+    job_config: Dict[str, Any],
+    output_dir: str,
+    progress_queue: mp.Queue,
+    cancel_event: mp.Event,
+):
+    """
+    Run auto-labeling job using Grounding DINO + MobileSAM.
+    
+    Args:
+        job_config: Job config containing:
+            - image_dir: Path to images directory
+            - classes: List of class names to detect
+            - output_mode: "boxes", "masks", or "both"
+            - box_threshold: Detection confidence threshold (default: 0.5)
+            - text_threshold: Text threshold (default: 0.5)
+            - nms_threshold: NMS threshold (default: 0.7)
+        output_dir: Output directory for results
+        progress_queue: Queue to send progress updates
+        cancel_event: Event to check for cancellation
+    """
+    from glob import glob
+    from pathlib import Path
+    from ml_engine.inference.auto_labeler import (
+        AutoLabeler,
+        AutoLabelerConfig,
+        visualize_detections
+    )
+    from core.config import save_json
+
+    sub_logger = logging.getLogger(__name__)
+
+    # Extract required config
+    image_dir = job_config.get("image_dir")
+    classes = job_config.get("classes", [])
+
+    if not image_dir:
+        raise ValueError("image_dir required in job config")
+    if not classes:
+        raise ValueError("classes required in job config")
+
+    # Optional config with defaults
+    output_mode = job_config.get("output_mode", "boxes")
+    box_threshold = job_config.get("box_threshold", 0.5)
+    text_threshold = job_config.get("text_threshold", 0.5)
+    nms_threshold = job_config.get("nms_threshold", 0.7)
+
+    # Setup output directory
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    viz_dir = output_path / "visualizations"
+    viz_dir.mkdir(exist_ok=True)
+
+    # Collect image paths
+    image_paths = _collect_image_paths(image_dir)
+    if not image_paths:
+        raise ValueError(f"No images found in: {image_dir}")
+
+    sub_logger.info("Auto-labeling %d images with classes: %s", len(image_paths), classes)
+
+    # Create AutoLabeler config
+    labeler_config = AutoLabelerConfig(
+        box_threshold=box_threshold,
+        text_threshold=text_threshold,
+        nms_threshold=nms_threshold,
+        output_mode=output_mode,
+        device="cuda"
+    )
+
+    # Create labeler
+    labeler = AutoLabeler(labeler_config)
+
+    # Process images with progress reporting
+    results = []
+    annotation_count = 0
+
+    for i, image_path in enumerate(image_paths):
+        # Check for cancellation
+        if cancel_event.is_set():
+            raise TrainingCancelledError("Auto-labeling cancelled by user")
+
+        # Process single image
+        try:
+            result = labeler.label_single_image(image_path, classes)
+            results.append(result)
+            annotation_count += len(result.get('class_ids', []))
+
+            # Generate visualization
+            show_boxes = output_mode in ("boxes", "both")
+            show_masks = output_mode in ("masks", "both")
+
+            viz_filename = Path(image_path).stem + "_viz.jpg"
+            viz_path = str(viz_dir / viz_filename)
+
+            visualize_detections(
+                image_path=image_path,
+                result=result,
+                class_prompts=classes,
+                output_path=viz_path,
+                show_boxes=show_boxes,
+                show_masks=show_masks
+            )
+
+        except Exception as e:
+            sub_logger.warning("Failed to process %s: %s", image_path, e)
+            continue
+
+        # Report progress
+        try:
+            progress_queue.put_nowait({
+                "current_step": i + 1,
+                "total_steps": len(image_paths),
+                "current_epoch": 0,
+                "total_epochs": 1,
+                "message": f"Processing {Path(image_path).name}",
+                "metrics": {
+                    "images_processed": i + 1,
+                    "annotations_found": annotation_count
+                }
+            })
+        except queue.Full:
+            pass  # Drop if queue is full
+
+    # Build COCO output
+    coco_output = _build_coco_output(results, classes, output_mode, labeler)
+
+    # Save annotations
+    annotations_path = output_path / "annotations.json"
+    save_json(coco_output, str(annotations_path))
+
+    sub_logger.info("Auto-labeling complete: %d images, %d annotations",
+                   len(coco_output['images']), len(coco_output['annotations']))
+    sub_logger.info("Results saved to: %s", output_dir)
+
+
+def _collect_image_paths(image_dir: str) -> list:
+    """
+    Collect image paths from directory.
+    
+    Args:
+        image_dir: Path to images directory
+        
+    Returns:
+        Sorted list of image file paths
+    """
+    from glob import glob
+    from pathlib import Path
+
+    extensions = ["jpg", "jpeg", "png", "bmp"]
+
+    path = Path(image_dir)
+    if not path.exists():
+        return []
+
+    image_paths = []
+    for ext in extensions:
+        image_paths.extend(glob(str(path / f"*.{ext}")))
+        image_paths.extend(glob(str(path / f"*.{ext.upper()}")))
+
+    return sorted(set(image_paths))
+
+
+def _build_coco_output(
+    results: list,
+    classes: list,
+    output_mode: str,
+    labeler
+) -> Dict[str, Any]:
+    """
+    Build COCO-format annotations from labeling results.
+    
+    Args:
+        results: List of results from label_single_image
+        classes: List of class names
+        output_mode: "boxes", "masks", or "both"
+        labeler: AutoLabeler instance for utility methods
+        
+    Returns:
+        COCO-format dictionary
+    """
+    coco_output = {
+        'images': [],
+        'annotations': [],
+        'categories': [
+            {'id': i, 'name': name}
+            for i, name in enumerate(classes)
+        ]
+    }
+
+    annotation_id = 1
+
+    for image_id, result in enumerate(results, start=1):
+        # Add image info
+        coco_output['images'].append({
+            'id': image_id,
+            'file_name': result['image_info']['file_name'],
+            'width': result['image_info']['width'],
+            'height': result['image_info']['height']
+        })
+
+        # Get data based on output mode
+        boxes = result.get('boxes', [])
+        masks = result.get('masks', [])
+        num_detections = len(result.get('class_ids', []))
+
+        # Add annotations
+        for i in range(num_detections):
+            class_id = result['class_ids'][i]
+            score = result['scores'][i]
+
+            annotation = {
+                'id': annotation_id,
+                'image_id': image_id,
+                'category_id': int(class_id) if class_id is not None else 0,
+                'iscrowd': 0,
+                'score': float(score)
+            }
+
+            # Add bbox if available
+            if output_mode in ("boxes", "both") and i < len(boxes):
+                box = boxes[i]
+                annotation['bbox'] = box
+                annotation['area'] = box[2] * box[3]
+
+            # Add segmentation if available
+            if output_mode in ("masks", "both") and i < len(masks):
+                from ml_engine.inference.auto_labeler import AutoLabeler
+                mask = masks[i]
+                segmentation = AutoLabeler._mask_to_polygon(mask)
+                annotation['segmentation'] = segmentation
+                if mask is not None and hasattr(mask, 'sum'):
+                    annotation['area'] = float(mask.sum())
+
+                # For masks-only mode, generate bbox from mask
+                if output_mode == "masks" and 'bbox' not in annotation:
+                    annotation['bbox'] = AutoLabeler._bbox_from_mask(mask)
+
+            coco_output['annotations'].append(annotation)
+            annotation_id += 1
+
+    return coco_output
