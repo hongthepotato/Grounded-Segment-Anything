@@ -54,21 +54,21 @@ def has_valid_numeric_field(data: Dict, field: str, min_value: float = 0) -> boo
         >>> ann = {'area': None}
         >>> has_valid_numeric_field(ann, 'area')  # False
     """
-    return (field in data and 
-            data[field] is not None and 
+    return (field in data and
+            data[field] is not None and
             data[field] > min_value)
 
 # def build_id_lookup(items: List[Dict], id_field: str = 'id') -> Dict[Any, Dict]:
 #     """
 #     Build lookup dictionary from list of items by ID field.
-    
+
 #     Args:
 #         items: List of dictionaries
 #         id_field: Name of the ID field (default: 'id')
-    
+
 #     Returns:
 #         Dictionary mapping ID → item
-    
+
 #     Example:
 #         >>> images = [{'id': 1, 'width': 640}, {'id': 2, 'width': 800}]
 #         >>> lookup = build_id_lookup(images)
@@ -80,13 +80,13 @@ def has_valid_numeric_field(data: Dict, field: str, min_value: float = 0) -> boo
 # def build_image_to_annotations_mapping(annotations: List[Dict]) -> Dict[int, List[Dict]]:
 #     """
 #     Build mapping from image_id to list of annotations.
-    
+
 #     Args:
 #         annotations: List of annotation dictionaries
-    
+
 #     Returns:
 #         Dictionary mapping image_id → list of annotations
-    
+
 #     Example:
 #         >>> annotations = [
 #         ...     {'id': 1, 'image_id': 0, 'bbox': [...]},

@@ -9,7 +9,7 @@ This module provides:
 
 Usage:
     # Start server
-    uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
+    uvicorn api.app:app --host 0.0.0.0 --port 8080 --reload
     
     # Or programmatically
     import uvicorn
@@ -248,7 +248,7 @@ if __name__ == "__main__":
     )
 
     host = os.environ.get("API_HOST", "0.0.0.0")
-    port = int(os.environ.get("API_PORT", "8000"))
+    port = int(os.environ.get("API_PORT", "8080"))
 
     uvicorn.run(
         "api.app:app",
