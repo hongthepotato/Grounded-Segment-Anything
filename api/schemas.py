@@ -273,6 +273,12 @@ class AutoLabelRequest(BaseModel):
         le=1.0,
         description="Non-Maximum Suppression threshold"
     )
+    batch_size: int = Field(
+        default=1,
+        ge=1,
+        le=32,
+        description="Batch size for inference (use 1 for variable-sized images; >1 only if all images are same size)"
+    )
     output_dir: Optional[str] = Field(
         default=None,
         description="Output directory (auto-generated if not provided)"

@@ -100,6 +100,7 @@ async def submit_autolabel(
             "box_threshold": request.box_threshold,
             "text_threshold": request.text_threshold,
             "nms_threshold": request.nms_threshold,
+            "batch_size": request.batch_size,
         }
 
         # Generate output dir if not provided

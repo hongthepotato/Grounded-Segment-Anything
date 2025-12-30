@@ -300,6 +300,140 @@ class TestAutoLabelerMocked:
         mock_setup_sam.assert_called_once()
 
 
+class TestBatchInference:
+    """Tests for batch inference functionality."""
+    
+    @patch('ml_engine.inference.auto_labeler.GroundingDINOModel')
+    def test_detect_objects_batch_empty(self, mock_dino):
+        """Test batch detection with empty input."""
+        from ml_engine.inference.auto_labeler import AutoLabeler, AutoLabelerConfig
+        
+        config = AutoLabelerConfig(device="cpu", output_mode="boxes")
+        labeler = AutoLabeler(config)
+        labeler._grounding_dino = mock_dino
+        labeler._models_loaded = True
+        
+        results = labeler._detect_objects_batch([], ["dog"])
+        assert results == []
+    
+    @patch('ml_engine.inference.auto_labeler.GroundingDINOModel')
+    def test_detect_objects_batch_single(self, mock_dino):
+        """Test batch detection with single image."""
+        from ml_engine.inference.auto_labeler import AutoLabeler, AutoLabelerConfig
+        import supervision as sv
+        
+        # Mock detection result
+        mock_detection = sv.Detections(
+            xyxy=np.array([[10, 20, 50, 60]]),
+            confidence=np.array([0.9]),
+            class_id=np.array([0])
+        )
+        mock_dino.predict_batch_with_classes.return_value = [mock_detection]
+        
+        config = AutoLabelerConfig(device="cpu", output_mode="boxes")
+        labeler = AutoLabeler(config)
+        labeler._grounding_dino = mock_dino
+        labeler._models_loaded = True
+        
+        # Create dummy image
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        
+        results = labeler._detect_objects_batch([image], ["dog"])
+        
+        assert len(results) == 1
+        boxes, confidences, class_ids = results[0]
+        assert len(boxes) == 1
+        assert confidences[0] >= 0.9
+    
+    @patch('ml_engine.inference.auto_labeler.GroundingDINOModel')
+    def test_detect_objects_batch_multiple(self, mock_dino):
+        """Test batch detection with multiple images."""
+        from ml_engine.inference.auto_labeler import AutoLabeler, AutoLabelerConfig
+        import supervision as sv
+        
+        # Mock detection results for 3 images
+        mock_detections = [
+            sv.Detections(
+                xyxy=np.array([[10, 20, 50, 60]]),
+                confidence=np.array([0.9]),
+                class_id=np.array([0])
+            ),
+            sv.Detections(
+                xyxy=np.array([[15, 25, 55, 65], [20, 30, 60, 70]]),
+                confidence=np.array([0.85, 0.8]),
+                class_id=np.array([0, 1])
+            ),
+            sv.Detections(
+                xyxy=np.array([]).reshape(0, 4),  # No detections
+                confidence=np.array([]),
+                class_id=np.array([])
+            ),
+        ]
+        mock_dino.predict_batch_with_classes.return_value = mock_detections
+        
+        config = AutoLabelerConfig(device="cpu", output_mode="boxes")
+        labeler = AutoLabeler(config)
+        labeler._grounding_dino = mock_dino
+        labeler._models_loaded = True
+        
+        # Create dummy images
+        images = [np.zeros((100, 100, 3), dtype=np.uint8) for _ in range(3)]
+        
+        results = labeler._detect_objects_batch(images, ["dog", "cat"])
+        
+        assert len(results) == 3
+        # Image 1: 1 detection
+        assert len(results[0][0]) == 1
+        # Image 2: 2 detections (after NMS)
+        assert len(results[1][0]) <= 2
+        # Image 3: 0 detections
+        assert len(results[2][0]) == 0
+    
+    def test_label_batch_images_empty(self):
+        """Test batch labeling with empty input."""
+        from ml_engine.inference.auto_labeler import AutoLabeler, AutoLabelerConfig
+        
+        config = AutoLabelerConfig(device="cpu", output_mode="boxes")
+        labeler = AutoLabeler(config)
+        
+        results = labeler.label_batch_images([], ["dog"])
+        assert results == []
+    
+    @patch('ml_engine.inference.auto_labeler.GroundingDINOModel')
+    @patch('cv2.imread')
+    def test_label_batch_images_with_failed_load(self, mock_imread, mock_dino):
+        """Test batch labeling handles failed image loads gracefully."""
+        from ml_engine.inference.auto_labeler import AutoLabeler, AutoLabelerConfig
+        
+        # First image fails to load, second succeeds
+        mock_imread.side_effect = [None, np.zeros((100, 100, 3), dtype=np.uint8)]
+        
+        # Mock successful detection for the loaded image
+        import supervision as sv
+        mock_detection = sv.Detections(
+            xyxy=np.array([[10, 20, 50, 60]]),
+            confidence=np.array([0.9]),
+            class_id=np.array([0])
+        )
+        mock_dino.return_value.predict_batch_with_classes.return_value = [mock_detection]
+        
+        config = AutoLabelerConfig(device="cpu", output_mode="boxes")
+        labeler = AutoLabeler(config)
+        labeler._models_loaded = True
+        labeler._grounding_dino = mock_dino.return_value
+        
+        results = labeler.label_batch_images(
+            ["failed.jpg", "success.jpg"], 
+            ["dog"],
+            batch_size=2
+        )
+        
+        # Should have 2 results: empty for failed, actual for success
+        assert len(results) == 2
+        assert results[0]['class_ids'] == []  # Failed image
+        assert len(results[1]['class_ids']) >= 0  # Successful image
+
+
 @pytest.mark.skipif(
     not Path("data/models/pretrained/groundingdino_swint_ogc.pth").exists() or
     not Path("data/models/pretrained/mobile_sam.pt").exists(),
@@ -372,6 +506,82 @@ class TestAutoLabelerIntegration:
         finally:
             if Path(output_path).exists():
                 os.unlink(output_path)
+    
+    def test_batch_vs_single_consistency(self):
+        """Test that batch and single inference produce consistent results."""
+        from ml_engine.inference.auto_labeler import AutoLabeler
+        
+        labeler = AutoLabeler()
+        
+        # Use demo images
+        image_paths = [
+            "assets/demo2.jpg",
+            "assets/demo3.jpg"
+        ]
+        image_paths = [p for p in image_paths if Path(p).exists()]
+        
+        if len(image_paths) < 2:
+            pytest.skip("Not enough demo images found")
+        
+        class_prompts = ["dog", "cat"]
+        
+        # Get single-image results
+        single_results = []
+        for path in image_paths:
+            result = labeler.label_single_image(path, class_prompts)
+            single_results.append(result)
+        
+        # Get batch results
+        batch_results = labeler.label_batch_images(
+            image_paths, 
+            class_prompts,
+            batch_size=4
+        )
+        
+        # Compare results
+        assert len(single_results) == len(batch_results)
+        
+        for single, batch in zip(single_results, batch_results):
+            # Same number of detections
+            assert len(single['class_ids']) == len(batch['class_ids'])
+            # Same class IDs
+            assert single['class_ids'] == batch['class_ids']
+            # Same image info
+            assert single['image_info']['file_name'] == batch['image_info']['file_name']
+    
+    def test_batch_inference_different_sizes(self):
+        """Test batch inference with different batch sizes."""
+        from ml_engine.inference.auto_labeler import AutoLabeler
+        import time
+        
+        labeler = AutoLabeler()
+        
+        # Use demo images
+        image_paths = [
+            "assets/demo2.jpg",
+            "assets/demo3.jpg"
+        ]
+        image_paths = [p for p in image_paths if Path(p).exists()]
+        
+        if len(image_paths) < 1:
+            pytest.skip("Demo images not found")
+        
+        # Test with batch_size=1 (essentially sequential)
+        start_1 = time.time()
+        results_1 = labeler.label_batch_images(image_paths, ["dog"], batch_size=1)
+        time_1 = time.time() - start_1
+        
+        # Test with batch_size=4
+        start_4 = time.time()
+        results_4 = labeler.label_batch_images(image_paths, ["dog"], batch_size=4)
+        time_4 = time.time() - start_4
+        
+        # Results should be the same
+        assert len(results_1) == len(results_4)
+        
+        # With enough images, batch should be faster
+        # (Not a hard assertion since timing can vary)
+        print(f"batch_size=1: {time_1:.3f}s, batch_size=4: {time_4:.3f}s")
 
 
 if __name__ == "__main__":

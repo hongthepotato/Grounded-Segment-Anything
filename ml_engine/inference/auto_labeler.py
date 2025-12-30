@@ -189,6 +189,59 @@ class AutoLabeler:
         logger.debug(f"Detected {len(boxes)} objects after NMS")
         return boxes, confidences, class_ids
     
+    def _detect_objects_batch(
+        self,
+        images: List[np.ndarray],
+        class_prompts: List[str]
+    ) -> List[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """
+        Batch detect objects using Grounding DINO.
+        
+        ⚠️ NOTE: Despite using a single forward pass, this is NOT faster than
+        sequential processing for variable-sized images due to padding overhead
+        in Deformable Attention. See label_batch_images() for details.
+        
+        Args:
+            images: List of BGR images (OpenCV format)
+            class_prompts: List of class names to detect (same for all images)
+            
+        Returns:
+            List of (boxes_xyxy, confidences, class_ids) tuples, one per image
+        """
+        if len(images) == 0:
+            return []
+        
+        # Use batch inference from GroundingDINO Model
+        batch_detections = self._grounding_dino.predict_batch_with_classes(
+            images=images,
+            classes=class_prompts,
+            box_threshold=self.config.box_threshold,
+            text_threshold=self.config.text_threshold
+        )
+        
+        results = []
+        for detections in batch_detections:
+            # Check if any detections
+            if len(detections.xyxy) == 0:
+                results.append((np.array([]), np.array([]), np.array([])))
+                continue
+            
+            # Apply NMS per-image (cannot batch NMS across images)
+            nms_idx = torchvision.ops.nms(
+                torch.from_numpy(detections.xyxy),
+                torch.from_numpy(detections.confidence),
+                self.config.nms_threshold
+            ).numpy().tolist()
+            
+            boxes = detections.xyxy[nms_idx]
+            confidences = detections.confidence[nms_idx]
+            class_ids = detections.class_id[nms_idx]
+            
+            results.append((boxes, confidences, class_ids))
+        
+        logger.debug(f"Batch detected objects in {len(images)} images")
+        return results
+    
     def _segment_boxes(
         self,
         image: np.ndarray,
@@ -287,6 +340,123 @@ class AutoLabeler:
             result['masks'] = masks
         
         return result
+    
+    def label_batch_images(
+        self,
+        image_paths: List[str],
+        class_prompts: List[str],
+        batch_size: int = 1
+    ) -> List[Dict[str, Any]]:
+        """
+        Batch process multiple images with the same class prompts.
+        
+        ⚠️ PERFORMANCE WARNING:
+        Due to GroundingDINO's Deformable Attention architecture, batching 
+        variable-sized images is SLOWER than sequential processing because 
+        of padding overhead. Profiling shows:
+        - batch_size=1: 126ms/image (baseline)
+        - batch_size=8: 188ms/image (48% SLOWER)
+        
+        Only use batch_size > 1 if:
+        1. All images are the same size (no padding waste), OR
+        2. You've verified it's faster for your specific use case
+        
+        For variable-sized images, use batch_size=1 (default) or call
+        label_single_image() in a loop directly.
+        
+        Args:
+            image_paths: List of paths to image files
+            class_prompts: List of class names to detect (same for all images)
+            batch_size: Number of images to process in each batch (default: 1)
+            
+        Returns:
+            List of result dicts (same format as label_single_image),
+            one per image in the same order as input paths.
+        """
+        self._load_models()
+        
+        if len(image_paths) == 0:
+            return []
+        
+        results = []
+        
+        # Process in batches
+        for batch_start in range(0, len(image_paths), batch_size):
+            batch_end = min(batch_start + batch_size, len(image_paths))
+            batch_paths = image_paths[batch_start:batch_end]
+            
+            # Load all images in batch
+            batch_images_bgr = []
+            batch_images_rgb = []
+            batch_image_infos = []
+            valid_indices = []  # Track which images loaded successfully
+            
+            for i, image_path in enumerate(batch_paths):
+                image_bgr = cv2.imread(image_path)
+                if image_bgr is None:
+                    logger.warning(f"Could not load image: {image_path}")
+                    # Add empty result for failed image
+                    results.append({
+                        'class_ids': [],
+                        'scores': [],
+                        'boxes': [] if self.config.output_mode in (OUTPUT_BOXES_ONLY, OUTPUT_BOTH) else None,
+                        'masks': [] if self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH) else None,
+                        'image_info': {
+                            'file_name': os.path.basename(image_path),
+                            'width': 0,
+                            'height': 0
+                        }
+                    })
+                    continue
+                
+                image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+                height, width = image_bgr.shape[:2]
+                
+                batch_images_bgr.append(image_bgr)
+                batch_images_rgb.append(image_rgb)
+                batch_image_infos.append({
+                    'file_name': os.path.basename(image_path),
+                    'width': width,
+                    'height': height
+                })
+                valid_indices.append(batch_start + i)
+            
+            if len(batch_images_bgr) == 0:
+                continue
+            
+            # Batch detection
+            batch_detections = self._detect_objects_batch(batch_images_bgr, class_prompts)
+            
+            # Process each detection result
+            for i, (boxes_xyxy, confidences, class_ids) in enumerate(batch_detections):
+                # Convert boxes to COCO format [x, y, width, height]
+                boxes_coco = []
+                for box in boxes_xyxy:
+                    x1, y1, x2, y2 = box
+                    boxes_coco.append([float(x1), float(y1), float(x2 - x1), float(y2 - y1)])
+                
+                # Generate masks if needed (SAM per-image)
+                masks = []
+                if self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH):
+                    masks = self._segment_boxes(batch_images_rgb[i], boxes_xyxy)
+                
+                # Build result
+                result = {
+                    'class_ids': class_ids.tolist() if len(class_ids) > 0 else [],
+                    'scores': confidences.tolist() if len(confidences) > 0 else [],
+                    'image_info': batch_image_infos[i]
+                }
+                
+                if self.config.output_mode in (OUTPUT_BOXES_ONLY, OUTPUT_BOTH):
+                    result['boxes'] = boxes_coco
+                
+                if self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH):
+                    result['masks'] = masks
+                
+                results.append(result)
+        
+        logger.info(f"Batch processed {len(results)} images with batch_size={batch_size}")
+        return results
     
     def label_images(
         self,

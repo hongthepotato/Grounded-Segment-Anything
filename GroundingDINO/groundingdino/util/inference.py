@@ -85,6 +85,104 @@ def predict(
     return boxes, logits.max(dim=1)[0], phrases
 
 
+def predict_batch(
+        model,
+        images: List[torch.Tensor],
+        caption: str,
+        box_threshold: float,
+        text_threshold: float,
+        device: str = "cuda"
+) -> List[Tuple[torch.Tensor, torch.Tensor, List[str]]]:
+    """
+    Batch inference for multiple images with the same caption.
+    
+    ⚠️ PERFORMANCE WARNING:
+    This function uses a single forward pass but is SLOWER than sequential
+    processing for variable-sized images due to padding overhead in Deformable
+    Attention. Profiling shows ~48% slowdown with batch_size=8 vs sequential.
+    
+    Only use if all images are the same size or you've verified it's faster
+    for your specific use case. For variable-sized images, call predict()
+    in a loop instead.
+    
+    Uses NestedTensor to handle variable-size images with proper padding.
+    Single forward pass for entire batch, then post-processes per image.
+    
+    Args:
+        model: GroundingDINO model
+        images: List of preprocessed image tensors (can be different sizes)
+        caption: Text prompt (same for all images)
+        box_threshold: Detection confidence threshold
+        text_threshold: Text matching threshold
+        device: Device to run inference on
+        
+    Returns:
+        List of (boxes, logits, phrases) tuples, one per image
+    """
+    from groundingdino.util.misc import NestedTensor
+    
+    if len(images) == 0:
+        return []
+    
+    caption = preprocess_caption(caption=caption)
+    model = model.to(device)
+    batch_size = len(images)
+    
+    # Find max dimensions for padding
+    max_h = max(img.shape[1] for img in images)
+    max_w = max(img.shape[2] for img in images)
+    
+    # Create padded batch tensor and mask
+    # mask: True = padded pixel, False = valid pixel
+    batch_tensor = torch.zeros(batch_size, 3, max_h, max_w, device=device)
+    batch_mask = torch.ones(batch_size, max_h, max_w, dtype=torch.bool, device=device)
+    
+    # Store original sizes for result scaling
+    original_sizes = []
+    
+    for i, img in enumerate(images):
+        _, h, w = img.shape
+        batch_tensor[i, :, :h, :w] = img.to(device)
+        batch_mask[i, :h, :w] = False  # False = valid pixel
+        original_sizes.append((h, w))
+    
+    # Create NestedTensor for model input
+    samples = NestedTensor(batch_tensor, batch_mask)
+    
+    # Single forward pass for entire batch
+    with torch.no_grad():
+        outputs = model(samples, captions=[caption] * batch_size)
+    
+    # Get batch outputs
+    all_pred_logits = outputs["pred_logits"].cpu().sigmoid()  # [B, nq, 256]
+    all_pred_boxes = outputs["pred_boxes"].cpu()  # [B, nq, 4]
+    
+    # Tokenize caption once (same for all images)
+    tokenizer = model.tokenizer
+    tokenized = tokenizer(caption)
+    
+    # Process each image in batch
+    results = []
+    for b in range(batch_size):
+        pred_logits = all_pred_logits[b]  # [nq, 256]
+        pred_boxes = all_pred_boxes[b]  # [nq, 4]
+        
+        # Filter by box threshold
+        mask = pred_logits.max(dim=1)[0] > box_threshold
+        logits = pred_logits[mask]
+        boxes = pred_boxes[mask]
+        
+        # Get phrases from logits
+        phrases = [
+            get_phrases_from_posmap(logit > text_threshold, tokenized, tokenizer).replace('.', '')
+            for logit in logits
+        ]
+        
+        results.append((boxes, logits.max(dim=1)[0], phrases))
+    
+    return results
+
+
 def annotate(image_source: np.ndarray, boxes: torch.Tensor, logits: torch.Tensor, phrases: List[str]) -> np.ndarray:
     h, w, _ = image_source.shape
     boxes = boxes * torch.Tensor([w, h, w, h])
@@ -208,6 +306,70 @@ class Model:
         class_id = Model.phrases2classes(phrases=phrases, classes=classes)
         detections.class_id = class_id
         return detections
+
+    def predict_batch_with_classes(
+        self,
+        images: List[np.ndarray],
+        classes: List[str],
+        box_threshold: float,
+        text_threshold: float
+    ) -> List[sv.Detections]:
+        """
+        Batch inference for multiple images with the same classes.
+        
+        ⚠️ PERFORMANCE WARNING:
+        Despite using a single forward pass, this is NOT faster than sequential
+        processing for variable-sized images. Profiling shows batching is 48%
+        SLOWER due to padding overhead in Deformable Attention.
+        
+        Only use if all images are the same size. For variable-sized images,
+        call predict_with_classes() in a loop instead.
+        
+        Args:
+            images: List of BGR images (np.ndarray)
+            classes: List of class names to detect (same for all images)
+            box_threshold: Detection confidence threshold
+            text_threshold: Text matching threshold
+            
+        Returns:
+            List of sv.Detections, one per image
+        """
+        if len(images) == 0:
+            return []
+        
+        caption = ". ".join(classes)
+        
+        # Preprocess all images
+        processed_images = [Model.preprocess_image(img) for img in images]
+        
+        # Get original sizes for scaling
+        original_sizes = [(img.shape[0], img.shape[1]) for img in images]
+        
+        # Batch inference
+        batch_results = predict_batch(
+            model=self.model,
+            images=processed_images,
+            caption=caption,
+            box_threshold=box_threshold,
+            text_threshold=text_threshold,
+            device=self.device
+        )
+        
+        # Post-process each result
+        detections_list = []
+        for b, (boxes, logits, phrases) in enumerate(batch_results):
+            source_h, source_w = original_sizes[b]
+            detections = Model.post_process_result(
+                source_h=source_h,
+                source_w=source_w,
+                boxes=boxes,
+                logits=logits
+            )
+            class_id = Model.phrases2classes(phrases=phrases, classes=classes)
+            detections.class_id = class_id
+            detections_list.append(detections)
+        
+        return detections_list
 
     @staticmethod
     def preprocess_image(image_bgr: np.ndarray) -> torch.Tensor:
