@@ -183,10 +183,7 @@ class TrainingWorker:
         # Build output directory
         job_subdir = f"{job.type}_{job.id[:8]}"
         base_dir = job.output_dir or "experiments"
-        output_dir = f"{base_dir}/{job_subdir}"
-
-        # Keep local object in sync with what we persist
-        job.output_dir = output_dir
+        job.output_dir = f"{base_dir}/{job_subdir}"
 
         # Update job status to RUNNING
         self.store.update_job(
@@ -194,7 +191,7 @@ class TrainingWorker:
             status=JobStatus.RUNNING,
             started_at=datetime.now(),
             worker_id=self.worker_id,
-            output_dir=output_dir
+            output_dir=job.output_dir
         )
 
         # Update worker status
@@ -213,7 +210,7 @@ class TrainingWorker:
             job_id=job.id,
             job_type=job.type,
             job_config=job.config,
-            output_dir=output_dir,
+            output_dir=job.output_dir,
             gpu_id=self.gpu_id
         )
         self.current_subprocess = subprocess_runner

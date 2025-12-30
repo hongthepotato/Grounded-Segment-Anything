@@ -41,8 +41,6 @@ sys.path.insert(0, str(project_root / "EfficientSAM"))
 from groundingdino.util.inference import Model as GroundingDINOModel
 
 # MobileSAM - reuse existing setup from EfficientSAM/MobileSAM/
-# Note: MobileSAM is bundled in this project under EfficientSAM/MobileSAM/
-# No need to install from https://github.com/ChaoningZhang/MobileSAM
 from MobileSAM.setup_mobile_sam import setup_model as setup_mobile_sam
 from segment_anything import SamPredictor
 
@@ -71,10 +69,6 @@ class AutoLabelerConfig:
     text_threshold: float = 0.5
     nms_threshold: float = 0.7
 
-    # Output mode: "boxes", "masks", or "both"
-    # - "boxes": Only bounding boxes (faster, no SAM needed, default)
-    # - "masks": Only segmentation masks (boxes used internally but not in output)
-    # - "both": Both boxes and masks
     output_mode: str = OUTPUT_BOXES_ONLY
 
     # Device

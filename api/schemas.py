@@ -234,15 +234,18 @@ class AutoLabelRequest(BaseModel):
     
     Example:
         {
-            "image_dir": "/data/raw/images",
+            "image_paths": [
+                "upload/2025/12/16/xxx1.jpeg",
+                "upload/2025/12/16/xxx2.jpeg"
+            ],
             "classes": ["ear of bag", "defect", "label"],
             "output_mode": "boxes",
             "box_threshold": 0.5
         }
     """
-    image_dir: str = Field(
+    image_paths: List[str] = Field(
         ...,
-        description="Path to images directory on server"
+        description="List of image paths"
     )
     classes: List[str] = Field(
         ...,

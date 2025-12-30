@@ -12,7 +12,6 @@ Provides:
 import os
 import logging
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
@@ -83,7 +82,10 @@ async def submit_autolabel(
     Example:
         POST /api/autolabel
         {
-            "image_dir": "/data/raw/images",
+            "image_paths": [
+                "upload/2025/12/16/xxx1.jpeg",
+                "upload/2025/12/16/xxx2.jpeg",
+            ],
             "classes": ["ear of bag", "defect"],
             "output_mode": "boxes",
             "box_threshold": 0.5
@@ -92,7 +94,7 @@ async def submit_autolabel(
     try:
         # Build config for auto-label job
         config = {
-            "image_dir": request.image_dir,
+            "image_paths": request.image_paths,
             "classes": request.classes,
             "output_mode": request.output_mode,
             "box_threshold": request.box_threshold,
@@ -113,8 +115,8 @@ async def submit_autolabel(
             output_dir=output_dir,
             tags=request.tags,
         )
-        
-        logger.info("Submitted auto-label job %s for %s", job.id[:8], request.image_dir)
+
+        logger.info("Submitted auto-label job %s for %s", job.id[:8], request.image_paths)
         return job_to_response(job)
 
     except ValueError as e:

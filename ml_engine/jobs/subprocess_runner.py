@@ -363,11 +363,11 @@ def _training_entry_point(
     deps_segment_anything = project_root / "deps" / "segment_anything"
     deps_groundingdino = project_root / "GroundingDINO"
     deps_efficientsam = project_root / "EfficientSAM"
-    
+
     for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino), str(deps_efficientsam)]:
         if path not in sys.path:
             sys.path.insert(0, path)
-    
+
     # CRITICAL: Set CUDA_VISIBLE_DEVICES BEFORE any torch imports
     # This ensures PyTorch only sees the assigned GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -386,7 +386,7 @@ def _training_entry_point(
     import torch
     if torch.cuda.is_available():
         sub_logger.info("PyTorch sees %d GPU(s)", torch.cuda.device_count())
-        sub_logger.info("PyTorch cuda:0 maps to physical GPU %d (%s)", 
+        sub_logger.info("PyTorch cuda:0 maps to physical GPU %d (%s)",
                        gpu_id, torch.cuda.get_device_name(0))
     else:
         sub_logger.warning("CUDA not available in subprocess!")
@@ -439,6 +439,7 @@ def _run_training_job(
     from ml_engine.training.teacher_trainer import TeacherTrainer, TrainingCancelledException
     from ml_engine.data.manager import DataManager
     from core.constants import transform_image_path
+    from pathlib import Path
 
     if job_type == "teacher_training":
         # Extract paths from config
@@ -492,6 +493,22 @@ def _run_training_job(
         raise NotImplementedError("Student distillation not yet implemented")
 
     elif job_type == "auto_label":
+        image_paths = job_config.get("image_paths", [])
+        if not image_paths:
+            raise ValueError("image_paths required in job config")
+
+        actual_paths = []
+        for image_path in image_paths:
+            actual_path = transform_image_path(image_path)
+            if not Path(actual_path).exists():
+                raise ValueError(f"Image path not found: {image_path}")
+            actual_paths.append(actual_path)
+        job_config['image_paths'] = actual_paths
+
+        classes = job_config.get("classes", [])
+        if not classes:
+            raise ValueError("classes required in job config")
+
         _run_auto_label_job(job_config, output_dir, progress_queue, cancel_event)
 
     else:
@@ -578,7 +595,6 @@ def _run_auto_label_job(
         progress_queue: Queue to send progress updates
         cancel_event: Event to check for cancellation
     """
-    from glob import glob
     from pathlib import Path
     from ml_engine.inference.auto_labeler import (
         AutoLabeler,
@@ -590,13 +606,8 @@ def _run_auto_label_job(
     sub_logger = logging.getLogger(__name__)
 
     # Extract required config
-    image_dir = job_config.get("image_dir")
+    image_paths = job_config.get("image_paths", [])
     classes = job_config.get("classes", [])
-
-    if not image_dir:
-        raise ValueError("image_dir required in job config")
-    if not classes:
-        raise ValueError("classes required in job config")
 
     # Optional config with defaults
     output_mode = job_config.get("output_mode", "boxes")
@@ -609,11 +620,6 @@ def _run_auto_label_job(
     output_path.mkdir(parents=True, exist_ok=True)
     viz_dir = output_path / "visualizations"
     viz_dir.mkdir(exist_ok=True)
-
-    # Collect image paths
-    image_paths = _collect_image_paths(image_dir)
-    if not image_paths:
-        raise ValueError(f"No images found in: {image_dir}")
 
     sub_logger.info("Auto-labeling %d images with classes: %s", len(image_paths), classes)
 
@@ -690,33 +696,6 @@ def _run_auto_label_job(
     sub_logger.info("Auto-labeling complete: %d images, %d annotations",
                    len(coco_output['images']), len(coco_output['annotations']))
     sub_logger.info("Results saved to: %s", output_dir)
-
-
-def _collect_image_paths(image_dir: str) -> list:
-    """
-    Collect image paths from directory.
-    
-    Args:
-        image_dir: Path to images directory
-        
-    Returns:
-        Sorted list of image file paths
-    """
-    from glob import glob
-    from pathlib import Path
-
-    extensions = ["jpg", "jpeg", "png", "bmp"]
-
-    path = Path(image_dir)
-    if not path.exists():
-        return []
-
-    image_paths = []
-    for ext in extensions:
-        image_paths.extend(glob(str(path / f"*.{ext}")))
-        image_paths.extend(glob(str(path / f"*.{ext.upper()}")))
-
-    return sorted(set(image_paths))
 
 
 def _build_coco_output(
