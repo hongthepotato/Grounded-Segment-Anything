@@ -154,7 +154,7 @@ class Model:
             image=processed_image,
             caption=caption,
             box_threshold=box_threshold,
-            text_threshold=text_threshold, 
+            text_threshold=text_threshold,
             device=self.device)
         source_h, source_w, _ = image.shape
         detections = Model.post_process_result(

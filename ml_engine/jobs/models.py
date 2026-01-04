@@ -32,6 +32,7 @@ class JobType(str, Enum):
     STUDENT_DISTILLATION = "student_distillation"
     MODEL_OPTIMIZATION = "model_optimization"
     EVALUATION = "evaluation"
+    AUTO_LABEL = "auto_label"
 
 
 @dataclass

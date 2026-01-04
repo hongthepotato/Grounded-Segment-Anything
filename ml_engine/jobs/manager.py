@@ -133,9 +133,9 @@ class JobManager:
         # Validate job type
         try:
             JobType(job_type)
-        except ValueError:
+        except ValueError as e:
             valid_types = [t.value for t in JobType]
-            raise ValueError("Invalid job type: %s. Must be one of: %s", job_type, valid_types)
+            raise ValueError(f"Invalid job type: {job_type}. Must be one of: {valid_types}") from e
 
         # Create job
         job = Job(
@@ -291,7 +291,7 @@ class JobManager:
             return False
 
         if not job.is_terminal:
-            logger.warning("Cannot delete non-terminal job %s (status=%s)", 
+            logger.warning("Cannot delete non-terminal job %s (status=%s)",
                           job_id[:8], job.status.value)
             return False
 
