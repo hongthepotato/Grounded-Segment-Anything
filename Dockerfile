@@ -43,10 +43,10 @@ COPY . .
 FROM base as api
 
 # Expose API port
-EXPOSE 8000
+EXPOSE 8080
 
 # Default command
-CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8080"]
 
 # =====================================================================
 # Worker target (with GPU support)

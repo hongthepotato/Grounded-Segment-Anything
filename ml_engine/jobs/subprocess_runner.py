@@ -362,11 +362,12 @@ def _training_entry_point(
     project_root = Path(__file__).parent.parent.parent
     deps_segment_anything = project_root / "deps" / "segment_anything"
     deps_groundingdino = project_root / "GroundingDINO"
-    
-    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino)]:
+    deps_efficientsam = project_root / "EfficientSAM"
+
+    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino), str(deps_efficientsam)]:
         if path not in sys.path:
             sys.path.insert(0, path)
-    
+
     # CRITICAL: Set CUDA_VISIBLE_DEVICES BEFORE any torch imports
     # This ensures PyTorch only sees the assigned GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -380,19 +381,23 @@ def _training_entry_point(
 
     sub_logger.info("Training subprocess started (pid=%d, gpu=%d)", os.getpid(), gpu_id)
     sub_logger.info("CUDA_VISIBLE_DEVICES set to: %s", os.environ.get("CUDA_VISIBLE_DEVICES"))
-    
+
     # Verify GPU mapping after torch import
     import torch
     if torch.cuda.is_available():
         sub_logger.info("PyTorch sees %d GPU(s)", torch.cuda.device_count())
-        sub_logger.info("PyTorch cuda:0 maps to physical GPU %d (%s)", 
+        sub_logger.info("PyTorch cuda:0 maps to physical GPU %d (%s)",
                        gpu_id, torch.cuda.get_device_name(0))
     else:
         sub_logger.warning("CUDA not available in subprocess!")
 
     try:
-        _run_training_job(
-            job_type=job_type,
+        # Use handler registry to dispatch job
+        from ml_engine.jobs.registry import get_handler
+        from ml_engine.jobs.handlers.base import TrainingCancelledError
+
+        handler = get_handler(job_type)
+        handler.run(
             job_config=job_config,
             output_dir=output_dir,
             progress_queue=progress_queue,
@@ -401,153 +406,18 @@ def _training_entry_point(
 
         # Success
         result_queue.put({'success': True, 'output_dir': output_dir})
-        sub_logger.info("Training completed successfully")
+        sub_logger.info("Job completed successfully")
         sys.exit(EXIT_SUCCESS)
 
     except TrainingCancelledError:
         result_queue.put({'cancelled': True})
-        sub_logger.info("Training cancelled by user")
+        sub_logger.info("Job cancelled by user")
         sys.exit(EXIT_CANCELLED)
 
     except Exception as e:
         import traceback
         error_msg = f"{type(e).__name__}: {str(e)}"
         result_queue.put({'error': error_msg, 'traceback': traceback.format_exc()})
-        sub_logger.error("Training failed: %s", error_msg)
+        sub_logger.error("Job failed: %s", error_msg)
         sub_logger.debug("Traceback:\n%s", traceback.format_exc())
         sys.exit(EXIT_FAILED)
-
-
-class TrainingCancelledError(Exception):
-    """Raised when training is cancelled via cancel_event."""
-    pass
-
-
-def _run_training_job(
-    job_type: str,
-    job_config: Dict[str, Any],
-    output_dir: str,
-    progress_queue: mp.Queue,
-    cancel_event: mp.Event,
-):
-    """
-    Run the actual training job.
-    
-    This is separated from entry_point to allow different job types.
-    """
-    from ml_engine.training.teacher_trainer import TeacherTrainer, TrainingCancelledException
-    from ml_engine.data.manager import DataManager
-    from core.constants import transform_image_path
-
-    if job_type == "teacher_training":
-        # Extract paths from config
-        data_path_raw = job_config.get("data_path")
-        data_path = transform_image_path(data_path_raw) if data_path_raw else None
-        image_paths = job_config.get("image_paths", [])
-
-        if not data_path:
-            raise ValueError("data_path required in job config")
-        if not image_paths:
-            raise ValueError("image_paths required in job config")
-
-        # Create DataManager
-        # Note: Normalization (bbox from masks, etc.) is always applied during loading
-        split_config = job_config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
-        data_manager = DataManager(
-            data_path=data_path,
-            image_paths=image_paths,
-            split_config=split_config
-        )
-
-        # Build config
-        config = _build_teacher_config(data_manager, job_config)
-
-        # Progress callback that sends to queue
-        def progress_callback(progress_info: Dict[str, Any]):
-            try:
-                progress_queue.put_nowait(progress_info)
-            except queue.Full:
-                pass  # Drop if queue is full
-
-        # Cancel check that reads event
-        def cancel_check() -> bool:
-            return cancel_event.is_set()
-
-        # Create and run trainer
-        trainer = TeacherTrainer(
-            data_manager=data_manager,
-            output_dir=output_dir,
-            config=config,
-            progress_callback=progress_callback,
-            cancel_check=cancel_check
-        )
-
-        try:
-            trainer.train()
-        except TrainingCancelledException as e:
-            raise TrainingCancelledError("Training cancelled by user") from e
-
-    elif job_type == "student_distillation":
-        raise NotImplementedError("Student distillation not yet implemented")
-
-    else:
-        raise ValueError(f"Unknown job type: {job_type}")
-
-
-def _build_teacher_config(
-    data_manager,
-    job_config: Dict[str, Any]
-) -> Dict[str, Any]:
-    """
-    Build complete teacher training config from defaults + job overrides.
-    
-    Mirrors the config building logic in worker.py.
-    """
-    from core.config import load_config, merge_configs
-    from core.constants import DEFAULT_CONFIGS_DIR
-
-    logger = logging.getLogger(__name__)
-
-    # Load shared training defaults
-    shared_config_path = DEFAULT_CONFIGS_DIR / 'teacher_training.yaml'
-    shared_config = load_config(str(shared_config_path))
-    logger.info("Loaded shared training config from %s", shared_config_path)
-
-    # Load model-specific configs based on dataset
-    dataset_info = data_manager.get_dataset_info()
-    required_models = data_manager.get_required_models()
-    logger.info("Required teacher models: %s", required_models)
-
-    model_configs = {}
-    if 'grounding_dino' in required_models:
-        dino_config_path = DEFAULT_CONFIGS_DIR / 'teacher_grounding_dino_lora.yaml'
-        model_configs['grounding_dino'] = load_config(str(dino_config_path))
-        logger.info("Loaded Grounding DINO config")
-
-    if 'sam' in required_models:
-        sam_config_path = DEFAULT_CONFIGS_DIR / 'teacher_sam_lora.yaml'
-        model_configs['sam'] = load_config(str(sam_config_path))
-        logger.info("Loaded SAM config")
-
-    if not model_configs:
-        raise ValueError("No models to train! Dataset has no valid annotations.")
-
-    # Build base config
-    config = {
-        **shared_config['training'],
-        'num_classes': dataset_info['num_classes'],
-        'class_names': list(dataset_info['class_mapping'].values()),
-        'class_mapping': dataset_info['class_mapping'],
-        'augmentation': shared_config.get('augmentation'),
-        'evaluation': shared_config.get('evaluation'),
-        'checkpointing': shared_config.get('checkpointing'),
-        'models': model_configs
-    }
-
-    # Merge user overrides
-    user_overrides = job_config.get("training", {})
-    if user_overrides:
-        config = merge_configs(config, user_overrides)
-        logger.info("Applied user config overrides")
-
-    return config

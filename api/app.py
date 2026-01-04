@@ -9,7 +9,7 @@ This module provides:
 
 Usage:
     # Start server
-    uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
+    uvicorn api.app:app --host 0.0.0.0 --port 8080 --reload
     
     # Or programmatically
     import uvicorn
@@ -30,6 +30,7 @@ from api.routes.jobs import router as jobs_router, queue_router
 from api.routes.websocket import router as websocket_router
 from api.routes.exports import router as exports_router
 from api.schemas import success_response, error_response
+from api.routes.autolabel import router as autolabel_router
 from ml_engine.jobs import get_job_manager
 
 logger = logging.getLogger(__name__)
@@ -75,11 +76,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Training Job Manager API",
     description="""
-API for managing ML training jobs.
+API for managing ML training jobs and auto-labeling.
 
 ## Features
 
 - **Job Submission**: Submit teacher training and distillation jobs
+- **Auto-Labeling**: Automatic annotation generation with Grounding DINO + MobileSAM
 - **Job Management**: Cancel, list, and query job status
 - **Real-time Updates**: WebSocket for live progress updates
 - **Queue Monitoring**: View queue status and worker availability
@@ -91,6 +93,13 @@ API for managing ML training jobs.
 - `GET /api/jobs` - List jobs with filtering
 - `GET /api/jobs/{id}` - Get job details
 - `DELETE /api/jobs/{id}` - Cancel job
+
+### Auto-Labeling
+- `POST /api/autolabel` - Submit auto-labeling job
+- `GET /api/autolabel/{id}/results` - Get COCO annotations
+- `GET /api/autolabel/{id}/visualizations` - List visualization images
+- `GET /api/autolabel/{id}/visualizations/{filename}` - Get visualization image
+- `PUT /api/autolabel/{id}/annotations` - Save edited annotations
 
 ### Exports
 - `GET /api/jobs/{id}/exports` - List available export formats
@@ -126,6 +135,7 @@ app.include_router(jobs_router)
 app.include_router(queue_router)
 app.include_router(websocket_router)
 app.include_router(exports_router)
+app.include_router(autolabel_router)
 
 
 # =============================================================================
@@ -238,7 +248,7 @@ if __name__ == "__main__":
     )
 
     host = os.environ.get("API_HOST", "0.0.0.0")
-    port = int(os.environ.get("API_PORT", "8000"))
+    port = int(os.environ.get("API_PORT", "8080"))
 
     uvicorn.run(
         "api.app:app",
