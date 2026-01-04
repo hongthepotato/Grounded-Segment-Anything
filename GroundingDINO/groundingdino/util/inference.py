@@ -19,7 +19,7 @@ from groundingdino.util.utils import get_phrases_from_posmap
 # ----------------------------------------------------------------------------------------------------------------------
 
 
-def preprocess_caption(caption: str) -> str:
+def  preprocess_caption(caption: str) -> str:
     result = caption.lower().strip()
     if result.endswith("."):
         return result
@@ -120,26 +120,26 @@ def predict_batch(
         List of (boxes, logits, phrases) tuples, one per image
     """
     from groundingdino.util.misc import NestedTensor
-    
+
     if len(images) == 0:
         return []
-    
+
     caption = preprocess_caption(caption=caption)
     model = model.to(device)
     batch_size = len(images)
-    
+
     # Find max dimensions for padding
     max_h = max(img.shape[1] for img in images)
     max_w = max(img.shape[2] for img in images)
-    
+
     # Create padded batch tensor and mask
     # mask: True = padded pixel, False = valid pixel
     batch_tensor = torch.zeros(batch_size, 3, max_h, max_w, device=device)
     batch_mask = torch.ones(batch_size, max_h, max_w, dtype=torch.bool, device=device)
-    
+
     # Store original sizes for result scaling
     original_sizes = []
-    
+
     for i, img in enumerate(images):
         _, h, w = img.shape
         batch_tensor[i, :, :h, :w] = img.to(device)
@@ -252,7 +252,7 @@ class Model:
             image=processed_image,
             caption=caption,
             box_threshold=box_threshold,
-            text_threshold=text_threshold, 
+            text_threshold=text_threshold,
             device=self.device)
         source_h, source_w, _ = image.shape
         detections = Model.post_process_result(
@@ -336,15 +336,15 @@ class Model:
         """
         if len(images) == 0:
             return []
-        
+
         caption = ". ".join(classes)
-        
+
         # Preprocess all images
         processed_images = [Model.preprocess_image(img) for img in images]
-        
+
         # Get original sizes for scaling
         original_sizes = [(img.shape[0], img.shape[1]) for img in images]
-        
+
         # Batch inference
         batch_results = predict_batch(
             model=self.model,
