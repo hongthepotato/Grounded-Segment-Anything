@@ -100,7 +100,6 @@ async def submit_autolabel(
             "box_threshold": request.box_threshold,
             "text_threshold": request.text_threshold,
             "nms_threshold": request.nms_threshold,
-            "batch_size": request.batch_size,
         }
 
         # Generate output dir if not provided
@@ -210,7 +209,7 @@ async def list_visualizations(
     # Load annotations to get annotation counts per image
     annotations_path = output_dir / "annotations.json"
     annotation_counts = {}
-    
+
     if annotations_path.exists():
         try:
             coco_data = load_json(str(annotations_path))
@@ -229,13 +228,13 @@ async def list_visualizations(
 
     # List visualization files
     viz_files = sorted(viz_dir.glob("*_viz.jpg"))
-    
+
     images = []
     for viz_path in viz_files:
         # Extract original filename from viz filename
         # e.g., "img001_viz.jpg" -> "img001.jpg"
         original_stem = viz_path.stem.replace("_viz", "")
-        
+
         # Try common extensions
         original_name = None
         for ext in [".jpg", ".jpeg", ".png", ".bmp", ".JPG", ".JPEG", ".PNG"]:
@@ -243,7 +242,7 @@ async def list_visualizations(
             if candidate in annotation_counts or original_name is None:
                 original_name = candidate
                 break
-        
+
         if original_name is None:
             original_name = f"{original_stem}.jpg"
 
@@ -338,7 +337,7 @@ async def save_annotations(
         )
 
     output_dir = Path(job.output_dir)
-    
+
     if not output_dir.exists():
         raise HTTPException(
             status_code=404,
@@ -354,11 +353,11 @@ async def save_annotations(
 
     # Save edited annotations
     edited_path = output_dir / "annotations_edited.json"
-    
+
     try:
         save_json(annotations, str(edited_path))
         logger.info("Saved edited annotations to %s", edited_path)
-        
+
         return {
             "saved": True,
             "path": str(edited_path),
@@ -368,5 +367,3 @@ async def save_annotations(
     except Exception as e:
         logger.error("Failed to save annotations: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to save annotations: {str(e)}") from e
-
-

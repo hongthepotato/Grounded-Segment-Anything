@@ -52,10 +52,11 @@ from cli.utils import (
     format_time
 )
 
-from ml_engine.inference.auto_labeler import (
+from ml_engine.inference import (
     AutoLabeler,
     AutoLabelerConfig,
-    visualize_detections
+    COCOExporter,
+    visualize_detections,
 )
 
 # Configure logging
@@ -313,9 +314,8 @@ def main():
             except Exception as e:
                 logger.warning(f"Failed to process {image_path}: {e}")
         
-        # Build COCO output from results
-        from ml_engine.inference.auto_labeler import export_to_coco
-        coco_output = export_to_coco(results, class_prompts, args.output_mode)
+        # Build COCO output from results using COCOExporter
+        coco_output = COCOExporter.export(results, class_prompts, args.output_mode)
         
         # Save COCO JSON
         from core.config import save_json
@@ -349,11 +349,17 @@ def main():
         logger.info(f"Saved {viz_count} visualizations to: {viz_dir}")
     else:
         # Standard processing without visualization
-        coco_output = labeler.label_images(
+        results = labeler.label_images(
             image_paths=image_paths,
             class_prompts=class_prompts,
-            output_path=args.output
         )
+        # Convert to COCO format
+        coco_output = COCOExporter.export(results, class_prompts, args.output_mode)
+        
+        # Save COCO JSON
+        from core.config import save_json
+        save_json(coco_output, args.output)
+        logger.info(f"Saved COCO annotations to: {args.output}")
 
     elapsed_time = time.time() - start_time
 
