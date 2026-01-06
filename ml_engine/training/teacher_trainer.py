@@ -31,6 +31,7 @@ from ml_engine.training.losses import build_criterion, SegmentationLoss
 from ml_engine.training.training_manager import TrainingManager
 from ml_engine.training.checkpoint_manager import CheckpointManager
 from core.logger import TensorBoardLogger, log_config, log_metrics
+from core.config import save_config
 from core.constants import DEFAULT_CONFIGS_DIR
 
 
@@ -126,6 +127,10 @@ class TeacherTrainer:
         # Create output directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
         (self.output_dir / 'teachers').mkdir(exist_ok=True)
+
+        config_path = self.output_dir / 'teacher_config.yaml'
+        save_config(config, str(config_path))
+        logger.info("✓ Saved config to: %s", config_path)
 
         # Setup device
         # CRITICAL: When CUDA_VISIBLE_DEVICES is set (by subprocess_runner),
