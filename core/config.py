@@ -88,72 +88,9 @@ def save_json(data: Dict[str, Any], output_path: str) -> None:
     """Save data to JSON file."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-
-@deprecated(reason="Use load_config, merge_configs instead")
-def generate_config(
-    default_config_path: str,
-    dataset_info: Dict[str, Any],
-    cli_overrides: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """
-    Generate configuration by merging defaults with dataset info and CLI overrides.
-    
-    This is the core of the auto-config system. It:
-    1. Loads default config template
-    2. Auto-fills dataset-specific values (num_classes, class_names)
-    3. Applies CLI overrides
-    
-    Args:
-        default_config_path: Path to default config YAML
-        dataset_info: Dictionary from inspect_dataset()
-        cli_overrides: Optional dictionary of CLI overrides
-    
-    Returns:
-        Generated configuration dictionary
-    
-    Example:
-        >>> from ml_engine.data.inspection import inspect_dataset
-        >>> dataset_info = inspect_dataset(coco_data)
-        >>> config = generate_config(
-        >>>     default_config_path='configs/defaults/teacher_grounding_dino_lora.yaml',
-        >>>     dataset_info=dataset_info,
-        >>>     cli_overrides={'batch_size': 16}
-        >>> )
-    """
-    # Load default config
-    config = load_config(default_config_path)
-
-    # Auto-fill dataset-specific values
-    config['num_classes'] = dataset_info['num_classes']
-    config['class_names'] = list(dataset_info['class_mapping'].values())
-    config['class_mapping'] = dataset_info['class_mapping']
-
-    # Add dataset metadata
-    if 'dataset' not in config:
-        config['dataset'] = {}
-
-    config['dataset']['num_images'] = dataset_info['num_images']
-    config['dataset']['num_annotations'] = dataset_info['num_annotations']
-    config['dataset']['annotation_mode'] = dataset_info['annotation_mode']
-    config['dataset']['has_boxes'] = dataset_info['has_boxes']
-    config['dataset']['has_masks'] = dataset_info['has_masks']
-
-    # Apply CLI overrides
-    if cli_overrides:
-        config = merge_configs(config, cli_overrides)
-        logger.info("Applied %d CLI overrides", len(cli_overrides))
-
-    # Add generation metadata
-    if 'metadata' not in config:
-        config['metadata'] = {}
-
-    config['metadata']['generated_at'] = datetime.now().isoformat()
-    config['metadata']['default_config'] = str(default_config_path)
-
-    return config
 
 
 def merge_configs(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
