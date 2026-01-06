@@ -85,10 +85,20 @@ def load_json(json_path: str) -> Dict[str, Any]:
 
 
 def save_json(data: Dict[str, Any], output_path: str) -> None:
-    """Save data to JSON file."""
+    """
+    Save data to JSON file.
+    
+    Args:
+        data: Data dictionary to save
+        output_path: Path to save JSON file
+
+    Example:
+        >>> data = {'key': 'value', 'number': 42, 'nested': {'item': 'test'}}
+        >>> save_json(data, 'experiments/exp1/data.json')
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -183,42 +193,6 @@ def merge_configs(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, A
             # Override value
             result[key] = value
 
-    return result
-
-
-def parse_cli_overrides(args_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Parse CLI arguments into nested config dictionary.
-    
-    Converts dot-notation arguments like 'lora.r=32' into nested dict.
-    
-    Args:
-        args_dict: Dictionary of CLI arguments
-    
-    Returns:
-        Nested configuration dictionary
-    
-    Example:
-        >>> args = {'lora.r': 32, 'lora.alpha': 64, 'batch_size': 16}
-        >>> config = parse_cli_overrides(args)
-        >>> # Result: {'lora': {'r': 32, 'alpha': 64}, 'batch_size': 16}
-    """
-    result = {}
-    
-    for key, value in args_dict.items():
-        if '.' in key:
-            # Nested key
-            parts = key.split('.')
-            current = result
-            for part in parts[:-1]:
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-            current[parts[-1]] = value
-        else:
-            # Top-level key
-            result[key] = value
-    
     return result
 
 
