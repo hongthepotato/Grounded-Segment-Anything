@@ -186,42 +186,6 @@ def merge_configs(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, A
     return result
 
 
-def parse_cli_overrides(args_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Parse CLI arguments into nested config dictionary.
-    
-    Converts dot-notation arguments like 'lora.r=32' into nested dict.
-    
-    Args:
-        args_dict: Dictionary of CLI arguments
-    
-    Returns:
-        Nested configuration dictionary
-    
-    Example:
-        >>> args = {'lora.r': 32, 'lora.alpha': 64, 'batch_size': 16}
-        >>> config = parse_cli_overrides(args)
-        >>> # Result: {'lora': {'r': 32, 'alpha': 64}, 'batch_size': 16}
-    """
-    result = {}
-    
-    for key, value in args_dict.items():
-        if '.' in key:
-            # Nested key
-            parts = key.split('.')
-            current = result
-            for part in parts[:-1]:
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-            current[parts[-1]] = value
-        else:
-            # Top-level key
-            result[key] = value
-    
-    return result
-
-
 def create_experiment_dir(
     base_dir: str = 'experiments',
     experiment_name: Optional[str] = None
