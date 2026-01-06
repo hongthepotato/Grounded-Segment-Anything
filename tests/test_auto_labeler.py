@@ -459,18 +459,18 @@ class TestAutoLabelerIntegration:
         
         # Label images (sequential, no batch_size parameter)
         results = labeler.label_images(
-            image_paths=image_paths,
-            class_prompts=["dog", "cat"],
-        )
+                image_paths=image_paths,
+                class_prompts=["dog", "cat"],
+            )
         
         # Export to COCO
         coco = COCOExporter.export(results, ["dog", "cat"])
-        
-        # Verify COCO format
-        assert 'images' in coco
-        assert 'annotations' in coco
-        assert 'categories' in coco
-        assert len(coco['images']) == len(image_paths)
+            
+            # Verify COCO format
+            assert 'images' in coco
+            assert 'annotations' in coco
+            assert 'categories' in coco
+            assert len(coco['images']) == len(image_paths)
         assert len(coco['categories']) == 2
 
 
