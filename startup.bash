@@ -10,9 +10,9 @@ if ! pgrep -x "redis-server" > /dev/null; then
     echo " Redis started"
 fi
 
-# 启动 FastAPI (后台)
-nohup uvicorn api.app:app --host 0.0.0.0 --port 8080 >> logs/api.log 2>&1 &
-echo " FastAPI started on :8080"
+# 启动 FastAPI (后台) - 使用多worker避免阻塞
+nohup uvicorn api.app:app --host 0.0.0.0 --port 8080 --workers 4 >> logs/api.log 2>&1 &
+echo " FastAPI started on :8080 (4 workers)"
 
 # 自动检测GPU数量并启动Workers
 GPU_COUNT=$(nvidia-smi -L | wc -l)
