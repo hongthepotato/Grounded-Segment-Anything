@@ -33,6 +33,7 @@ class JobType(str, Enum):
     MODEL_OPTIMIZATION = "model_optimization"
     EVALUATION = "evaluation"
     AUTO_LABEL = "auto_label"
+    INFERENCE = "inference"
 
 
 @dataclass
