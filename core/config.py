@@ -11,7 +11,6 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import logging
 import yaml
-from deprecated import deprecated
 
 logger = logging.getLogger(__name__)
 
@@ -160,5 +159,5 @@ def create_experiment_dir(
     (exp_dir / 'student').mkdir(exist_ok=True)
     (exp_dir / 'logs').mkdir(exist_ok=True)
 
-    logger.info(f"Created experiment directory: {exp_dir}")
+    logger.info("Created experiment directory: %s", exp_dir)
     return exp_dir
