@@ -31,6 +31,7 @@ from api.routes.websocket import router as websocket_router
 from api.routes.exports import router as exports_router
 from api.schemas import success_response, error_response
 from api.routes.autolabel import router as autolabel_router
+from api.routes.inference import router as inference_router
 from ml_engine.jobs import get_job_manager
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,12 @@ API for managing ML training jobs and auto-labeling.
 - `GET /api/autolabel/{id}/visualizations/{filename}` - Get visualization image
 - `PUT /api/autolabel/{id}/annotations` - Save edited annotations
 
+### Inference (Fine-tuned Models)
+- `POST /api/inference` - Submit inference job using fine-tuned model
+- `GET /api/inference/{id}/metrics` - Get inference metrics
+- `GET /api/inference/{id}/visualizations` - List visualization images
+- `GET /api/inference/{id}/visualizations/{filename}` - Get visualization image
+
 ### Exports
 - `GET /api/jobs/{id}/exports` - List available export formats
 - `GET /api/jobs/{id}/export` - Download trained model package
@@ -136,6 +143,7 @@ app.include_router(queue_router)
 app.include_router(websocket_router)
 app.include_router(exports_router)
 app.include_router(autolabel_router)
+app.include_router(inference_router)
 
 
 # =============================================================================
