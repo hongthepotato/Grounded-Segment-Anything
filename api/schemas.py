@@ -336,3 +336,95 @@ class VisualizationListResponse(BaseModel):
     job_id: str = Field(..., description="Job ID")
     total: int = Field(..., description="Total number of visualizations")
     images: List[VisualizationInfo] = Field(..., description="List of visualization info")
+
+
+# =============================================================================
+# Inference Schemas (Fine-tuned Model Inference)
+# =============================================================================
+
+class InferenceRequest(BaseModel):
+    """
+    Request body for inference job using a fine-tuned model.
+    
+    Uses a completed training job's LoRA adapters for inference.
+    Class names are automatically retrieved from the training job config.
+    
+    Example:
+        {
+            "training_job_id": "abc123-def456-...",
+            "image_paths": [
+                "upload/2025/01/04/image1.jpeg",
+                "upload/2025/01/04/image2.jpeg"
+            ],
+            "output_mode": "both",
+            "box_threshold": 0.5
+        }
+    """
+    training_job_id: str = Field(
+        ...,
+        description="ID of completed training job to use for inference"
+    )
+    image_paths: List[str] = Field(
+        ...,
+        description="List of image paths to run inference on"
+    )
+    output_mode: str = Field(
+        default="both",
+        description="Output mode: 'boxes', 'masks', or 'both'"
+    )
+    box_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Detection confidence threshold"
+    )
+    nms_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Non-Maximum Suppression threshold"
+    )
+    output_dir: Optional[str] = Field(
+        default=None,
+        description="Output directory (auto-generated if not provided)"
+    )
+    priority: int = Field(
+        default=0,
+        description="Job priority (higher = more urgent)"
+    )
+    tags: List[str] = Field(
+        default_factory=list,
+        description="Optional tags for filtering"
+    )
+
+
+class InferenceMetricsSummary(BaseModel):
+    """Summary statistics for inference results."""
+    total_images: int = Field(..., description="Total images processed")
+    total_detections: int = Field(..., description="Total detections across all images")
+    avg_detections_per_image: float = Field(..., description="Average detections per image")
+    avg_confidence: float = Field(..., description="Average confidence score")
+
+
+class InferenceClassMetrics(BaseModel):
+    """Per-class detection metrics."""
+    count: int = Field(..., description="Number of detections for this class")
+    avg_confidence: float = Field(..., description="Average confidence for this class")
+
+
+class InferenceProcessingMetrics(BaseModel):
+    """Processing time metrics."""
+    total_time_seconds: float = Field(..., description="Total processing time")
+    avg_time_per_image: float = Field(..., description="Average time per image")
+
+
+class InferenceMetricsResponse(BaseModel):
+    """
+    Complete inference metrics response.
+    
+    Contains summary stats, per-class breakdown, and processing times.
+    """
+    summary: InferenceMetricsSummary = Field(..., description="Summary statistics")
+    per_class: Dict[str, InferenceClassMetrics] = Field(..., description="Per-class metrics")
+    processing: InferenceProcessingMetrics = Field(..., description="Processing time metrics")
+    config: Dict[str, Any] = Field(..., description="Inference configuration used")
