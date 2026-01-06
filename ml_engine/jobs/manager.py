@@ -232,8 +232,9 @@ class JobManager:
         status: Optional[str] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-        offset: int = 0
-    ) -> List[Job]:
+        offset: int = 0,
+        return_total: bool = False
+    ) -> "List[Job] | tuple[List[Job], int]":
         """
         List jobs with optional filtering.
         
@@ -242,9 +243,11 @@ class JobManager:
             job_type: Filter by job type
             limit: Maximum number of jobs to return
             offset: Pagination offset
+            return_total: If True, return (jobs, total_count) tuple
             
         Returns:
-            List of Job objects (sorted by created_at, newest first)
+            List of Job objects (sorted by created_at, newest first),
+            or (jobs, total_count) tuple if return_total=True
         """
         # Convert status string to enum
         status_enum = None
@@ -258,7 +261,8 @@ class JobManager:
             status=status_enum,
             job_type=job_type,
             limit=limit,
-            offset=offset
+            offset=offset,
+            return_total=return_total
         )
 
     def get_job_count(self, status: Optional[str] = None) -> int:
@@ -271,8 +275,9 @@ class JobManager:
         Returns:
             Number of jobs
         """
-        jobs = self.list_jobs(status=status, limit=10000)
-        return len(jobs)
+        # Use return_total to get count in single scan instead of loading all jobs
+        _, total = self.list_jobs(status=status, limit=1, return_total=True)
+        return total
 
     def delete_job(self, job_id: str) -> bool:
         """
