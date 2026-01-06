@@ -143,7 +143,7 @@ def create_experiment_dir(
     """
     base_path = Path(base_dir)
     base_path.mkdir(parents=True, exist_ok=True)
-    
+
     if experiment_name is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         experiment_name = f'exp_{timestamp}'
@@ -151,15 +151,15 @@ def create_experiment_dir(
         # Add timestamp to avoid conflicts
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         experiment_name = f'{experiment_name}_{timestamp}'
-    
+
     exp_dir = base_path / experiment_name
     exp_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Create subdirectories
     (exp_dir / 'teachers').mkdir(exist_ok=True)
     (exp_dir / 'student').mkdir(exist_ok=True)
     (exp_dir / 'logs').mkdir(exist_ok=True)
-    
+
     logger.info(f"Created experiment directory: {exp_dir}")
     return exp_dir
 
@@ -201,21 +201,3 @@ def save_experiment_metadata(
     metadata_path = exp_dir / 'metadata.json'
     save_json(metadata, str(metadata_path))
     logger.info("Saved experiment metadata to: %s", metadata_path)
-
-
-def load_experiment_config(
-    exp_dir: str,
-    config_name: str = 'teacher_config.yaml'
-) -> Dict[str, Any]:
-    """
-    Load configuration from experiment directory.
-    
-    Args:
-        exp_dir: Experiment directory path
-        config_name: Name of config file to load
-    
-    Returns:
-        Configuration dictionary
-    """
-    config_path = Path(exp_dir) / config_name
-    return load_config(str(config_path))
