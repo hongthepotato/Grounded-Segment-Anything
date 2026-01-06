@@ -247,11 +247,22 @@ EDGE_DEVICES = {
 }
 
 # ============================================================================
-# Logging
+# Logging Configuration
 # ============================================================================
 
+# Default log format for text output
 LOG_FORMAT = '[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+# Log format types
+LOG_FORMAT_TEXT = 'text'
+LOG_FORMAT_JSON = 'json'
+
+# Default log level
+DEFAULT_LOG_LEVEL = 'INFO'
+
+# Valid log levels
+VALID_LOG_LEVELS: List[str] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 
 # ============================================================================
 # Version Info
