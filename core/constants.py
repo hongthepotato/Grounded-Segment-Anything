@@ -28,7 +28,6 @@ EXPERIMENTS_DIR = PROJECT_ROOT / 'experiments'
 LOGS_DIR = PROJECT_ROOT / 'logs'
 
 # Data subdirectories
-RAW_DATA_DIR = DATA_DIR / 'raw'
 MODELS_DIR = DATA_DIR / 'models'
 PRETRAINED_MODELS_DIR = MODELS_DIR / 'pretrained'
 
