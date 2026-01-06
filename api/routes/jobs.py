@@ -145,8 +145,14 @@ def get_manager() -> JobManager:
     return get_job_manager(redis_url)
 
 
-def job_to_response(job: Job) -> JobResponse:
-    """Convert Job model to JobResponse schema."""
+def job_to_response(job: Job, include_accuracy: bool = False) -> JobResponse:
+    """
+    Convert Job model to JobResponse schema.
+    
+    Args:
+        job: Job model
+        include_accuracy: Whether to read accuracy from file (expensive, use sparingly)
+    """
     progress = None
     if job.progress:
         progress = JobProgressSchema(
@@ -158,9 +164,10 @@ def job_to_response(job: Job) -> JobResponse:
             message=job.progress.message,
         )
 
-    # Get accuracy from evaluation report (only for completed jobs)
+    # Get accuracy from evaluation report (only when explicitly requested)
+    # This is expensive as it reads from filesystem
     accuracy = None
-    if job.status.value == "completed":
+    if include_accuracy and job.status.value == "completed":
         accuracy = get_job_accuracy(job.output_dir)
 
     return JobResponse(
@@ -252,15 +259,14 @@ async def list_jobs(
     Example:
         GET /api/jobs?status=running&limit=10
     """
-    jobs = manager.list_jobs(
+    # Get jobs and total count in single scan
+    jobs, total = manager.list_jobs(
         status=status,
         job_type=job_type,
         limit=limit,
         offset=offset,
+        return_total=True,
     )
-
-    # Get total count for pagination
-    total = manager.get_job_count(status=status)
 
     response_data = JobListResponse(
         jobs=[job_to_response(job) for job in jobs],
@@ -292,10 +298,11 @@ async def get_job(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
+    # Include accuracy for single job requests (more expensive but acceptable)
     return JSONResponse(
         status_code=200,
         content=success_response(
-            data={"jobs": [job_to_response(job).model_dump(mode='json')]}
+            data={"jobs": [job_to_response(job, include_accuracy=True).model_dump(mode='json')]}
         )
     )
 
