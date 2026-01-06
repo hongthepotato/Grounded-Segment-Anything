@@ -34,16 +34,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from ml_engine.training.teacher_trainer import TeacherTrainer
 from ml_engine.data.manager import DataManager
 from core.config import (
-    save_config, create_experiment_dir, load_config, merge_configs,
-    save_experiment_metadata
+    save_config, create_experiment_dir, load_config, merge_configs
 )
 from core.logger import setup_logger
 from core.constants import DEFAULT_CONFIGS_DIR
-
-
-# Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def parse_args():
@@ -205,11 +199,11 @@ def main():
         str(p) for p in image_dir.rglob('*')
         if p.suffix.lower() in image_extensions
     ]
-    
+
     if not image_paths:
         logger.error("No images found in directory: %s", args.images)
         sys.exit(1)
-    
+
     logger.info("Found %d images in %s", len(image_paths), args.images)
 
     # Step 1: Create DataManager
@@ -310,13 +304,6 @@ def main():
     config_path = exp_dir / 'teacher_config.yaml'
     save_config(config, str(config_path))
     logger.info("✓ Saved config to: %s", config_path)
-
-    # Save metadata
-    save_experiment_metadata(
-        exp_dir=exp_dir,
-        dataset_info=dataset_info,
-        cli_args=vars(args)
-    )
 
     # Step 4: Initialize trainer
     logger.info("\n Step 4: Initializing trainer...")
