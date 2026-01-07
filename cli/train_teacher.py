@@ -36,7 +36,7 @@ from ml_engine.data.manager import DataManager
 from core.config import (
     save_config, create_experiment_dir, load_config, merge_configs
 )
-from core.logger import setup_logger
+from core.logging_config import configure_logging, get_logger
 from core.constants import DEFAULT_CONFIGS_DIR
 
 
@@ -180,8 +180,9 @@ def main():
     """Main CLI entry point."""
     args = parse_args()
 
-    # Setup logging
-    logger = setup_logger('teacher_training', level=20)  # INFO level
+    # Setup logging using centralized configuration
+    configure_logging()
+    logger = get_logger('teacher_training')
 
     logger.info("=" * 60)
     logger.info("Teacher Model Fine-Tuning with LoRA")

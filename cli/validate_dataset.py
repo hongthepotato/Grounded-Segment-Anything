@@ -35,9 +35,11 @@ from ml_engine.data.validators import (
     split_dataset
 )
 from core.config import load_json, save_json
-from core.logger import setup_logger
+from core.logging_config import configure_logging, get_logger
 
-logger = setup_logger('dataset_validation')
+# Configure logging using centralized configuration
+configure_logging()
+logger = get_logger('dataset_validation')
 
 
 def parse_args():
