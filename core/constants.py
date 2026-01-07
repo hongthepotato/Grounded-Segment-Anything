@@ -250,13 +250,13 @@ EDGE_DEVICES = {
 # Logging Configuration
 # ============================================================================
 
-# Default log format for text output
-LOG_FORMAT = '[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'
-DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
+# Actual format strings (for logging.Formatter)
+LOG_FORMAT_STRING = '[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'
+DATE_FORMAT_STRING = '%Y-%m-%d %H:%M:%S'
 
-# Log format types
-LOG_FORMAT_TEXT = 'text'
-LOG_FORMAT_JSON = 'json'
+# Format type identifiers (used to select formatter class)
+FORMAT_TYPE_TEXT = 'text'
+FORMAT_TYPE_JSON = 'json'
 
 # Default log level
 DEFAULT_LOG_LEVEL = 'INFO'

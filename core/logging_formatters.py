@@ -20,7 +20,7 @@ import traceback
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from core.constants import LOG_FORMAT, DATE_FORMAT
+from core.constants import LOG_FORMAT_STRING, DATE_FORMAT_STRING
 
 
 class TextFormatter(logging.Formatter):
@@ -38,8 +38,8 @@ class TextFormatter(logging.Formatter):
         datefmt: Optional custom date format
     """
 
-    DEFAULT_FORMAT = LOG_FORMAT
-    DEFAULT_DATE_FORMAT = DATE_FORMAT
+    DEFAULT_FORMAT = LOG_FORMAT_STRING
+    DEFAULT_DATE_FORMAT = DATE_FORMAT_STRING
 
     def __init__(
         self,

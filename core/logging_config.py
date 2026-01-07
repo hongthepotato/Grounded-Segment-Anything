@@ -36,9 +36,9 @@ from typing import Optional
 from core.logging_formatters import TextFormatter, JSONFormatter, ColoredTextFormatter
 from core.constants import (
     DEFAULT_LOG_LEVEL,
-    LOG_FORMAT_TEXT,
-    LOG_FORMAT_JSON,
-    DATE_FORMAT
+    FORMAT_TYPE_TEXT,
+    FORMAT_TYPE_JSON,
+    DATE_FORMAT_STRING
 )
 
 # Track if logging has been configured
@@ -86,7 +86,7 @@ def configure_logging(
 
     # Get configuration from environment or parameters
     level = level or os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL)
-    format_type = format_type or os.environ.get("LOG_FORMAT", LOG_FORMAT_TEXT)
+    format_type = format_type or os.environ.get("LOG_FORMAT", FORMAT_TYPE_TEXT)
     log_file = log_file or os.environ.get("LOG_FILE")
 
     # Convert level string to logging constant
@@ -100,7 +100,7 @@ def configure_logging(
     root_logger.handlers = []
 
     # Create formatter based on format type
-    if format_type.lower() == LOG_FORMAT_JSON:
+    if format_type.lower() == FORMAT_TYPE_JSON:
         formatter = JSONFormatter()
     else:
         # Use colored formatter for console if TTY detected
@@ -114,7 +114,7 @@ def configure_logging(
     # Console handler (stdout)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(numeric_level)
-    if format_type.lower() == LOG_FORMAT_JSON:
+    if format_type.lower() == FORMAT_TYPE_JSON:
         console_handler.setFormatter(formatter)
     else:
         console_handler.setFormatter(console_formatter)
@@ -127,7 +127,7 @@ def configure_logging(
 
         file_handler = logging.FileHandler(log_path, encoding='utf-8')
         file_handler.setLevel(numeric_level)
-        if format_type.lower() == LOG_FORMAT_JSON:
+        if format_type.lower() == FORMAT_TYPE_JSON:
             file_handler.setFormatter(formatter)
         else:
             file_handler.setFormatter(file_formatter)
@@ -196,7 +196,7 @@ def get_job_logger(
         # Logs saved to: {output_dir}/logs/training_20250106_143022.log
     """
     # Get format type from environment
-    format_type = os.environ.get("LOG_FORMAT", LOG_FORMAT_TEXT)
+    format_type = os.environ.get("LOG_FORMAT", FORMAT_TYPE_TEXT)
     level = os.environ.get("LOG_LEVEL", DEFAULT_LOG_LEVEL)
     numeric_level = getattr(logging, level.upper(), logging.INFO)
 
@@ -215,14 +215,17 @@ def get_job_logger(
     log_dir = Path(output_dir) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime(DATE_FORMAT)
+    # Use filename-friendly timestamp format (no colons or spaces)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"{name}_{timestamp}.log"
 
     # Create formatter with job context
-    if format_type.lower() == LOG_FORMAT_JSON:
+    if format_type.lower() == FORMAT_TYPE_JSON:
         formatter = JSONFormatter(extra_fields={"job_id": job_id})
     else:
-        formatter = TextFormatter(fmt=LOG_FORMAT_TEXT)
+        # Use custom format including job_id for better traceability
+        custom_format = f"[%(asctime)s] [Job-{job_id[:8]}] [%(levelname)s] %(name)s - %(message)s"
+        formatter = TextFormatter(fmt=custom_format, datefmt=DATE_FORMAT_STRING)
 
     # File handler - ONLY write to experiment directory
     file_handler = logging.FileHandler(log_file, encoding='utf-8')
@@ -230,7 +233,7 @@ def get_job_logger(
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    logger.info("Job logger initialized: %s", log_file)
+    logger.debug("Job logger initialized: %s", log_file)
 
     return logger
 
