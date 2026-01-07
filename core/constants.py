@@ -1,8 +1,20 @@
 """
 Constants and default values for the platform.
+
+This module defines TRUE constants that should not change:
+- Directory paths
+- Model names (string literals)
+- Pretrained model URLs
+- Model architectural parameters (input sizes, normalization)
+- Validation enums (annotation modes, export formats)
+- Logging configuration
+
+NOTE: Configurable training defaults are in configs/defaults/*.yaml
+      Do NOT add training hyperparameters here - use YAML configs instead.
 """
 
 from pathlib import Path
+from typing import List
 
 # ============================================================================
 # Directory Paths
@@ -16,7 +28,6 @@ EXPERIMENTS_DIR = PROJECT_ROOT / 'experiments'
 LOGS_DIR = PROJECT_ROOT / 'logs'
 
 # Data subdirectories
-RAW_DATA_DIR = DATA_DIR / 'raw'
 MODELS_DIR = DATA_DIR / 'models'
 PRETRAINED_MODELS_DIR = MODELS_DIR / 'pretrained'
 
@@ -52,7 +63,7 @@ def transform_image_path(path: str) -> str:
 
 
 # ============================================================================
-# Model Names
+# Model Names (String Literals)
 # ============================================================================
 
 # Teacher models
@@ -60,22 +71,36 @@ GROUNDING_DINO = 'grounding_dino'
 SAM = 'sam'
 POSE_MODEL = 'pose_model'
 
-# Student models
+# Student models - Detection
 YOLOV8_N = 'yolov8n'
 YOLOV8_S = 'yolov8s'
 YOLOV8_M = 'yolov8m'
 YOLOV8_L = 'yolov8l'
 YOLOV8_X = 'yolov8x'
 
+# Student models - Segmentation
 YOLOV8_N_SEG = 'yolov8n-seg'
 YOLOV8_S_SEG = 'yolov8s-seg'
 YOLOV8_M_SEG = 'yolov8m-seg'
 YOLOV8_L_SEG = 'yolov8l-seg'
 YOLOV8_X_SEG = 'yolov8x-seg'
 
+# Alternative lightweight models
 FASTSAM_S = 'fastsam-s'
 FASTSAM_X = 'fastsam-x'
 MOBILESAM = 'mobilesam'
+
+# All teacher models list
+TEACHER_MODELS: List[str] = [GROUNDING_DINO, SAM, POSE_MODEL]
+
+# All student detection models
+STUDENT_DETECTION_MODELS: List[str] = [YOLOV8_N, YOLOV8_S, YOLOV8_M, YOLOV8_L, YOLOV8_X]
+
+# All student segmentation models
+STUDENT_SEGMENTATION_MODELS: List[str] = [
+    YOLOV8_N_SEG, YOLOV8_S_SEG, YOLOV8_M_SEG, YOLOV8_L_SEG, YOLOV8_X_SEG,
+    FASTSAM_S, FASTSAM_X, MOBILESAM
+]
 
 # ============================================================================
 # Pretrained Model URLs and Paths
@@ -105,93 +130,69 @@ PRETRAINED_MODEL_URLS = {
 }
 
 # ============================================================================
-# Default Training Hyperparameters
+# Model Input Sizes (Architectural Constants)
+# These are fixed by the model architecture and should not be changed
 # ============================================================================
 
-# Teacher training (Grounding DINO with LoRA)
-DEFAULT_DINO_LORA_CONFIG = {
-    'learning_rate': 1e-4,
-    'batch_size': 8,
-    'epochs': 50,
-    'optimizer': 'AdamW',
-    'weight_decay': 1e-4,
-    'warmup_steps': 500,
-    'gradient_accumulation': 2,
-    'mixed_precision': 'fp16',
-    'lora': {
-        'r': 16,
-        'lora_alpha': 32,
-        'lora_dropout': 0.1,
-        # Target modules that actually exist in Grounding DINO:
-        # - MSDeformAttn: value_proj, output_proj
-        # - MultiheadAttention: out_proj
-        # - Vision-Language fusion: v_proj, l_proj, out_l_proj, values_v_proj, values_l_proj
-        'target_modules': [
-            'value_proj',      # MSDeformAttn value projection
-            'output_proj',     # MSDeformAttn output projection
-            'out_proj',        # MultiheadAttention output projection
-            'v_proj',          # Vision projection in fusion
-            'l_proj',          # Language projection in fusion
-            'out_l_proj',      # Language output projection
-            'values_v_proj',   # Vision values projection
-            'values_l_proj'    # Language values projection
-        ]
-    }
-}
-
-# Teacher training (SAM with LoRA)
-# LoRA is applied to mask_decoder's transformer attention layers
-# Target modules use simple string matching (PEFT style):
-#   - q_proj, k_proj, v_proj, out_proj: All Linear projections in Attention layers
-# This covers:
-#   - mask_decoder.transformer.layers[*].self_attn.*
-#   - mask_decoder.transformer.layers[*].cross_attn_token_to_image.*
-#   - mask_decoder.transformer.layers[*].cross_attn_image_to_token.*
-#   - mask_decoder.transformer.final_attn_token_to_image.*
-DEFAULT_SAM_LORA_CONFIG = {
-    'learning_rate': 5e-4,
-    'batch_size': 16,
-    'epochs': 100,
-    'optimizer': 'AdamW',
-    'weight_decay': 0.01,
-    'mixed_precision': 'fp16',
-    'lora': {
-        'r': 8,
-        'lora_alpha': 16,
-        'lora_dropout': 0.05,
-        'target_modules': [
-            'q_proj',
-            'k_proj', 
-            'v_proj',
-            'out_proj'
-        ]
-    }
-}
-
-# Student training (distillation)
-DEFAULT_DISTILLATION_CONFIG = {
-    'epochs': 300,
-    'batch_size': 32,
-    'learning_rate': 1e-3,
-    'optimizer': 'SGD',
-    'momentum': 0.937,
-    'weight_decay': 0.0005,
-    'grad_clip': 10.0,
-    'loss_weights': {
-        'detection': 0.3,
-        'segmentation': 0.3,
-        'logit': 0.2,
-        'feature': 0.2
+MODEL_INPUT_SIZES = {
+    GROUNDING_DINO: {
+        'min_size': 800,
+        'max_size': 1333
     },
-    'temperature': 4.0
+    SAM: {
+        'height': 1024,
+        'width': 1024
+    },
+    'yolov8': 640,
+    'fastsam': 1024
+}
+
+# Normalization parameters (determined by model pretraining)
+MODEL_NORMALIZATION = {
+    GROUNDING_DINO: {
+        'mean': [0.485, 0.456, 0.406],
+        'std': [0.229, 0.224, 0.225],
+        'pixel_range': [0, 1]
+    },
+    SAM: {
+        'mean': [123.675, 116.28, 103.53],
+        'std': [58.395, 57.12, 57.375],
+        'pixel_range': [0, 255]
+    },
+    'yolov8': {
+        'mean': [0.0, 0.0, 0.0],
+        'std': [1.0, 1.0, 1.0],
+        'pixel_range': [0, 1]
+    }
 }
 
 # ============================================================================
-# Data Augmentation
+# Annotation Modes (for data inspection)
+# ============================================================================
+
+# Annotation mode values (used in inspect_dataset return value)
+ANNOTATION_MODE_DETECTION = 'DETECTION_ONLY'
+ANNOTATION_MODE_SEGMENTATION = 'SEGMENTATION_ONLY'
+ANNOTATION_MODE_COMBINED = 'DETECTION_AND_SEGMENTATION'
+
+# All valid annotation modes
+ANNOTATION_MODES: List[str] = [
+    ANNOTATION_MODE_DETECTION,
+    ANNOTATION_MODE_SEGMENTATION,
+    ANNOTATION_MODE_COMBINED
+]
+
+# Mode for model selection (simpler format)
+MODE_DETECTION = 'detection'
+MODE_SEGMENTATION = 'segmentation'
+MODE_COMBINED = 'combined'
+
+# ============================================================================
+# Data Augmentation (Validation Lists)
 # ============================================================================
 
 # Available object characteristics
-OBJECT_CHARACTERISTICS = [
+OBJECT_CHARACTERISTICS: List[str] = [
     'changes_shape',
     'changes_size',
     'reflective_surface',
@@ -212,104 +213,25 @@ ENVIRONMENT_CONDITIONS = {
 }
 
 # Augmentation intensity levels
-AUGMENTATION_INTENSITIES = ['low', 'medium', 'high']
-
-# ============================================================================
-# Model Input Sizes
-# ============================================================================
-
-# Preprocessing input sizes
-MODEL_INPUT_SIZES = {
-    'grounding_dino': {
-        'min_size': 800,
-        'max_size': 1333
-    },
-    'sam': {
-        'height': 1024,
-        'width': 1024
-    },
-    'yolov8': 640,
-    'fastsam': 1024
-}
-
-# Normalization parameters
-MODEL_NORMALIZATION = {
-    'grounding_dino': {
-        'mean': [0.485, 0.456, 0.406],
-        'std': [0.229, 0.224, 0.225],
-        'pixel_range': [0, 1]
-    },
-    'sam': {
-        'mean': [123.675, 116.28, 103.53],
-        'std': [58.395, 57.12, 57.375],
-        'pixel_range': [0, 255]
-    },
-    'yolov8': {
-        'mean': [0.0, 0.0, 0.0],
-        'std': [1.0, 1.0, 1.0],
-        'pixel_range': [0, 1]
-    }
-}
-
-# ============================================================================
-# Training Dynamics
-# ============================================================================
-
-# Gradient clipping
-DEFAULT_GRAD_CLIP_NORMS = {
-    'lora': 0.1,          # For LoRA training (small gradients)
-    'full_ft': 1.0,       # For full fine-tuning
-    'distillation': 10.0  # For student distillation
-}
-
-# Mixed precision
-AMP_INIT_SCALE = 65536  # 2^16
-
-# ============================================================================
-# Checkpointing
-# ============================================================================
-
-DEFAULT_CHECKPOINT_CONFIG = {
-    'save_interval': 5,
-    'save_last': True,
-    'save_best': True,
-    'max_keep_checkpoints': 5,
-    'monitor_metric': 'mAP50',
-    'mode': 'max',
-    'early_stopping': {
-        'enabled': True,
-        'patience': 15,
-        'min_delta': 0.001
-    }
-}
+AUGMENTATION_INTENSITIES: List[str] = ['low', 'medium', 'high']
 
 # ============================================================================
 # Evaluation Metrics
 # ============================================================================
 
 # Detection metrics
-DETECTION_METRICS = ['mAP50', 'mAP50-95', 'precision', 'recall', 'f1']
+DETECTION_METRICS: List[str] = ['mAP50', 'mAP50-95', 'precision', 'recall', 'f1']
 
 # Segmentation metrics
-SEGMENTATION_METRICS = ['mask_IoU', 'mask_precision', 'mask_recall']
+SEGMENTATION_METRICS: List[str] = ['mask_IoU', 'mask_precision', 'mask_recall']
 
 # ============================================================================
 # Export Formats
 # ============================================================================
 
-SUPPORTED_EXPORT_FORMATS = ['onnx', 'tensorrt', 'tflite', 'openvino']
+SUPPORTED_EXPORT_FORMATS: List[str] = ['onnx', 'tensorrt', 'tflite', 'openvino']
 
-QUANTIZATION_MODES = ['int8', 'fp16', 'fp32']
-
-# ============================================================================
-# Annotation Modes (for reporting only)
-# ============================================================================
-
-ANNOTATION_MODES = [
-    'DETECTION_ONLY',
-    'SEGMENTATION_ONLY',
-    'DETECTION_AND_SEGMENTATION'
-]
+QUANTIZATION_MODES: List[str] = ['int8', 'fp16', 'fp32']
 
 # ============================================================================
 # Device Settings
@@ -325,11 +247,22 @@ EDGE_DEVICES = {
 }
 
 # ============================================================================
-# Logging
+# Logging Configuration
 # ============================================================================
 
-LOG_FORMAT = '[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'
-DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
+# Actual format strings (for logging.Formatter)
+LOG_FORMAT_STRING = '[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'
+DATE_FORMAT_STRING = '%Y-%m-%d %H:%M:%S'
+
+# Format type identifiers (used to select formatter class)
+FORMAT_TYPE_TEXT = 'text'
+FORMAT_TYPE_JSON = 'json'
+
+# Default log level
+DEFAULT_LOG_LEVEL = 'INFO'
+
+# Valid log levels
+VALID_LOG_LEVELS: List[str] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 
 # ============================================================================
 # Version Info
@@ -337,4 +270,3 @@ DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 PLATFORM_VERSION = '0.1.0'
 PLATFORM_NAME = 'Grounded-SAM Edge Deployment Platform'
-

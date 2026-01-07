@@ -34,7 +34,6 @@ Usage:
         --viz-dir output/visualizations/
 """
 import argparse
-import logging
 import sys
 import time
 from pathlib import Path
@@ -59,12 +58,11 @@ from ml_engine.inference import (
     visualize_detections,
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from core.logging_config import configure_logging, get_logger
+
+# Configure logging using centralized configuration
+configure_logging()
+logger = get_logger(__name__)
 
 
 def parse_args():

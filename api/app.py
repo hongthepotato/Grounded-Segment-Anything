@@ -17,7 +17,6 @@ Usage:
     uvicorn.run(app, host="0.0.0.0", port=8000)
 """
 
-import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -32,8 +31,13 @@ from api.routes.exports import router as exports_router
 from api.schemas import success_response, error_response
 from api.routes.autolabel import router as autolabel_router
 from ml_engine.jobs import get_job_manager
+from core.logging_config import configure_logging, get_logger
 
-logger = logging.getLogger(__name__)
+# Configure logging at module load time (before FastAPI starts)
+# This ensures all loggers are properly configured
+configure_logging()
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -240,12 +244,6 @@ async def root():
 # Entry point for running directly
 if __name__ == "__main__":
     import uvicorn
-
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
 
     host = os.environ.get("API_HOST", "0.0.0.0")
     port = int(os.environ.get("API_PORT", "8080"))

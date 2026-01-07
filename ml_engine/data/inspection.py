@@ -9,6 +9,18 @@ import json
 from typing import Dict, Any, List
 from pathlib import Path
 
+from core.constants import (
+    GROUNDING_DINO,
+    SAM,
+    # POSE_MODEL,  # Uncomment when pose estimation is implemented
+    ANNOTATION_MODE_DETECTION,
+    ANNOTATION_MODE_SEGMENTATION,
+    ANNOTATION_MODE_COMBINED,
+    MODE_DETECTION,
+    MODE_SEGMENTATION,
+    MODE_COMBINED,
+)
+
 
 def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -69,11 +81,11 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Determine annotation mode (for reporting purposes only)
     if has_boxes and has_masks:
-        annotation_mode = "DETECTION_AND_SEGMENTATION"
+        annotation_mode = ANNOTATION_MODE_COMBINED
     elif has_boxes:
-        annotation_mode = "DETECTION_ONLY"
+        annotation_mode = ANNOTATION_MODE_DETECTION
     elif has_masks:
-        annotation_mode = "SEGMENTATION_ONLY"
+        annotation_mode = ANNOTATION_MODE_SEGMENTATION
     else:
         raise KeyError("No valid annotations found in dataset")
 
@@ -143,11 +155,11 @@ def detect_annotation_mode(coco_data: Dict[str, Any]) -> str:
     )
 
     if has_boxes and has_masks:
-        return 'combined'
+        return MODE_COMBINED
     if has_boxes:
-        return 'detection'
+        return MODE_DETECTION
     if has_masks:
-        return 'segmentation'
+        return MODE_SEGMENTATION
     raise ValueError("No valid annotations found in dataset")
 
 
@@ -176,12 +188,12 @@ def get_required_models_from_mode(annotation_mode: str) -> List[str]:
         >>> for model_name in models:
         >>>     load_model(model_name)
     """
-    if annotation_mode == 'combined':
-        return ['grounding_dino', 'sam']
-    if annotation_mode == 'detection':
-        return ['grounding_dino']
-    if annotation_mode == 'segmentation':
-        return ['sam']
+    if annotation_mode == MODE_COMBINED:
+        return [GROUNDING_DINO, SAM]
+    if annotation_mode == MODE_DETECTION:
+        return [GROUNDING_DINO]
+    if annotation_mode == MODE_SEGMENTATION:
+        return [SAM]
     raise ValueError(f"Unknown annotation mode: {annotation_mode}")
 
 def load_and_inspect_dataset(json_path: str) -> Dict[str, Any]:
@@ -244,15 +256,15 @@ def print_dataset_report(dataset_info: Dict[str, Any]) -> None:
 
     print("\n Recommended Pipeline:")
     if dataset_info['has_boxes'] and dataset_info['has_masks']:
-        print("   ├─ Teacher models: grounding_dino + sam")
+        print(f"   ├─ Teacher models: {GROUNDING_DINO} + {SAM}")
         print("   ├─ Student model: yolov8_seg (detection + segmentation)")
         print("   └─ Command: python cli/train_teacher.py --data train.json")
     elif dataset_info['has_boxes']:
-        print("   ├─ Teacher model: grounding_dino")
+        print(f"   ├─ Teacher model: {GROUNDING_DINO}")
         print("   ├─ Student model: yolov8 (detection only)")
         print("   └─ Command: python cli/train_teacher.py --data train.json")
     elif dataset_info['has_masks']:
-        print("   ├─ Teacher model: sam")
+        print(f"   ├─ Teacher model: {SAM}")
         print("   ├─ Student model: yolov8_seg or fastsam")
         print("   └─ Command: python cli/train_teacher.py --data train.json")
 
@@ -280,13 +292,13 @@ def get_required_models(dataset_info: Dict[str, Any]) -> List[str]:
     required_models = []
 
     if dataset_info['has_boxes']:
-        required_models.append('grounding_dino')
+        required_models.append(GROUNDING_DINO)
 
     if dataset_info['has_masks']:
-        required_models.append('sam')
+        required_models.append(SAM)
 
     # if dataset_info['has_keypoints']:
-    #     required_models.append('pose_model')
+    #     required_models.append(POSE_MODEL)
 
     return required_models
 

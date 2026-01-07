@@ -30,8 +30,10 @@ from ml_engine.models.teacher.sam_lora import load_sam_hq_with_lora
 from ml_engine.training.losses import build_criterion, SegmentationLoss
 from ml_engine.training.training_manager import TrainingManager
 from ml_engine.training.checkpoint_manager import CheckpointManager
-from core.logger import TensorBoardLogger, log_config, log_metrics
-from core.constants import DEFAULT_CONFIGS_DIR
+from core.tensorboard import TensorBoardLogger
+from core.log_utils import log_config, log_metrics
+from core.config import save_config
+from core.constants import DEFAULT_CONFIGS_DIR, GROUNDING_DINO, SAM
 
 
 class TrainingCancelledException(Exception):
@@ -126,6 +128,11 @@ class TeacherTrainer:
         # Create output directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
         (self.output_dir / 'teachers').mkdir(exist_ok=True)
+
+        # Save config for reproducibility (consistent with CLI behavior)
+        config_path = self.output_dir / 'teacher_config.yaml'
+        save_config(config, str(config_path))
+        logger.info(" Saved config to: %s", config_path)
 
         # Setup device
         # CRITICAL: When CUDA_VISIBLE_DEVICES is set (by subprocess_runner),
@@ -238,8 +245,8 @@ class TeacherTrainer:
             )
 
         # Load Grounding DINO if dataset has boxes
-        if 'grounding_dino' in self.required_models:
-            model_config = self.config['models']['grounding_dino']
+        if GROUNDING_DINO in self.required_models:
+            model_config = self.config['models'][GROUNDING_DINO]
 
             logger.info("Loading Grounding DINO with LoRA...")
 
@@ -256,7 +263,7 @@ class TeacherTrainer:
                     "Expected keys: r, lora_alpha, target_modules, lora_dropout"
                 )
 
-            self.models['grounding_dino'] = load_grounding_dino_with_lora(
+            self.models[GROUNDING_DINO] = load_grounding_dino_with_lora(
                 base_checkpoint=base_ckpt,
                 lora_config=model_config['lora'],
                 freeze_backbone=model_config.get('freeze_backbone', True),
@@ -267,7 +274,7 @@ class TeacherTrainer:
             logger.info(" Grounding DINO loaded")
 
         # Load SAM if dataset has masks
-        if 'sam' in self.required_models:
+        if SAM in self.required_models:
             sam_config = self.config['models']['sam']
 
             logger.info("Loading SAM-HQ with LoRA...")
@@ -289,7 +296,7 @@ class TeacherTrainer:
             prompt_encoder_mode = sam_config.get('prompt_encoder_mode', 'frozen')
             mask_decoder_mode = sam_config.get('mask_decoder_mode', 'full')
 
-            self.models['sam'] = load_sam_hq_with_lora(
+            self.models[SAM] = load_sam_hq_with_lora(
                 base_checkpoint=base_ckpt,
                 model_type=model_type,
                 lora_config=sam_config['lora'],
@@ -309,12 +316,12 @@ class TeacherTrainer:
         """Initialize loss functions based on loaded models."""
         self.losses = {}
 
-        if 'grounding_dino' in self.models:
+        if GROUNDING_DINO in self.models:
             # Use proper DETR-style criterion with Hungarian matching
             num_classes = self.dataset_info['num_classes']
 
             # Query num_decoder_layers from actual model architecture
-            dino_model = self.models['grounding_dino']
+            dino_model = self.models[GROUNDING_DINO]
             base_model = dino_model.model.model  # Unwrap PEFT wrapper
             num_decoder_layers = base_model.transformer.decoder.num_layers
 
@@ -331,7 +338,7 @@ class TeacherTrainer:
             logger.info("  - Num decoder layers: %d (architectural constant)", num_decoder_layers)
             logger.info("  - Auxiliary losses: %d intermediate + 1 encoder", num_decoder_layers - 1)
 
-        if 'sam' in self.models:
+        if SAM in self.models:
             self.losses['segmentation'] = SegmentationLoss().to(self.device)
 
     def _init_optimizers(self):
@@ -559,7 +566,7 @@ class TeacherTrainer:
         class_names = list(self.dataset_info['class_mapping'].values())
 
         for model_name, model in self.models.items():
-            if model_name != 'grounding_dino':
+            if model_name != GROUNDING_DINO:
                 logger.info("Skipping export for %s (only Grounding DINO supported)", model_name)
                 continue
 
@@ -674,14 +681,14 @@ class TeacherTrainer:
                 )
 
             # Run evaluation based on model type
-            if model_name == 'grounding_dino':
+            if model_name == GROUNDING_DINO:
                 eval_results = evaluator.evaluate_detection(
                     model=model,
                     dataloader=test_loader,
                     class_names=class_names,
                     dataset_info=self.dataset_info
                 )
-            elif model_name == 'sam':
+            elif model_name == SAM:
                 eval_results = evaluator.evaluate_segmentation(
                     model=model,
                     dataloader=test_loader,
@@ -824,27 +831,27 @@ class TeacherTrainer:
         """
         batch_losses = {}
 
-        if 'grounding_dino' in self.models:
+        if GROUNDING_DINO in self.models:
             dino_losses = self._train_grounding_dino_batch(batch)
             # Add all GroundingDINO loss components with prefix
             for key, value in dino_losses.items():
-                batch_losses[f'grounding_dino_{key}'] = value
+                batch_losses[f'{GROUNDING_DINO}_{key}'] = value
 
-        if 'sam' in self.models:
+        if SAM in self.models:
             sam_loss = self._train_sam_batch(batch)
-            batch_losses['sam_loss'] = sam_loss
+            batch_losses[f'{SAM}_loss'] = sam_loss
 
         return batch_losses
 
     def _train_grounding_dino_batch(self, batch: Dict[str, Any]) -> float:
         """Train Grounding DINO on a batch with auxiliary losses."""
-        model = self.models['grounding_dino']
-        manager = self.training_managers['grounding_dino']
+        model = self.models[GROUNDING_DINO]
+        manager = self.training_managers[GROUNDING_DINO]
         criterion = self.losses['detection']
 
         def compute_loss(batch):
             # Get preprocessed DINO data (already transformed by official transforms)
-            dino_data = batch['preprocessed']['grounding_dino']
+            dino_data = batch['preprocessed'][GROUNDING_DINO]
             images = dino_data['images'].to(self.device)    # NestedTensor with .tensors and .mask
             boxes = dino_data['boxes'].to(self.device)      # [B, max_objs, 4] normalized [cx,cy,w,h]
             labels = dino_data['labels'].to(self.device)    # [B, max_objs]
@@ -1003,12 +1010,12 @@ class TeacherTrainer:
     
     def _train_sam_batch(self, batch: Dict[str, Any]) -> float:
         """Train SAM on a batch."""
-        model = self.models['sam']
-        manager = self.training_managers['sam']
+        model = self.models[SAM]
+        manager = self.training_managers[SAM]
         
         def compute_loss(batch):
             # Get preprocessed SAM data (already transformed by official transforms)
-            sam_data = batch['preprocessed']['sam']
+            sam_data = batch['preprocessed'][SAM]
             images = sam_data['images'].to(self.device)     # [B, 3, 1024, 1024]
             boxes = sam_data['boxes'].to(self.device)       # [B, max_objs, 4] already in SAM space!
             masks = sam_data['masks'].to(self.device)       # [B, max_objs, 256, 256]
@@ -1104,9 +1111,9 @@ class TeacherTrainer:
         batch_losses = {}
 
         # Validate Grounding DINO if loaded
-        if 'grounding_dino' in self.models:
+        if GROUNDING_DINO in self.models:
             # Get preprocessed data (same structure as training)
-            dino_data = batch['preprocessed']['grounding_dino']
+            dino_data = batch['preprocessed'][GROUNDING_DINO]
             images = dino_data['images'].to(self.device)
             boxes = dino_data['boxes'].to(self.device)
             labels = dino_data['labels'].to(self.device)
@@ -1114,7 +1121,7 @@ class TeacherTrainer:
             batch_size = labels.shape[0]
             class_names = list(self.dataset_info['class_mapping'].values())
             criterion = self.losses['detection']
-            model = self.models['grounding_dino']
+            model = self.models[GROUNDING_DINO]
 
             outputs = model(images, class_names=class_names)
 
@@ -1183,14 +1190,14 @@ class TeacherTrainer:
                            if k in criterion.weight_dict)
 
             # Add all loss components with prefix
-            batch_losses['grounding_dino_total_loss'] = total_loss.item()
+            batch_losses[f'{GROUNDING_DINO}_total_loss'] = total_loss.item()
             for key, value in loss_dict.items():
-                batch_losses[f'grounding_dino_{key}'] = value.item() if torch.is_tensor(value) else value
+                batch_losses[f'{GROUNDING_DINO}_{key}'] = value.item() if torch.is_tensor(value) else value
 
         # Validate SAM if loaded
-        if 'sam' in self.models:
+        if SAM in self.models:
             # Get preprocessed data (same structure as training)
-            sam_data = batch['preprocessed']['sam']
+            sam_data = batch['preprocessed'][SAM]
             images = sam_data['images'].to(self.device)
             boxes = sam_data['boxes'].to(self.device)
             masks = sam_data['masks'].to(self.device)
@@ -1198,7 +1205,7 @@ class TeacherTrainer:
 
             valid_mask = (labels != -1)
 
-            outputs = self.models['sam'](images, box_prompts=boxes)
+            outputs = self.models[SAM](images, box_prompts=boxes)
 
             targets = {
                 'masks': masks,
@@ -1206,7 +1213,7 @@ class TeacherTrainer:
             }
 
             loss_dict = self.losses['segmentation'](outputs, targets)
-            batch_losses['sam_loss'] = loss_dict['loss'].item()
+            batch_losses[f'{SAM}_loss'] = loss_dict['loss'].item()
 
         return batch_losses
 
@@ -1219,21 +1226,21 @@ class TeacherTrainer:
         import numpy as np
         from PIL import Image
 
-        if 'grounding_dino' not in self.models:
+        if GROUNDING_DINO not in self.models:
             return
 
         try:
             file_names = batch['file_names']
 
             # Get preprocessed data
-            dino_data = batch['preprocessed']['grounding_dino']
+            dino_data = batch['preprocessed'][GROUNDING_DINO]
             images_tensor = dino_data['images'].to(self.device)
             gt_boxes = dino_data['boxes'].to(self.device)  # [B, max_obj, 4] normalized cxcywh
             labels = dino_data['labels'].to(self.device)   # [B, max_obj]
 
             # Get predictions using model.predict() - handles token-to-class internally
             class_names = list(self.dataset_info['class_mapping'].values())
-            model = self.models['grounding_dino']
+            model = self.models[GROUNDING_DINO]
             predictions = model.predict(images_tensor, class_names, confidence_threshold=0.3)
 
             batch_size = len(file_names)

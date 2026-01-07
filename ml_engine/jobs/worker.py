@@ -26,7 +26,7 @@ Usage:
     worker.run()  # Blocks until shutdown
 """
 
-import logging
+import os
 import signal
 import socket
 import time
@@ -39,7 +39,8 @@ from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
 from ml_engine.jobs.subprocess_runner import TrainingSubprocess
 
-logger = logging.getLogger(__name__)
+from core.logging_config import configure_logging, get_logger
+logger = get_logger(__name__)
 
 
 class TrainingWorker:
@@ -407,11 +408,10 @@ def main():
                        help="Log level")
     args = parser.parse_args()
 
-    # Setup logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    # Setup logging using centralized configuration
+    # Override LOG_LEVEL from command line if provided
+    os.environ["LOG_LEVEL"] = args.log_level
+    configure_logging()
 
     # Create and run worker
     worker = TrainingWorker(

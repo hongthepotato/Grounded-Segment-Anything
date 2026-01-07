@@ -1,0 +1,23 @@
+# Test Dependencies
+# Install with: pip install -r requirements-test.txt
+
+# Testing framework
+pytest>=7.4.0
+pytest-cov>=4.1.0           # Coverage reporting
+pytest-mock>=3.11.1         # Mocking utilities
+pytest-timeout>=2.1.0       # Timeout for slow tests
+pytest-xdist>=3.3.1         # Parallel test execution
+
+# Mocking and test utilities
+mock>=5.1.0
+faker>=19.0.0               # Generate fake data for tests
+
+# Code quality
+flake8>=6.1.0              # Linting
+black>=23.7.0              # Code formatting
+isort>=5.12.0              # Import sorting
+mypy>=1.5.0                # Type checking
+
+# Test data generation
+hypothesis>=6.82.0          # Property-based testing
+

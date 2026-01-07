@@ -27,7 +27,6 @@ Usage:
 """
 
 import sys
-import logging
 import multiprocessing as mp
 import os
 import signal
@@ -35,7 +34,9 @@ import queue
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+from core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # Exit codes for subprocess
@@ -136,7 +137,7 @@ class TrainingSubprocess:
 
         # Spawn subprocess
         self._process = ctx.Process(
-            target=_training_entry_point,
+            target=_job_entry_point,
             args=(
                 self.job_id,
                 self.job_type,
@@ -329,7 +330,7 @@ class TrainingSubprocess:
         self._process = None
 
 
-def _training_entry_point(
+def _job_entry_point(
     job_id: str,
     job_type: str,
     job_config: Dict[str, Any],
@@ -372,12 +373,11 @@ def _training_entry_point(
     # This ensures PyTorch only sees the assigned GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
-    # Setup logging for subprocess
-    logging.basicConfig(
-        level=logging.INFO,
-        format=f"%(asctime)s - [Subprocess-{job_id[:8]}] - %(levelname)s - %(message)s"
-    )
-    sub_logger = logging.getLogger(__name__)
+    # Setup logging for subprocess using centralized configuration
+    # This saves logs to {output_dir}/logs/training_{timestamp}.log
+    from core.logging_config import configure_logging, get_job_logger
+    configure_logging()  # Configure root logger first
+    sub_logger = get_job_logger(job_id, output_dir, name="training")
 
     sub_logger.info("Training subprocess started (pid=%d, gpu=%d)", os.getpid(), gpu_id)
     sub_logger.info("CUDA_VISIBLE_DEVICES set to: %s", os.environ.get("CUDA_VISIBLE_DEVICES"))
