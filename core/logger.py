@@ -1,116 +1,18 @@
 """
-Logging configuration and utilities.
+Logging utilities for the platform.
 
-This module sets up consistent logging across the platform.
+This module provides:
+- TensorBoardLogger: Wrapper for TensorBoard logging
+- log_config(): Pretty-print configuration dictionaries
+- log_metrics(): Format and log training metrics
 """
 
 import logging
+import warnings
 import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
-
-
-def setup_logger(
-    name: str = 'grounded_sam',
-    log_file: Optional[str] = None,
-    level: int = logging.INFO,
-    format_string: Optional[str] = None
-) -> logging.Logger:
-    """
-    Set up a logger with console and file handlers.
-    
-    Args:
-        name: Logger name
-        log_file: Optional path to log file
-        level: Logging level (default: INFO)
-        format_string: Optional custom format string
-    
-    Returns:
-        Configured logger instance
-    
-    Example:
-        >>> logger = setup_logger(
-        >>>     name='training',
-        >>>     log_file='logs/train.log',
-        >>>     level=logging.DEBUG
-        >>> )
-        >>> logger.info("Training started")
-    """
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    
-    # Remove existing handlers to avoid duplicates
-    logger.handlers = []
-    
-    # Default format
-    if format_string is None:
-        format_string = '[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s'
-    
-    formatter = logging.Formatter(format_string, datefmt='%Y-%m-%d %H:%M:%S')
-    
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    
-    # File handler
-    if log_file:
-        log_path = Path(log_file)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        file_handler = logging.FileHandler(log_path, encoding='utf-8')
-        file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    
-    return logger
-
-
-def get_logger(name: str) -> logging.Logger:
-    """
-    Get an existing logger by name.
-    
-    Args:
-        name: Logger name
-    
-    Returns:
-        Logger instance
-    
-    Example:
-        >>> logger = get_logger('training')
-        >>> logger.info("Message")
-    """
-    return logging.getLogger(name)
-
-
-def create_training_logger(exp_dir: Path, name: str = 'training') -> logging.Logger:
-    """
-    Create a logger specifically for training with file output.
-    
-    Args:
-        exp_dir: Experiment directory
-        name: Logger name
-    
-    Returns:
-        Configured training logger
-    
-    Example:
-        >>> logger = create_training_logger(Path('experiments/exp1'))
-        >>> logger.info("Epoch 1/100")
-    """
-    log_dir = exp_dir / 'logs'
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_file = log_dir / f'{name}_{timestamp}.log'
-    
-    return setup_logger(
-        name=name,
-        log_file=str(log_file),
-        level=logging.INFO
-    )
 
 
 def log_config(logger: logging.Logger, config: dict, title: str = "Configuration") -> None:
@@ -128,7 +30,7 @@ def log_config(logger: logging.Logger, config: dict, title: str = "Configuration
     logger.info("=" * 60)
     logger.info(title)
     logger.info("=" * 60)
-    
+
     def log_dict(d: dict, indent: int = 0):
         for key, value in d.items():
             if isinstance(value, dict):
@@ -136,7 +38,7 @@ def log_config(logger: logging.Logger, config: dict, title: str = "Configuration
                 log_dict(value, indent + 1)
             else:
                 logger.info("  " * indent + f"{key}: {value}")
-    
+
     log_dict(config)
     logger.info("=" * 60)
 
@@ -164,14 +66,14 @@ def log_metrics(
         msg = f"Epoch {epoch}"
     else:
         msg = "Metrics"
-    
+
     if prefix:
         msg = f"{prefix} - {msg}"
-    
+
     metric_strs = [f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" 
                    for k, v in metrics.items()]
     msg += " | " + " | ".join(metric_strs)
-    
+
     logger.info(msg)
 
 
@@ -226,17 +128,3 @@ class TensorBoardLogger:
         """Close the writer."""
         if self.enabled:
             self.writer.close()
-
-
-# Global logger instance
-_default_logger = None
-
-
-def get_default_logger() -> logging.Logger:
-    """Get or create the default platform logger."""
-    global _default_logger
-    if _default_logger is None:
-        _default_logger = setup_logger('grounded_sam')
-    return _default_logger
-
-
