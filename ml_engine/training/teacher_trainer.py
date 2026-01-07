@@ -30,7 +30,8 @@ from ml_engine.models.teacher.sam_lora import load_sam_hq_with_lora
 from ml_engine.training.losses import build_criterion, SegmentationLoss
 from ml_engine.training.training_manager import TrainingManager
 from ml_engine.training.checkpoint_manager import CheckpointManager
-from core.logger import TensorBoardLogger, log_config, log_metrics
+from core.tensorboard import TensorBoardLogger
+from core.log_utils import log_config, log_metrics
 from core.config import save_config
 from core.constants import DEFAULT_CONFIGS_DIR, GROUNDING_DINO, SAM
 
