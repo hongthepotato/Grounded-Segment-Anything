@@ -18,12 +18,23 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from core.config import load_json, save_json
-from core.constants import transform_image_path
+from core.constants import transform_image_path, TRANSLATION_MODEL_PATH
+<<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 1b26ac7a5dbc634bf5e607b3a35b67c823611c37
 from ml_engine.data.inspection import (
     inspect_dataset,
     detect_annotation_mode,
     get_required_models_from_mode
 )
+<<<<<<< HEAD
+=======
+from ml_engine.data.inspection import inspect_dataset, get_required_models
+>>>>>>> translation from chinese to english added
+=======
+>>>>>>> 1b26ac7a5dbc634bf5e607b3a35b67c823611c37
+from ml_engine.data.translator import CategoryTranslator, has_chinese_characters
 from ml_engine.data.validators import (
     validate_coco_format,
     normalize_coco_annotations,
@@ -112,6 +123,15 @@ class DataManager:
         logger.info("Loading dataset: %s", self.data_path)
         self.raw_data = load_json(str(self.data_path))
 
+        # Step 1.5: Translate Chinese categories to English (if needed)
+        if self._has_chinese_categories():
+            logger.info("Chinese categories detected - translating to English...")
+            with CategoryTranslator(str(TRANSLATION_MODEL_PATH)) as translator:
+                self.raw_data = translator.translate_categories(self.raw_data)
+            # VRAM automatically freed here
+            logger.info("Category translation complete - VRAM freed")
+
+        # Step 2: Validate COCO format
         logger.info("Validating COCO format...")
         is_valid, errors = validate_coco_format(self.raw_data)
         if not is_valid:
@@ -225,6 +245,20 @@ class DataManager:
             )
 
         logger.info("  All %d image paths validated successfully", len(annotated_filenames))
+
+    def _has_chinese_categories(self) -> bool:
+        """
+        Check if any category name contains Chinese characters.
+        
+        Returns:
+            True if any category has Chinese characters in its name
+        """
+        categories = self.raw_data.get('categories', [])
+        for cat in categories:
+            name = cat.get('name', '')
+            if has_chinese_characters(name):
+                return True
+        return False
 
     def get_image_path(self, file_name: str) -> str:
         """
