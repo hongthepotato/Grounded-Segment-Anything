@@ -211,7 +211,7 @@ def main():
     # Note: Normalization (bbox from masks, etc.) is always applied during loading
     logger.info("\n Step 1: Initializing DataManager...")
 
-    data_manager = DataManager(
+    data_manager = DataManager.from_file(
         data_path=args.data,
         image_paths=image_paths,
         split_config={'train': 0.7, 'val': 0.15, 'test': 0.15}

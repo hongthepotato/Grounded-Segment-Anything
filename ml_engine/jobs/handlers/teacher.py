@@ -57,7 +57,7 @@ class TeacherTrainingHandler(JobHandler):
         # Create DataManager
         # Note: Normalization (bbox from masks, etc.) is always applied during loading
         split_config = job_config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
-        data_manager = DataManager(
+        data_manager = DataManager.from_file(
             data_path=data_path,
             image_paths=image_paths,
             split_config=split_config
