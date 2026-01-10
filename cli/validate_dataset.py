@@ -31,7 +31,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ml_engine.data.inspection import print_dataset_report
 from ml_engine.data.manager import DataManager
 from core.config import save_json
 from core.logging_config import configure_logging, get_logger
@@ -154,7 +153,7 @@ def main():
     # Dataset inspection report
     logger.info("\n Dataset Inspection Report:")
     dataset_info = manager.get_dataset_info()
-    print_dataset_report(dataset_info)
+    # print_dataset_report(dataset_info)
     
     # Quality checks
     logger.info("\n🔍 Quality Report:")
