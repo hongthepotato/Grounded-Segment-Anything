@@ -193,35 +193,3 @@ def get_required_models_from_mode(annotation_mode: str) -> List[str]:
     if annotation_mode == MODE_SEGMENTATION:
         return [SAM]
     raise ValueError(f"Unknown annotation mode: {annotation_mode}")
-
-
-def get_required_models(dataset_info: Dict[str, Any]) -> List[str]:
-    """
-    Determine which models need to be loaded based on dataset inspection.
-    
-    This is a key function for data-driven model loading.
-    
-    Args:
-        dataset_info: Output from inspect_dataset()
-    
-    Returns:
-        List of model names to load (e.g., ['grounding_dino', 'sam'])
-    
-    Example:
-        >>> info = inspect_dataset(coco_data)
-        >>> models = get_required_models(info)
-        >>> for model_name in models:
-        >>>     load_model(model_name)  # Load only what's needed
-    """
-    required_models = []
-
-    if dataset_info['has_boxes']:
-        required_models.append(GROUNDING_DINO)
-
-    if dataset_info['has_masks']:
-        required_models.append(SAM)
-
-    # if dataset_info['has_keypoints']:
-    #     required_models.append(POSE_MODEL)
-
-    return required_models
