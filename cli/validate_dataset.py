@@ -1,12 +1,16 @@
 """
 CLI for COCO dataset validation and preprocessing.
 
-This script validates COCO format datasets and performs:
-- Format validation
-- Auto-generation of missing bbox/area from masks
+This script validates COCO format datasets using the same DataManager
+pipeline as the API, ensuring consistency between CLI and API workflows.
+
+Features:
+- Format validation (automatic)
+- Auto-generation of missing bbox/area from masks (automatic)
 - Dataset splitting (train/val/test)
 - Quality checks
 - Annotation mode detection
+- Image path validation
 
 Usage:
     # Basic validation
@@ -27,14 +31,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ml_engine.data.inspection import load_and_inspect_dataset, print_dataset_report
-from ml_engine.data.validators import (
-    validate_coco_format,
-    normalize_coco_annotations,
-    check_data_quality,
-    split_dataset
-)
-from core.config import load_json, save_json
+from ml_engine.data.inspection import print_dataset_report
+from ml_engine.data.manager import DataManager
+from core.config import save_json
 from core.logging_config import configure_logging, get_logger
 
 # Configure logging using centralized configuration
@@ -52,7 +51,7 @@ def parse_args():
     parser.add_argument('--data', type=str, required=True,
                         help='Path to COCO JSON file')
     parser.add_argument('--images', type=str, default=None,
-                        help='Directory containing images (for validation)')
+                        help='Directory containing images (auto-detected if not provided)')
     parser.add_argument('--output-dir', type=str, default=None,
                         help='Output directory for processed files')
     
@@ -63,14 +62,6 @@ def parse_args():
                         help='Use stratified splitting')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for splitting')
-    
-    # Validation options
-    parser.add_argument('--check-format', action='store_true',
-                        help='Check COCO format compliance')
-    parser.add_argument('--check-images', action='store_true',
-                        help='Check if image files exist')
-    parser.add_argument('--fix-missing', action='store_true',
-                        help='Auto-generate missing bbox/area from masks')
     
     return parser.parse_args()
 
@@ -110,89 +101,85 @@ def main():
     if args.images is None:
         data_path = Path(args.data)
         args.images = str(data_path.parent / 'images')
-        logger.info(f"Auto-detected image directory: {args.images}")
+        logger.info("Auto-detected image directory: %s", args.images)
     
     # Auto-detect output directory
     if args.output_dir is None:
         args.output_dir = str(Path(args.data).parent)
     
-    # Load dataset
-    logger.info(f"\n📂 Loading dataset: {args.data}")
-    coco_data = load_json(args.data)
+    # Collect image paths from directory
+    logger.info("\n Scanning images from: %s", args.images)
+    image_dir = Path(args.images)
+    if not image_dir.exists():
+        logger.error("❌ Image directory not found: %s", image_dir)
+        sys.exit(1)
     
-    # Step 1: Format validation
-    if args.check_format:
-        logger.info("\n✓ Step 1: Validating COCO format...")
-        is_valid, errors = validate_coco_format(coco_data)
-        
-        if not is_valid:
-            logger.error("❌ COCO format validation failed:")
-            for error in errors:
-                logger.error(f"  - {error}")
-            sys.exit(1)
-        else:
-            logger.info("✓ COCO format is valid")
+    # Collect all image paths (relative to match COCO file_name format)
+    image_paths = []
+    for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+        for img_path in image_dir.rglob(ext):
+            # Get relative path from parent of image directory
+            # This matches the typical COCO file_name format
+            try:
+                rel_path = img_path.relative_to(image_dir.parent)
+                image_paths.append(str(rel_path))
+            except ValueError:
+                # Fallback: use just the filename
+                image_paths.append(img_path.name)
     
-    # Step 2: Auto-fix missing fields
-    if args.fix_missing or not args.check_format:
-        logger.info("\n🔧 Step 2: Auto-generating missing bbox/area...")
-        coco_data = normalize_coco_annotations(coco_data, in_place=True)
+    logger.info("Found %d image files", len(image_paths))
     
-    # Step 3: Dataset inspection
-    logger.info("\n📊 Step 3: Inspecting dataset...")
-    dataset_info = load_and_inspect_dataset(args.data)
+    # Parse split config if provided
+    split_config = None
+    if args.split:
+        split_config = parse_split_ratios(args.split)
+        logger.info("Split configuration: %s", split_config)
+        logger.info("Stratify: %s", args.stratify)
+        logger.info("Random seed: %s", args.seed)
+    
+    # Load dataset using DataManager (same as API pipeline)
+    logger.info("\n📂 Loading dataset via DataManager: %s", args.data)
+    try:
+        manager = DataManager.from_file(
+            data_path=args.data,
+            image_paths=image_paths,
+            split_config=split_config,
+            stratify=args.stratify,
+            random_seed=args.seed
+        )
+    except (FileNotFoundError, ValueError) as e:
+        logger.error("❌ Failed to load dataset: %s", e)
+        sys.exit(1)
+    
+    # Dataset inspection report
+    logger.info("\n Dataset Inspection Report:")
+    dataset_info = manager.get_dataset_info()
     print_dataset_report(dataset_info)
     
-    # Step 4: Quality checks
-    logger.info("\n🔍 Step 4: Quality checks...")
-    quality = check_data_quality(coco_data)
+    # Quality checks
+    logger.info("\n🔍 Quality Report:")
+    quality = manager.get_quality_report()
     
     if quality['warnings']:
         logger.warning("⚠️  Quality warnings:")
         for warning in quality['warnings']:
-            logger.warning(f"  - {warning}")
+            logger.warning("  - %s", warning)
     else:
         logger.info("✓ No quality issues detected")
     
-    # Step 5: Check images exist
-    if args.check_images:
-        logger.info("\n🖼️  Step 5: Checking image files...")
-        image_dir = Path(args.images)
-        missing_images = []
-        
-        for img in coco_data['images'][:10]:  # Check first 10
-            img_path = image_dir / img['file_name']
-            if not img_path.exists():
-                missing_images.append(img['file_name'])
-        
-        if missing_images:
-            logger.warning(f"⚠️  {len(missing_images)} images not found (showing first 10)")
-            for fname in missing_images[:10]:
-                logger.warning(f"  - {fname}")
-        else:
-            logger.info("✓ All checked images exist")
+    # Required models
+    required_models = manager.get_required_models()
+    logger.info("\n🤖 Required Models: %s", required_models)
+    logger.info("   Original annotation mode: %s", manager.original_annotation_mode)
     
-    # Step 6: Split dataset
-    if args.split:
-        logger.info(f"\n✂️  Step 6: Splitting dataset...")
-        split_ratios = parse_split_ratios(args.split)
-        
-        logger.info(f"Split ratios: {split_ratios}")
-        logger.info(f"Stratify: {args.stratify}")
-        logger.info(f"Random seed: {args.seed}")
-        
-        splits = split_dataset(
-            coco_data,
-            splits=split_ratios,
-            stratify=args.stratify,
-            random_seed=args.seed
-        )
-        
-        # Save splits
-        for split_name, split_data in splits.items():
+    # Save splits if configured
+    if split_config:
+        logger.info("\n✂️  Saving dataset splits...")
+        for split_name in split_config.keys():
+            split_data = manager.get_split(split_name)
             output_path = Path(args.output_dir) / f'{split_name}.json'
             save_json(split_data, str(output_path))
-            logger.info(f"✓ Saved {split_name}: {output_path} ({len(split_data['images'])} images)")
+            logger.info("✓ Saved %s: %s (%d images)", split_name, output_path, len(split_data['images']))
     
     logger.info("\n" + "=" * 60)
     logger.info("✅ Dataset validation completed!")
@@ -201,5 +188,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
