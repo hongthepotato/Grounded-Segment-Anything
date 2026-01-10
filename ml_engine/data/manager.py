@@ -14,11 +14,10 @@ Everyone gets DATA from this manager.
 """
 
 import logging
-import copy
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from core.config import load_json, save_json
+from core.config import load_json
 from core.constants import transform_image_path
 from ml_engine.data.inspection import (
     inspect_dataset,
@@ -106,7 +105,9 @@ class DataManager:
         cls,
         data_path: str,
         image_paths: List[str],
-        split_config: Optional[Dict[str, float]] = None
+        split_config: Optional[Dict[str, float]] = None,
+        stratify: bool = True,
+        random_seed: int = 42
     ) -> 'DataManager':
         """
         Factory method - loads from disk with full validation.
@@ -122,6 +123,8 @@ class DataManager:
             image_paths: List of image paths from frontend
             split_config: Optional split ratios, e.g., {'train': 0.7, 'val': 0.2, 'test': 0.1}
                          If None, uses all data as single split
+            stratify: Whether to use stratified splitting (default: True)
+            random_seed: Random seed for splitting (default: 42)
         
         Returns:
             Fully initialized DataManager
@@ -167,7 +170,12 @@ class DataManager:
         splits = None
         if split_config:
             logger.info("Splitting dataset: %s", split_config)
-            splits = split_dataset(raw_data, splits=split_config, stratify=True, random_seed=42)
+            splits = split_dataset(
+                raw_data,
+                splits=split_config,
+                stratify=stratify,
+                random_seed=random_seed
+            )
             for split_name, split_data in splits.items():
                 logger.info("  - %s: %d images, %d annotations",
                           split_name,
