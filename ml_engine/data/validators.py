@@ -25,7 +25,7 @@ from typing import Dict, List, Any, Tuple
 import numpy as np
 from pycocotools import mask as mask_utils
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
-from .utils import has_valid_list_field, has_valid_numeric_field
+from .utils import has_valid_numeric_field
 
 logger = logging.getLogger(__name__)
 
@@ -202,10 +202,13 @@ def _validate_bbox(bbox: Any, annotation: Dict, ann_idx: int) -> List[str]:
     """
     errors = []
 
-    # Allow None or empty list ONLY if valid segmentation exists
+    # Allow None or empty list ONLY if VALID segmentation exists
     if bbox is None or bbox == []:
-        # Check if this annotation has segmentation
-        if 'segmentation' not in annotation or not annotation['segmentation']:
+        seg = annotation.get('segmentation')
+        seg_is_present = seg is not None and seg != []
+        seg_is_valid = seg_is_present and len(_validate_segmentation(seg, ann_idx)) == 0
+
+        if not seg_is_valid:
             errors.append(
                 f"Annotation {ann_idx}: `bbox` is None/empty but no valid segmentation found. "
                 "Either bbox or segmentation must be provided."
@@ -585,66 +588,89 @@ def normalize_coco_annotations(coco_data: Dict[str, Any], in_place: bool = True)
     image_lookup = {img['id']: img for img in coco_data['images']}
 
     annotations = coco_data['annotations']
-    bbox_generated = 0
-    area_generated = 0
-    seg_normalized = 0
+    stats = {'bbox_generated': 0, 'area_generated': 0, 'seg_normalized': 0}
 
     for ann in annotations:
-        image_id = ann['image_id']
-        img_info = image_lookup.get(image_id)
+        ann_id = ann['id']
+        img_info = image_lookup.get(ann['image_id'])
 
+        # Validate image reference
         if img_info is None:
-            logger.warning("Annotation %s: image_id %s not found", ann['id'], image_id)
-            continue
+            raise ValueError(
+                f"Annotation {ann_id}: references non-existent image_id {ann['image_id']}."
+            )
 
-        height = img_info.get('height')
-        width = img_info.get('width')
+        height, width = img_info.get('height'), img_info.get('width')
 
-        # Check for valid segmentation (polygon list or RLE dict)
+        # Check field validity using dedicated validators
         seg = ann.get('segmentation')
-        has_valid_seg = seg is not None and seg != [] and isinstance(seg, (list, dict))
+        bbox = ann.get('bbox')
 
-        # STEP 1: Normalize segmentation to compressed RLE FIRST
-        # This avoids duplicate normalization in bbox/area computation
-        if has_valid_seg:
-            # Check if already compressed RLE (bytes counts)
-            if isinstance(seg, dict) and isinstance(seg.get('counts'), bytes):
-                pass
-            else:
-                seg = _normalize_to_rle(seg, height, width)
-                ann['segmentation'] = seg
-                seg_normalized += 1
-                logger.debug("Normalized segmentation for annotation %s", ann['id'])
-
-        # STEP 2: Generate bbox from normalized segmentation (no duplicate normalization)
-        has_valid_bbox = has_valid_list_field(ann, 'bbox')
-        if has_valid_seg and not has_valid_bbox:
-            bbox = compute_bbox_from_mask(seg, height, width)
-            ann['bbox'] = bbox
-            bbox_generated += 1
-            logger.debug("Generated bbox for annotation %s", ann['id'])
-
-        # STEP 3: Generate area from normalized segmentation
+        has_valid_seg = _is_valid_segmentation(seg, ann_id)
+        has_valid_bbox = _is_valid_bbox(bbox, ann, ann_id)
         has_valid_area = has_valid_numeric_field(ann, 'area', 0)
-        if has_valid_seg and not has_valid_area:
-            area = compute_area_from_mask(seg, height, width)
-            ann['area'] = area
-            area_generated += 1
-            logger.debug("Generated area for annotation %s", ann['id'])
 
-        # Compute area from bbox if still missing or invalid
-        elif has_valid_bbox and not has_valid_area:
-            bbox = ann['bbox']
-            ann['area'] = bbox[2] * bbox[3]  # width * height
-            area_generated += 1
+        # STEP 1: Normalize segmentation to compressed RLE
+        if has_valid_seg:
+            seg = _normalize_segmentation_if_needed(ann, seg, height, width, stats)
 
-    if bbox_generated > 0:
-        logger.info("  Auto-generated %d bounding boxes from masks", bbox_generated)
-    if area_generated > 0:
-        logger.info("  Auto-computed %d areas", area_generated)
-    if seg_normalized > 0:
-        logger.info("  Normalized %d segmentations to compressed RLE", seg_normalized)
+        # STEP 2: Generate bbox from segmentation if missing
+        if has_valid_seg and not has_valid_bbox:
+            ann['bbox'] = compute_bbox_from_mask(seg, height, width)
+            has_valid_bbox = True
+            stats['bbox_generated'] += 1
+            logger.debug("Generated bbox for annotation %s", ann_id)
+
+        # STEP 3: Generate area (prefer segmentation, fallback to bbox)
+        if not has_valid_area:
+            if has_valid_seg:
+                ann['area'] = compute_area_from_mask(seg, height, width)
+                stats['area_generated'] += 1
+                logger.debug("Generated area from segmentation for annotation %s", ann_id)
+            elif has_valid_bbox:
+                ann['area'] = ann['bbox'][2] * ann['bbox'][3]
+                stats['area_generated'] += 1
+                logger.debug("Generated area from bbox for annotation %s", ann_id)
+
+    # Log summary
+    if stats['seg_normalized'] > 0:
+        logger.info("  Normalized %d segmentations to compressed RLE", stats['seg_normalized'])
+    if stats['bbox_generated'] > 0:
+        logger.info("  Auto-generated %d bounding boxes from masks", stats['bbox_generated'])
+    if stats['area_generated'] > 0:
+        logger.info("  Auto-computed %d areas", stats['area_generated'])
+
     return coco_data
+
+
+def _is_valid_segmentation(seg: Any, ann_id: int) -> bool:
+    """Check if segmentation is present AND valid."""
+    if seg is None or seg == []:
+        return False
+    return len(_validate_segmentation(seg, ann_id)) == 0
+
+
+def _is_valid_bbox(bbox: Any, ann: Dict, ann_id: int) -> bool:
+    """Check if bbox is present AND valid."""
+    if bbox is None or bbox == []:
+        return False
+    return len(_validate_bbox(bbox, ann, ann_id)) == 0
+
+
+def _normalize_segmentation_if_needed(
+    ann: Dict, seg: Any, height: int, width: int, stats: Dict
+) -> Any:
+    """Normalize segmentation to compressed RLE if not already."""
+    # Already compressed RLE - no action needed
+    if isinstance(seg, dict) and isinstance(seg.get('counts'), bytes):
+        return seg
+
+    # Convert to compressed RLE
+    seg = _normalize_to_rle(seg, height, width)
+    ann['segmentation'] = seg
+    stats['seg_normalized'] += 1
+    logger.debug("Normalized segmentation for annotation %s", ann['id'])
+    return seg
 
 def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -691,35 +717,36 @@ def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Analyze annotations for quality issues
     for ann in coco_data['annotations']:
+        ann_id = ann['id']
+
         # Class distribution
         cat_id = ann['category_id']
         results['class_distribution'][cat_id] = results['class_distribution'].get(cat_id, 0) + 1
 
-        # Check for small/large objects (quality concern, not validity issue)
-        if has_valid_list_field(ann, 'bbox'):
-            bbox = ann['bbox']
-            bbox_area = bbox[2] * bbox[3]  # width * height
+        # Use proper validators for consistency
+        has_valid_bbox = _is_valid_bbox(ann.get('bbox'), ann, ann_id)
+        has_valid_seg = _is_valid_segmentation(ann.get('segmentation'), ann_id)
 
-            # Get image dimensions
+        # Check for small/large objects (quality concern, not validity issue)
+        if has_valid_bbox:
+            bbox = ann['bbox']
+            bbox_area = bbox[2] * bbox[3]
+
             img_info = image_lookup.get(ann['image_id'])
             img_area = img_info['width'] * img_info['height']
 
-            # Small objects (< 1% of image) might be hard to detect
             if bbox_area < img_area * 0.01:
                 results['small_objects'] += 1
 
-            # Very large objects (> 80% of image) might indicate annotation errors
             if bbox_area > img_area * 0.8:
                 results['large_objects'] += 1
 
         # Check for suspicious bboxes (bbox area >> actual mask area)
         # This likely means multiple disconnected objects in one annotation
-        if has_valid_list_field(ann, 'bbox') and has_valid_list_field(ann, 'segmentation'):
-
+        if has_valid_bbox and has_valid_seg:
             bbox = ann['bbox']
-            bbox_area = bbox[2] * bbox[3]  # width * height
+            bbox_area = bbox[2] * bbox[3]
 
-            # Only check if bbox is non-degenerate
             if bbox_area > 0:
                 img_info = image_lookup.get(ann['image_id'])
                 try:
@@ -731,7 +758,6 @@ def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
                     if mask_area > 0 and bbox_area > mask_area * 2.5:
                         results['suspicious_bboxes'] += 1
                 except Exception:
-                    # If mask area computation fails, skip this check
                     pass
 
     # Generate warnings
@@ -851,6 +877,8 @@ def _validate_split_ratios(splits: Dict[str, float]) -> None:
     total_ratio = sum(splits.values())
     if not np.isclose(total_ratio, 1.0):
         raise ValueError(f"Split ratios must sum to 1.0, got {total_ratio}")
+    if any(ratio <= 0 for ratio in splits.values()):
+        raise ValueError("Split ratios must be greater than 0")
 
 
 def _build_image_to_annotations_mapping(annotations: List[Dict]) -> Dict[int, List[Dict]]:
