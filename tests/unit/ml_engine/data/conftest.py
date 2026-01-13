@@ -301,10 +301,17 @@ def polygon_segmentation() -> List[List[float]]:
 
 @pytest.fixture
 def multi_polygon_segmentation() -> List[List[float]]:
-    """Multiple polygons (for object with disconnected parts)."""
+    """
+    Multiple polygons representing ONE object with disconnected visual parts.
+    
+    In COCO format, multiple polygons in a single annotation = one object instance.
+    Examples: person with spread arms, partially occluded object, ring shape.
+    
+    This should produce ONE bbox encompassing all parts, not multiple bboxes.
+    """
     return [
-        [100, 100, 120, 100, 120, 120, 100, 120],  # First part
-        [150, 150, 170, 150, 170, 170, 150, 170],  # Second part
+        [100, 100, 120, 100, 120, 120, 100, 120],  # Part 1 of object
+        [150, 150, 170, 150, 170, 170, 150, 170],  # Part 2 of same object
     ]
 
 
@@ -312,7 +319,7 @@ def multi_polygon_segmentation() -> List[List[float]]:
 def complex_polygon_segmentation() -> List[List[float]]:
     """Complex polygon with many points (like a star or irregular shape)."""
     # 8-point polygon
-    return [[100, 100, 150, 80, 200, 100, 220, 150, 
+    return [[100, 100, 150, 80, 200, 100, 220, 150,
              200, 200, 150, 220, 100, 200, 80, 150]]
 
 
@@ -793,7 +800,7 @@ def coco_data_with_quality_issues() -> Dict[str, Any]:
         'images': [
             {'id': 0, 'file_name': 'img_0.jpg', 'width': 1000, 'height': 1000},
             {'id': 1, 'file_name': 'img_1.jpg', 'width': 1000, 'height': 1000},
-            {'id': 2, 'file_name': 'no_annotations.jpg', 'width': 1000, 'height': 1000},  # No annotations
+            {'id': 2, 'file_name': 'no_annotations.jpg', 'width': 1000, 'height': 1000},
         ],
         'annotations': [
             # Very small object (< 1% of image area)
