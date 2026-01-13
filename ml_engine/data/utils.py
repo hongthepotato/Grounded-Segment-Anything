@@ -3,33 +3,6 @@ Utility functions for COCO data processing.
 """
 from typing import Dict, Any, List
 
-def has_valid_list_field(data: Dict[str, Any], field: str) -> bool:
-    r"""
-    Check if a field exists and has a valid list value.
-    Valid means: key exists, value is not None, and value is not empty.
-
-    Args:
-        data: Dictionary containing the data to check.
-        field: Field name to validate
-
-    Returns:
-        True if field has valid list value, False otherwise.
-
-    Example:
-        >>> ann = {'bbox': [10, 10, 50, 50]}
-        >>> has_valid_list_field(ann, 'bbox') # True
-        >>>
-        >>> ann = {'bbox': None}
-        >>> has_valid_list_field(ann, 'bbox') # False
-        >>>
-        >>> ann = {'bbox': []}
-        >>> has_valid_list_field(ann, 'bbox') # False
-        >>>
-    """
-    return (field in data and
-            data[field] is not None and
-            data[field] != [])
-
 def has_valid_numeric_field(data: Dict, field: str, min_value: float = 0) -> bool:
     """
     Check if a field exists and has a valid numeric value.
