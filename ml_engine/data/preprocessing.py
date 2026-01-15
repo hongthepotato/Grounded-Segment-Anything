@@ -103,7 +103,8 @@ class BaseModelPreprocessor(ABC):
 
 class SAMPreprocessor(BaseModelPreprocessor):
     """
-    Preprocessor for SAM (Segment Anything Model).
+    Preprocessor for SAM (Segment Anything Model). This class only take
+    model specific configuration as input.
     """
 
     def __init__(self, model_name: str, config: Dict[str, Any]):
@@ -134,8 +135,8 @@ class SAMPreprocessor(BaseModelPreprocessor):
         image_np = np.array(image)
         resized_np = self.sam_transformer.apply_image(image_np)
 
-        # Convert to tensor and normalize
-        image_tensor = torch.from_numpy(resized_np).permute(2, 0, 1).float() / 255.0
+        # Convert to tensor (H,W,C) → (C,H,W) and normalize
+        image_tensor = torch.from_numpy(resized_np).permute(2, 0, 1).float()
         image_tensor = (image_tensor - self.mean) / (self.std + 1e-8)
 
         # Pad to square (SAM expects square input)
@@ -215,23 +216,31 @@ class SAMPreprocessor(BaseModelPreprocessor):
         save memory during training. SAM's decoder natively outputs 256x256.
         """
         import cv2
-
+        from segment_anything.utils.transforms import ResizeLongestSide
         # Use mask_output_size for training efficiency (256x256 instead of 1024x1024)
         target_size = self.mask_output_size
 
         if len(masks) == 0:
             return np.zeros((0, target_size, target_size), dtype=np.uint8)
 
-        # Transform each mask directly to target size
+        orig_h, orig_w = metadata['original_size']
+
+        new_h, new_w = ResizeLongestSide.get_preprocess_shape(
+            orig_h, orig_w, target_size
+        )
+
         transformed_masks = []
         for mask in masks:
-            # Resize mask directly to target output size
             resized = cv2.resize(
                 mask.astype(np.uint8),
-                (target_size, target_size),
+                (new_w, new_h),
                 interpolation=cv2.INTER_NEAREST
             )
-            transformed_masks.append(resized)
+
+            padded = np.zeros((target_size, target_size), dtype=np.uint8)
+            padded[:new_h, :new_w] = resized
+
+            transformed_masks.append(padded)
 
         return np.stack(transformed_masks, axis=0)
 
