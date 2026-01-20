@@ -13,7 +13,7 @@ preprocessing:
       pixel_range: [0, 1]   # Normalize to [0,1] first, then standardize
     resize_mode: "keep_aspect_ratio"  # Maintain aspect ratio, pad to max_size
     padding_value: 0        # Zero padding
-    pixel_format: "RGB"     # NOT BGR!
+    # pixel_format: "RGB"     # NOT BGR!
   
   # SAM preprocessing (ViT backbone)
   # CRITICAL: SAM uses DIFFERENT normalization than ImageNet!
@@ -28,7 +28,7 @@ preprocessing:
       pixel_range: [0, 255]  # SAM expects [0,255] range, NOT [0,1]
     resize_mode: "resize_longest_side"   # SAM-specific: resize longest to 1024, pad rest
     padding_value: 0
-    pixel_format: "RGB"
+    # pixel_format: "RGB"
   
   # YOLOv8 student preprocessing
   yolov8:
