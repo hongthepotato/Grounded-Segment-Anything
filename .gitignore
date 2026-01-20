@@ -40,11 +40,14 @@ env/
 *.ipynb_checkpoints/
 
 # Data and Models
-data/raw/
-data/processed/
+data/cats/
+data/coco/
 data/models/pretrained/
 experiments/*/
 !experiments/.gitkeep
+output/
+output/*/
+!output/.gitkeep
 
 # Auto-generated configs (experiments)
 configs/experiments/*/
