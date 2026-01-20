@@ -5,7 +5,7 @@ This module provides PyTorch Dataset classes for loading COCO format
 datasets with support for multiple model types (Grounding DINO, SAM, YOLO).
 """
 
-from typing import Dict, List, Any, Callable
+from typing import Dict, List, Any, Callable, Optional
 from pathlib import Path
 import random
 import torch
@@ -13,9 +13,10 @@ from torch.utils.data import Dataset
 from PIL import Image
 import numpy as np
 from pycocotools import mask as mask_utils
+from groundingdino.util.misc import nested_tensor_from_tensor_list
+
 from augmentation import ConfigurableAugmentationPipeline
 from ml_engine.data.preprocessing import MultiModelPreprocessor
-from groundingdino.util.misc import NestedTensor
 
 
 class COCODataset(Dataset):
@@ -51,8 +52,8 @@ class COCODataset(Dataset):
         self,
         coco_data: Dict,
         image_path_resolver: Callable[[str], str],
-        return_boxes: bool = True,
-        return_masks: bool = True,
+        return_boxes: Optional[bool] = True,
+        return_masks: Optional[bool] = True,
     ):
         self.coco_data = coco_data
         self.image_path_resolver = image_path_resolver
@@ -71,7 +72,7 @@ class COCODataset(Dataset):
         # Example: ['ear', 'defect', 'label'] at indices [0, 1, 2]
 
     def _create_lookup_tables(self):
-        """Create efficient lookup tables for images and annotations."""
+        """Create lookup tables for images and annotations."""
         # Image ID to image metadata
         self.image_id_to_info = {img['id']: img for img in self.images}
 
@@ -277,52 +278,50 @@ class TeacherDataset(COCODataset):
         boxes_np = np.array(sample_boxes, dtype=np.float32) if sample_boxes else None
         masks_np = np.stack(sample_masks, axis=0) if sample_masks else None
 
-        # Apply model-specific preprocessing using OFFICIAL implementations
+        # Preprocess image + boxes + masks for all models in one step
         preprocessed_dict = self.preprocessor.preprocess_batch(
             sample['image'],
             boxes=boxes_np,
             masks=masks_np
         )
 
-        # Transform annotations for each model using official methods
+        # Build output - just pick/slice from already-processed data
         preprocessed_data = {}
-        for model_name, (image_tensor, metadata) in preprocessed_dict.items():
-            model_preprocessor = self.preprocessor.get_preprocessor(model_name)
+        for model_name, data in preprocessed_dict.items():
+            image_tensor = data['image']
+            metadata = data['metadata']
+            all_boxes = data['boxes']
+            all_masks = data['masks']
 
             # Determine which annotations to use for this model
             if model_name == 'sam' and self.sam_single_object_sampling:
-                # SAM single object sampling: pick 1 random object
-                # This follows original SAM-HQ training strategy for memory efficiency
-                if masks_np is not None and len(masks_np) > 0:
-                    idx = random.randint(0, len(masks_np) - 1)
-                    use_boxes = boxes_np[idx:idx+1] if boxes_np is not None else None
-                    use_masks = masks_np[idx:idx+1]
+                # SAM single object sampling: pick 1 random object from pre-transformed data
+                if all_masks is not None and len(all_masks) > 0:
+                    idx = random.randint(0, len(all_masks) - 1)
+                    model_boxes = all_boxes[idx:idx+1] if all_boxes is not None else None
+                    model_masks = all_masks[idx:idx+1]
                     use_labels = [sample_labels[idx]] if sample_labels else []
                 else:
-                    use_boxes, use_masks, use_labels = None, None, []
+                    model_boxes, model_masks, use_labels = None, None, []
             else:
-                # Default: use all objects (DINO and SAM without sampling)
-                use_boxes = boxes_np
-                use_masks = masks_np
+                # Default: use all objects
+                model_boxes = all_boxes
+                model_masks = all_masks
                 use_labels = sample_labels
 
-            if self.return_boxes and use_boxes is not None and len(use_boxes) > 0:
-                model_boxes = model_preprocessor.transform_boxes(use_boxes, metadata)
-            else:
+            # Handle empty/None cases
+            if not self.return_boxes or model_boxes is None:
                 model_boxes = np.zeros((0, 4), dtype=np.float32)
 
-            if self.return_masks and use_masks is not None and len(use_masks) > 0:
-                model_masks = model_preprocessor.transform_masks(use_masks, metadata)
-            else:
+            if not self.return_masks or model_masks is None:
                 h, w = metadata['final_size']
                 model_masks = np.zeros((0, h, w), dtype=np.float32)
 
-            # Store per-model preprocessed data
             preprocessed_data[model_name] = {
                 'image': image_tensor,
                 'boxes': model_boxes,
                 'masks': model_masks,
-                'labels': np.array(use_labels, dtype=np.int64),
+                'labels': np.array(use_labels if use_labels else [], dtype=np.int64),
                 'metadata': metadata
             }
 
@@ -382,72 +381,54 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         padded_masks = []
         padded_labels = []
 
+        # Determine mask size from first non-empty mask, or use default 256x256
+        mask_h, mask_w = 256, 256
+        for d in model_data:
+            if d['masks'] is not None and len(d['masks']) > 0:
+                mask_h, mask_w = d['masks'].shape[-2:]
+                break
+
         for i, data in enumerate(model_data):
             boxes = data['boxes']
             masks = data['masks']
             labels = data['labels']
 
-            # Data consistency validation
-            num_boxes = len(boxes)
-            num_labels = len(labels)
-            num_masks = len(masks) if len(masks) > 0 else 0
+            num_objs = len(boxes)
+            num_masks = len(masks) if masks is not None and len(masks) > 0 else 0
 
-            assert num_boxes == num_labels, (
+            assert num_objs == len(labels), (
                 f"Data inconsistency in {file_names[i]} ({model_name}): "
-                f"{num_boxes} boxes but {num_labels} labels"
+                f"{num_objs} boxes but {len(labels)} labels"
             )
-
             if num_masks > 0:
-                assert num_boxes == num_masks, (
+                assert num_objs == num_masks, (
                     f"Data inconsistency in {file_names[i]} ({model_name}): "
-                    f"{num_boxes} boxes but {num_masks} masks"
+                    f"{num_objs} boxes but {num_masks} masks"
                 )
 
-            num_objs = num_boxes
-
-            # Pad boxes [N, 4] → [max_objs, 4]
+            # Pad boxes [N, 4] → [max_objs, 4] with zeros
+            boxes_tensor = torch.zeros((max_objs, 4), dtype=torch.float32)
             if num_objs > 0:
-                boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
-                if num_objs < max_objs:
-                    padding = torch.zeros((max_objs - num_objs, 4), dtype=torch.float32)
-                    boxes_tensor = torch.cat([boxes_tensor, padding], dim=0)
-            else:
-                boxes_tensor = torch.zeros((max_objs, 4), dtype=torch.float32)
+                boxes_tensor[:num_objs] = torch.tensor(boxes, dtype=torch.float32)
             padded_boxes.append(boxes_tensor)
 
-            # Pad masks [N, H, W] → [max_objs, H, W]
+            # Pad masks [N, H, W] → [max_objs, H, W] with zeros
+            masks_tensor = torch.zeros((max_objs, mask_h, mask_w), dtype=torch.float32)
             if num_objs > 0 and num_masks > 0:
-                masks_tensor = torch.tensor(masks, dtype=torch.float32)
-                if num_objs < max_objs:
-                    mask_h, mask_w = masks_tensor.shape[-2:]
-                    padding = torch.zeros((max_objs - num_objs, mask_h, mask_w), dtype=torch.float32)
-                    masks_tensor = torch.cat([masks_tensor, padding], dim=0)
-            else:
-                # Default size based on model
-                # SAM uses 256x256 (native decoder output resolution for training)
-                if model_name == 'sam':
-                    masks_tensor = torch.zeros((max_objs, 256, 256), dtype=torch.float32)
-                else:
-                    # For DINO or others, use a reasonable default
-                    masks_tensor = torch.zeros((max_objs, 256, 256), dtype=torch.float32)
+                masks_tensor[:num_objs] = torch.tensor(masks, dtype=torch.float32)
             padded_masks.append(masks_tensor)
 
             # Pad labels [N] → [max_objs] with -1 (ignore_index)
+            labels_tensor = torch.full((max_objs,), -1, dtype=torch.long)
             if num_objs > 0:
-                labels_tensor = torch.tensor(labels, dtype=torch.long)
-                if num_objs < max_objs:
-                    padding = torch.full((max_objs - num_objs,), -1, dtype=torch.long)
-                    labels_tensor = torch.cat([labels_tensor, padding], dim=0)
-            else:
-                labels_tensor = torch.full((max_objs,), -1, dtype=torch.long)
+                labels_tensor[:num_objs] = torch.tensor(labels, dtype=torch.long)
             padded_labels.append(labels_tensor)
 
         # Handle images: create NestedTensor for DINO, stack SAM
         if model_name == 'grounding_dino':
-            # DINO: Variable-sized images - create NestedTensor with padding masks
+            # DINO: Variable-sized images
             images = [d['image'] for d in model_data]
-            metadata = [d['metadata'] for d in model_data]
-            batched_images = _create_dino_nested_tensor(images, metadata)
+            batched_images = nested_tensor_from_tensor_list(images)
         elif model_name == 'sam':
             # SAM: Fixed 1024×1024 - just stack
             images = [d['image'] for d in model_data]
@@ -473,67 +454,6 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         'image_sizes': image_sizes,
         'preprocessed': preprocessed_batch
     }
-
-
-def _create_dino_nested_tensor(images: List[torch.Tensor], metadata_list: List[Dict]) -> 'NestedTensor':
-    """
-    Create NestedTensor for Grounding DINO with accurate padding masks.
-    
-    NestedTensor consists of:
-    - tensor: batched images [B, 3, H, W] padded to max size
-    - mask: binary mask [B, H, W] where True/1 = padded pixels, False/0 = valid pixels
-    
-    The mask tells the model's attention mechanism which pixels to ignore.
-    
-    Args:
-        images: List of [C, H, W] tensors (already normalized, variable H/W)
-        metadata_list: List of metadata dicts, each containing 'final_size' (h, w)
-    
-    Returns:
-        NestedTensor with padded images and corresponding masks
-    """
-    # Find max dimensions
-    max_h = max(img.shape[-2] for img in images)
-    max_w = max(img.shape[-1] for img in images)
-
-    # Per-channel padding values (normalized black)
-    mean = torch.tensor([0.485, 0.456, 0.406])
-    std = torch.tensor([0.229, 0.224, 0.225])
-    pad_values = (0 - mean) / std
-
-    padded_images = []
-    padding_masks = []
-
-    for img, metadata in zip(images, metadata_list):
-        c, h, w = img.shape
-
-        # Get actual valid size from metadata (should match h, w)
-        final_h, final_w = metadata['final_size']
-        assert h == final_h and w == final_w, f"Size mismatch: image {h}x{w} vs metadata {final_h}x{final_w}"
-
-        # Pad image if needed
-        if h < max_h or w < max_w:
-            # Create padded image
-            padded_img = torch.zeros((c, max_h, max_w), dtype=img.dtype, device=img.device)
-            for ch in range(c):
-                padded_img[ch, :, :] = pad_values[ch]
-            padded_img[:, :h, :w] = img
-            # Create padding mask: False for valid pixels, True for padded pixels
-            mask = torch.ones((max_h, max_w), dtype=torch.bool, device=img.device)
-            mask[:h, :w] = False  # Valid region
-        else:
-            padded_img = img
-            # No padding needed, all pixels are valid
-            mask = torch.zeros((max_h, max_w), dtype=torch.bool, device=img.device)
-
-        padded_images.append(padded_img)
-        padding_masks.append(mask)
-
-    # Stack into batch tensors
-    batched_images = torch.stack(padded_images)  # [B, C, H, W]
-    batched_masks = torch.stack(padding_masks)    # [B, H, W]
-
-    return NestedTensor(batched_images, batched_masks)
 
 
 def create_dataloader(
