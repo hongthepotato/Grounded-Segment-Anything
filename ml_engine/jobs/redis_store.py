@@ -263,8 +263,9 @@ class RedisJobStore:
         status: Optional[JobStatus] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-        offset: int = 0
-    ) -> List[Job]:
+        offset: int = 0,
+        return_total: bool = False
+    ) -> "List[Job] | tuple[List[Job], int]":
         """
         List jobs with optional filtering.
         
@@ -273,9 +274,10 @@ class RedisJobStore:
             job_type: Filter by job type
             limit: Maximum jobs to return
             offset: Pagination offset
+            return_total: If True, return (jobs, total_count) tuple
             
         Returns:
-            List of Job objects
+            List of Job objects, or (jobs, total_count) if return_total=True
         """
         try:
             # Get all job keys
@@ -292,10 +294,20 @@ class RedisJobStore:
                 if cursor == 0:
                     break
 
-            # Fetch and filter jobs
-            jobs = []
+            if not job_keys:
+                if return_total:
+                    return [], 0
+                return []
+
+            # Batch fetch all job data using pipeline (much faster than individual calls)
+            pipe = self.redis.pipeline()
             for key in job_keys:
-                data = self.redis.hgetall(key)
+                pipe.hgetall(key)
+            all_data = pipe.execute()
+
+            # Filter jobs
+            jobs = []
+            for data in all_data:
                 if not data:
                     continue
 
@@ -312,11 +324,19 @@ class RedisJobStore:
             # Sort by created_at (newest first)
             jobs.sort(key=lambda j: j.created_at or datetime.min, reverse=True)
 
+            total = len(jobs)
+
             # Apply pagination
-            return jobs[offset:offset + limit]
+            paginated = jobs[offset:offset + limit]
+            
+            if return_total:
+                return paginated, total
+            return paginated
 
         except RedisError as e:
             logger.error("Failed to list jobs: %s", e)
+            if return_total:
+                return [], 0
             return []
 
     def delete_job(self, job_id: str) -> bool:
