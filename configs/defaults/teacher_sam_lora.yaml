@@ -11,8 +11,8 @@ training:
 # Model configuration
 model:
   name: "sam"
-  base_checkpoint: "data/models/pretrained/sam_hq_vit_h.pth"
-  model_type: "vit_h"     # Options: vit_h, vit_l, vit_b
+  base_checkpoint: "data/models/pretrained/sam_hq_vit_b.pth"
+  model_type: "vit_b"     # Options: vit_h, vit_l, vit_b
 
 # CRITICAL: SAM architecture has different attention layer names:
 #   - image_encoder uses: attn.qkv (combined), attn.proj
