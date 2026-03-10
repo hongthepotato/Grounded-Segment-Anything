@@ -65,20 +65,12 @@ def get_extensions():
 
     sources = [main_source] + sources
 
-    # We need these variables to build with CUDA when we create the Docker image
-    # It solves https://github.com/IDEA-Research/Grounded-Segment-Anything/issues/53
-    # and https://github.com/IDEA-Research/Grounded-Segment-Anything/issues/84 when running
-    # inside a Docker container.
-    am_i_docker = os.environ.get('AM_I_DOCKER', '').casefold() in ['true', '1', 't']
-    use_cuda = os.environ.get('BUILD_WITH_CUDA', '').casefold() in ['true', '1', 't']
-
     extension = CppExtension
 
     extra_compile_args = {"cxx": []}
     define_macros = []
 
-    if (torch.cuda.is_available() and CUDA_HOME is not None) or \
-            (am_i_docker and use_cuda):
+    if CUDA_HOME is not None:
         print("Compiling with CUDA")
         extension = CUDAExtension
         sources += source_cuda
@@ -97,6 +89,7 @@ def get_extensions():
 
     sources = [os.path.join(extensions_dir, s) for s in sources]
     include_dirs = [extensions_dir]
+    torch_lib_dir = os.path.join(os.path.dirname(torch.__file__), "lib")
 
     ext_modules = [
         extension(
@@ -105,6 +98,7 @@ def get_extensions():
             include_dirs=include_dirs,
             define_macros=define_macros,
             extra_compile_args=extra_compile_args,
+            runtime_library_dirs=[torch_lib_dir],
         )
     ]
 
@@ -189,28 +183,20 @@ def parse_requirements(fname="requirements.txt", with_version=True):
     return packages
 
 
-if __name__ == "__main__":
-    print(f"Building wheel {package_name}-{version}")
+write_version_file()
 
-    with open("LICENSE", "r", encoding="utf-8") as f:
-        license = f.read()
-
-    write_version_file()
-
-    setup(
-        name="groundingdino",
-        version="0.1.0",
-        author="International Digital Economy Academy, Shilong Liu",
-        url="https://github.com/IDEA-Research/GroundingDINO",
-        description="open-set object detector",
-        license=license,
-        install_requires=parse_requirements("requirements.txt"),
-        packages=find_packages(
-            exclude=(
-                "configs",
-                "tests",
-            )
-        ),
-        ext_modules=get_extensions(),
-        cmdclass={"build_ext": torch.utils.cpp_extension.BuildExtension},
-    )
+setup(
+    name="groundingdino",
+    version="0.1.0",
+    author="International Digital Economy Academy, Shilong Liu",
+    url="https://github.com/IDEA-Research/GroundingDINO",
+    description="open-set object detector",
+    packages=find_packages(
+        exclude=(
+            "configs",
+            "tests",
+        )
+    ),
+    ext_modules=get_extensions(),
+    cmdclass={"build_ext": torch.utils.cpp_extension.BuildExtension},
+)
