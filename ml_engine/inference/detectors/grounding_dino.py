@@ -7,18 +7,11 @@ with variable-sized images.
 """
 
 import logging
-import sys
-from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
 import torch
 import torchvision.ops
-
-# Add project paths for imports
-project_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(project_root))
-sys.path.insert(0, str(project_root / "GroundingDINO"))
 
 from groundingdino.util.inference import Model as GroundingDINOModel
 

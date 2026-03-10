@@ -8,15 +8,11 @@ This module provides:
 """
 
 import logging
-import sys
-from pathlib import Path
 from typing import Dict, List, Any, Tuple
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# Add GroundingDINO to path for utilities
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "GroundingDINO"))
 from groundingdino.util.box_ops import box_iou, box_cxcywh_to_xyxy
 
 from ml_engine.evaluation.metrics import (
