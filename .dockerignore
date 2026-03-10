@@ -1,0 +1,14 @@
+data/cats/
+data/coco/
+data/models/
+logs/
+.git/
+.venv/
+__pycache__/
+*.pyc
+notebooks/
+VISAM/
+grounded-sam-osx/
+voxelnext_3d_box/
+grounding-dino-tiny-ONNX/
+.cursor/
