@@ -1,0 +1,12 @@
+services:
+  app:
+    # Keep /srv/shared inside container for backend compatibility,
+    # but map it to a Windows host path.
+    volumes:
+      # - D:/gsa/data/models/pretrained:/app/data/models/pretrained
+      # - D:/gsa/configs:/app/configs
+      # - D:/gsa/logs:/app/logs
+      - D:/gsa/datasets:/srv/shared
+
+    # Uncomment if Windows GPU runtime is fully working.
+    # gpus: all
