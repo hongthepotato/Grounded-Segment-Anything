@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from ml_engine.artifacts import AdapterManifest, validate_bundle, validate_adapter, BUNDLE_MANIFEST_FILE
+from .schemas import AdapterManifest
+from .validator import validate_bundle, validate_adapter, BUNDLE_MANIFEST_FILE
 
 logger = logging.getLogger(__name__)
 

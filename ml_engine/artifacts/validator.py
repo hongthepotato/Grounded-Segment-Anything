@@ -10,8 +10,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from ml_engine.artifacts.errors import ArtifactNotFoundError, ArtifactCorruptedError, BaseAdapterMismatch
-from ml_engine.artifacts.schemas import AdapterManifest, BundleManifest, BaseModelRef
+from .errors import ArtifactNotFoundError, ArtifactCorruptedError, BaseAdapterMismatch
+from .schemas import AdapterManifest, BundleManifest, BaseModelRef
 
 logger = logging.getLogger(__name__)
 
