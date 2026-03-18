@@ -76,7 +76,7 @@ class Trainer:
         >>> )
         >>> trainer.train()
     """
-    
+
     def __init__(
         self,
         data_manager: DataManager,
@@ -183,24 +183,24 @@ class Trainer:
     def _init_trainers(self) -> None:
         """Create model trainers based on required models."""
         self.trainers: Dict[str, BaseModelTrainer] = {}
-        
+
         for model_name in self.required_models:
             if model_name not in TRAINER_REGISTRY:
                 raise ValueError(f"Unknown model: {model_name}. Available: {list(TRAINER_REGISTRY.keys())}")
-            
+
             trainer_cls = TRAINER_REGISTRY[model_name]
             model_config = self.config['models'][model_name]
-            
+
             # Add shared config values
             model_config = {**model_config, 'epochs': self.config.get('epochs', 50)}
-            
+
             self.trainers[model_name] = trainer_cls(
                 config=model_config,
                 device=self.device,
                 output_dir=self.output_dir,
                 dataset_info=self.dataset_info
             )
-        
+
         logger.info("✓ Created %d model trainers", len(self.trainers))
     
     def _init_visualizer(self) -> None:
@@ -354,8 +354,21 @@ class Trainer:
     
     def _save_adapters(self) -> None:
         """Save LoRA adapters for all models."""
-        for trainer in self.trainers.values():
-            trainer.save_adapters()
+        artifacts = {}
+        for model_name, trainer in self.trainers.items():
+            manifest_path = trainer.save_adapters()
+            if manifest_path:
+                rel_path = manifest_path.relative_to(self.output_dir)
+                artifacts[model_name] = str(rel_path)
+
+        from ml_engine.artifacts import BundleManifest
+        bundle_manifest = BundleManifest(
+            bundle_type="teacher_training_output",
+            artifacts=artifacts,
+            lineage={"job_id": None,},
+            merged_checkpoints=None
+        )
+        bundle_manifest.save(self.output_dir / "bundle.manifest.json")
     
     def _evaluate_on_test_set(self) -> None:
         """Evaluate on held-out test set."""
@@ -455,9 +468,6 @@ class Trainer:
         class_names = list(self.dataset_info['class_mapping'].values())
         
         for name, trainer in self.trainers.items():
-            if name != GROUNDING_DINO:
-                continue
-            
             try:
                 model_config = self.config['models'][name]
                 training_info = {
@@ -465,15 +475,16 @@ class Trainer:
                     'batch_size': self.config.get('batch_size'),
                     'learning_rate': model_config.get('learning_rate')
                 }
-                
-                # Try to get mAP from evaluation
+
                 report_path = self.output_dir / 'evaluation' / f'{name}_report.json'
                 if report_path.exists():
                     import json
                     with open(report_path) as f:
                         report = json.load(f)
-                        training_info['mAP50'] = report.get('technical_metrics', {}).get('mAP50', 0)
-                
+                        metrics = report.get('technical_metrics', {})
+                        training_info['mAP50'] = metrics.get('mAP50', 0)
+                        training_info['mIoU'] = metrics.get('mIoU', 0)
+
                 zip_path = create_export_package(
                     model=trainer.get_model(),
                     output_dir=self.output_dir,
@@ -482,7 +493,7 @@ class Trainer:
                     training_info=training_info
                 )
                 logger.info("✓ Export package: %s", zip_path)
-            
+
             except Exception as e:
                 logger.error("Failed to create export for %s: %s", name, e)
     
