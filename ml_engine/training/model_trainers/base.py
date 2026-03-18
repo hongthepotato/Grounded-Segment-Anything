@@ -11,12 +11,13 @@ It handles common functionality:
 """
 
 import logging
+from datetime import datetime
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
 from ml_engine.training.training_manager import TrainingManager
@@ -130,15 +131,15 @@ class BaseModelTrainer(ABC):
             Dict with 'loss' key and any additional metrics
         """
         raise NotImplementedError
-    
+
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """Create optimizer for trainable parameters."""
         lr = self.config.get('learning_rate', 1e-4)
         weight_decay = self.config.get('weight_decay', 1e-4)
         optimizer_type = self.config.get('optimizer', 'AdamW')
-        
+
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
-        
+
         if optimizer_type == 'AdamW':
             optimizer = torch.optim.AdamW(
                 trainable_params,
@@ -155,22 +156,22 @@ class BaseModelTrainer(ABC):
             )
         else:
             raise ValueError(f"Unknown optimizer: {optimizer_type}")
-        
-        logger.info(f"  Optimizer: {optimizer_type} (lr={lr:.2e})")
+
+        logger.info("  Optimizer: %s (lr=%s)", optimizer_type, lr)
         return optimizer
-    
+
     def _create_scheduler(self) -> Optional[torch.optim.lr_scheduler._LRScheduler]:
         """Create learning rate scheduler."""
         total_epochs = self.config.get('epochs', 50)
         warmup_epochs = self.config.get('warmup_epochs', 3)
-        
+
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
             T_0=max(1, total_epochs - warmup_epochs),
             T_mult=1
         )
         return scheduler
-    
+
     def train_batch(self, batch: Dict[str, Any]) -> Dict[str, float]:
         """
         Execute one training step.
@@ -182,12 +183,12 @@ class BaseModelTrainer(ABC):
             Dict of loss values (float)
         """
         self.model.train()
-        
+
         def _compute_loss(batch):
             return self.compute_loss(batch)
-        
+
         loss_dict = self.training_manager.training_step(batch, _compute_loss)
-        
+
         # Convert tensors to floats for logging
         result = {}
         for key, value in loss_dict.items():
@@ -195,9 +196,9 @@ class BaseModelTrainer(ABC):
                 result[key] = value.item()
             else:
                 result[key] = value
-        
+
         return result
-    
+
     @torch.no_grad()
     def validate_batch(self, batch: Dict[str, Any]) -> Dict[str, float]:
         """
@@ -210,9 +211,9 @@ class BaseModelTrainer(ABC):
             Dict of loss values (float)
         """
         self.model.eval()
-        
+
         loss_dict = self.compute_loss(batch)
-        
+
         # Convert tensors to floats
         result = {}
         for key, value in loss_dict.items():
@@ -220,9 +221,9 @@ class BaseModelTrainer(ABC):
                 result[key] = value.item()
             else:
                 result[key] = value
-        
+
         return result
-    
+
     def save_checkpoint(self, epoch: int, metrics: Dict[str, float]) -> bool:
         """
         Save checkpoint if improved.
@@ -243,9 +244,9 @@ class BaseModelTrainer(ABC):
             scaler=self.training_manager.scaler,
             extra_info={'config': self.config}
         )
-        
+
         return self.checkpoint_manager.best_epoch == epoch
-    
+
     def load_checkpoint(self, path: str) -> int:
         """
         Load checkpoint and return the epoch number.
@@ -264,7 +265,7 @@ class BaseModelTrainer(ABC):
             scaler=self.training_manager.scaler
         )
         return checkpoint.get('epoch', 0)
-    
+
     def log_metrics(self, metrics: Dict[str, float], step: int, prefix: str = '') -> None:
         """
         Log metrics to TensorBoard and logger.
@@ -276,43 +277,74 @@ class BaseModelTrainer(ABC):
         """
         # Filter metrics for this model
         model_metrics = {
-            k.replace(f'{self.model_name}_', ''): v 
-            for k, v in metrics.items() 
+            k.replace(f'{self.model_name}_', ''): v
+            for k, v in metrics.items()
             if self.model_name in k
         }
-        
+
         # Log to TensorBoard
         for key, value in model_metrics.items():
             tag = f'{prefix}/{key}' if prefix else key
             self.writer.add_scalar(tag, value, step)
-        
+
         # Log to console
         metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in model_metrics.items())
-        logger.info(f"  [{prefix}] {self.model_name}: {metrics_str}")
-    
-    def save_adapters(self) -> None:
+        logger.info("  [%s] %s: %s", prefix, self.model_name, metrics_str)
+
+    def save_adapters(self) -> Optional[Path]:
         """Save LoRA adapters for deployment."""
         if hasattr(self.model, 'save_lora_adapters'):
             adapter_dir = self.output_dir / 'lora_adapters'
-            self.model.save_lora_adapters(str(adapter_dir))
-            logger.info(f"✓ Saved LoRA adapters to: {adapter_dir}")
+            self.model.save_lora_adapters(
+                output_dir=str(adapter_dir),
+                safe_serialization=True
+                )
+            peft_files = {}
+            for f in adapter_dir.iterdir():
+                if f.name.startswith("adapter_config"):
+                    peft_files["config"] = f.name
+                elif f.name.startswith("adapter_model"):
+                    peft_files["weights"] = f.name
+
+
+            from ml_engine.artifacts import AdapterManifest, BaseModelRef, CreateByInfo
+            model_cfg = self.config.get("model", {})
+            base_model = BaseModelRef(
+                checkpoint_path=model_cfg.get("base_checkpoint", None),
+                model_type=model_cfg.get("model_type", None)
+            )
+            manifest = AdapterManifest(
+                model_family=self.model_name,
+                base_model = base_model,
+                peft_files=peft_files,
+                created_by=CreateByInfo(
+                    job_id=None,
+                    timestamp=datetime.now().isoformat()
+                ),
+                checksums=None
+            )
+            manifest_path = adapter_dir / "adapter.manifest.json"
+            manifest.save(manifest_path)
+            logger.info("✓ Saved LoRA adapters to: %s", adapter_dir)
+            return manifest_path
         else:
-            logger.warning(f"{self.model_name} does not support save_lora_adapters")
-    
+            logger.warning("%s does not support save_lora_adapters", self.model_name)
+            return None
+
     def get_model(self) -> nn.Module:
         """Return the underlying model."""
         return self.model
-    
+
     def get_checkpoint_manager(self) -> CheckpointManager:
         """Return the checkpoint manager."""
         return self.checkpoint_manager
-    
+
     @property
     def should_stop(self) -> bool:
         """Check if early stopping was triggered."""
         return self.checkpoint_manager.should_stop
-    
+
     def close(self) -> None:
         """Cleanup resources."""
         self.writer.close()
-        logger.info(f"✓ {self.model_name} trainer closed")
+        logger.info("✓ %s trainer closed", self.model_name)
