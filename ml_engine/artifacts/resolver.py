@@ -59,10 +59,10 @@ def _resolve_from_bundle(root: Path) -> ResolvedArtifacts:
     for model_name, rel_path in bundle_manifest.artifacts.items():
         manifest_abs_path = root / rel_path
         adapter_dir = manifest_abs_path.parent
-        if model_name == "detector":
+        if model_name == "grounding_dino":
             artifacts.detector_adapter_dir = adapter_dir
             artifacts.detector_manifest = validate_adapter(adapter_dir)
-        elif model_name == "segmenter":
+        elif model_name == "sam":
             artifacts.segmenter_adapter_dir = adapter_dir
             artifacts.segmenter_manifest = validate_adapter(adapter_dir)
         else:
@@ -71,9 +71,9 @@ def _resolve_from_bundle(root: Path) -> ResolvedArtifacts:
     if bundle_manifest.merged_checkpoints:
         for model_name, rel_path in bundle_manifest.merged_checkpoints.items():
             merged_path = root / rel_path
-            if model_name == "detector":
+            if model_name == "grounding_dino":
                 artifacts.detector_merged = merged_path
-            elif model_name == "segmenter":
+            elif model_name == "sam":
                 artifacts.segmenter_merged = merged_path
             else:
                 raise ValueError(f"Unknown model name: {model_name}")

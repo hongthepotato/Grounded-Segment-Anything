@@ -62,7 +62,7 @@ class AdapterManifest:
 class BundleManifest:
     """Metadata for a complete teacher training job production"""
     bundle_type: str                        # "teacher_training_output"
-    artifacts: Dict[str, str]               # model_name -> relative path of the corresponding adapter.manifest.json
+    artifacts: Dict[str, str]               # model_name -> relative path (from where bundle.manifest.json is located) of the corresponding adapter.manifest.json
     lineage: Dict[str, str]                 # "job_id"
     merged_checkpoints: Optional[Dict[str, str]] = None      # model_naem -> relative path of merged model
 
