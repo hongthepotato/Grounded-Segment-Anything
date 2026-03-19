@@ -1,10 +1,12 @@
 """
-Auto-labeling service using Grounding DINO + MobileSAM.
+Auto-labeling service using Grounding DINO + segmenter (MobileSAM or SAM-HQ).
 
 This module provides automatic annotation generation for images using:
 1. Grounding DINO: Text-prompted object detection (text -> boxes)
 2. NMS: Non-Maximum Suppression to filter duplicate detections
-3. MobileSAM: Box-prompted segmentation (boxes -> masks)
+3. Segmenter: Box-prompted segmentation (boxes -> masks)
+   - MobileSAM: lightweight pretrained segmenter (default)
+   - SAM-HQ: fine-tuned segmenter with LoRA adapters
 
 This is the coordinator class that delegates to:
 - detectors/ for object detection
@@ -31,8 +33,9 @@ from ml_engine.inference.config import (
     OUTPUT_MASKS_ONLY,
     OUTPUT_BOTH,
 )
-from ml_engine.inference.detectors.grounding_dino import GroundingDINODetector
-from ml_engine.inference.segmenters.mobile_sam import MobileSAMSegmenter
+from ml_engine.inference.detectors.base import DetectorProtocol
+from ml_engine.inference.segmenters.base import SegmenterProtocol
+from ml_engine.inference.model_factory import InferenceModelFactory
 
 logger = logging.getLogger(__name__)
 
@@ -68,31 +71,25 @@ class AutoLabeler:
             config: Configuration object. If None, uses defaults.
         """
         self.config = config or AutoLabelerConfig()
+        self._factory = InferenceModelFactory(device=self.config.device)
 
         # Initialize detector and segmenter (lazy loading)
-        self._detector: Optional[GroundingDINODetector] = None
-        self._segmenter: Optional[MobileSAMSegmenter] = None
+        self._detector: Optional[DetectorProtocol] = None
+        self._segmenter: Optional[SegmenterProtocol] = None
 
         logger.info("AutoLabeler initialized (device: %s, mode: %s)",
                    self.config.device, self.config.output_mode)
 
-    def _get_detector(self) -> GroundingDINODetector:
+    def _get_detector(self) -> DetectorProtocol:
         """Get or create detector instance."""
         if self._detector is None:
-            self._detector = GroundingDINODetector(
-                config_path=self.config.grounding_dino_config,
-                checkpoint_path=self.config.grounding_dino_checkpoint,
-                device=self.config.device
-            )
+            self._detector = self._factory.create_detector(self.config.detector)
         return self._detector
 
-    def _get_segmenter(self) -> MobileSAMSegmenter:
-        """Get or create segmenter instance."""
+    def _get_segmenter(self) -> SegmenterProtocol:
+        """Get or create segmenter instance based on config."""
         if self._segmenter is None:
-            self._segmenter = MobileSAMSegmenter(
-                checkpoint_path=self.config.mobile_sam_checkpoint,
-                device=self.config.device
-            )
+            self._segmenter = self._factory.create_segmenter(self.config.segmenter)
         return self._segmenter
 
     def label_images(
@@ -149,9 +146,9 @@ class AutoLabeler:
             detection = detector.detect(
                 image=image_bgr,
                 prompts=class_prompts,
-                box_threshold=self.config.box_threshold,
-                text_threshold=self.config.text_threshold,
-                nms_threshold=self.config.nms_threshold
+                box_threshold=self.config.thresholds.box,
+                text_threshold=self.config.thresholds.text,
+                nms_threshold=self.config.thresholds.nms
             )
 
             # Convert boxes to COCO format [x, y, width, height]

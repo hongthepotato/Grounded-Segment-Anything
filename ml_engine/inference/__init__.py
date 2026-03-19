@@ -18,6 +18,9 @@ Extensibility:
 # Configuration
 from ml_engine.inference.config import (
     AutoLabelerConfig,
+    DetectionThresholds,
+    GroundingDINOModelSpec,
+    SegmenterModelSpec,
     OUTPUT_BOXES_ONLY,
     OUTPUT_MASKS_ONLY,
     OUTPUT_BOTH,
@@ -39,6 +42,9 @@ __all__ = [
     # Main API
     'AutoLabeler',
     'AutoLabelerConfig',
+    'DetectionThresholds',
+    'GroundingDINOModelSpec',
+    'SegmenterModelSpec',
     'COCOExporter',
 
     # Visualization
