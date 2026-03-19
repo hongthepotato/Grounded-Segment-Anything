@@ -37,7 +37,7 @@ class ResolvedArtifacts:
 
 def resolve_teacher_artifacts(teacher_dir: str) -> ResolvedArtifacts:
     """
-    Discover and validate teacher artifaces from a job output directory.
+    Discover and validate teacher artifacts from a job output directory.
 
     Strategy:
     1. If bundle.manifest.json exists -> manifest-based resolution
