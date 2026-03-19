@@ -63,10 +63,11 @@ class GroundingDINOLoRA(nn.Module):
     def __init__(
         self,
         base_checkpoint: str,
-        lora_config: Dict,
+        lora_config: Dict = None,
         freeze_backbone: bool = True,
         freeze_bbox_embed: bool = False,
-        bert_model_path: Optional[str] = None
+        bert_model_path: Optional[str] = None,
+        _skip_lora_setup: bool = False
     ):
         """
         Args:
@@ -89,20 +90,21 @@ class GroundingDINOLoRA(nn.Module):
         logger.info("Loading Grounding DINO from: %s", base_checkpoint)
         self.model = self._load_base_model(base_checkpoint)
 
-        # Apply LoRA
-        logger.info("Applying LoRA to Grounding DINO...")
-        self._apply_lora()
+        if not _skip_lora_setup:
+            # Apply LoRA
+            logger.info("Applying LoRA to Grounding DINO...")
+            self._apply_lora()
 
-        # Optionally unfreeze bbox prediction head
-        if not freeze_bbox_embed:
-            self._unfreeze_bbox_embed()
+            # Optionally unfreeze bbox prediction head
+            if not freeze_bbox_embed:
+                self._unfreeze_bbox_embed()
 
-        # Optionally unfreeze backbone
-        if not freeze_backbone:
-            self._unfreeze_backbone()
+            # Optionally unfreeze backbone
+            if not freeze_backbone:
+                self._unfreeze_backbone()
 
-        # Verify freezing
-        verify_freezing(self.model, strict=False)
+            # Verify freezing
+            verify_freezing(self.model, strict=False)
 
         logger.info("✓ Grounding DINO with LoRA initialized")
     
@@ -419,10 +421,7 @@ class GroundingDINOLoRA(nn.Module):
         cls,
         base_checkpoint: str,
         lora_adapter_path: str,
-        lora_config: Dict,
         merge: bool = False,
-        freeze_backbone: bool = True,
-        freeze_bbox_embed: bool = False,
         bert_model_path: Optional[str] = None
     ) -> 'GroundingDINOLoRA':
         """
@@ -431,32 +430,24 @@ class GroundingDINOLoRA(nn.Module):
         Args:
             base_checkpoint: Path to base pretrained checkpoint
             lora_adapter_path: Path to LoRA adapter directory
-            lora_config: LoRA configuration
             merge: Whether to merge LoRA weights into base model
-            freeze_backbone: Whether to freeze backbone
-            unfreeze_bbox_embed: Whether to unfreeze bbox prediction head
             bert_model_path: Optional path to local BERT model
         
         Returns:
             Model with LoRA adapters loaded
         """
-        # Create model
-        model = cls(
+        instance = cls(
             base_checkpoint=base_checkpoint,
-            lora_config=lora_config,
-            freeze_backbone=freeze_backbone,
-            freeze_bbox_embed=freeze_bbox_embed,
-            bert_model_path=bert_model_path
+            bert_model_path=bert_model_path,
+            _skip_lora_setup=True
         )
-        
-        # Load LoRA adapters
-        model.model = load_lora_model(
-            model.model,
-            lora_adapter_path,
-            merge=merge
-        )
-        
-        return model
+        from peft import PeftModel
+        instance.model = PeftModel.from_pretrained(instance.model, lora_adapter_path)
+
+        if merge:
+            instance.model = instance.model.merge_and_unload()
+
+        return instance
 
 
 def load_grounding_dino_with_lora(
@@ -504,19 +495,16 @@ def load_grounding_dino_with_lora(
         >>> # Forward pass with class names
         >>> outputs = model(samples, class_names=['dog', 'cat', 'car'])
     """
-    if lora_config is None:
-        lora_config = DEFAULT_DINO_LORA_CONFIG['lora']
-        
     if lora_adapter_path:
         return GroundingDINOLoRA.from_lora_checkpoint(
             base_checkpoint=base_checkpoint,
             lora_adapter_path=lora_adapter_path,
-            lora_config=lora_config,
             merge=merge,
-            freeze_backbone=freeze_backbone,
-            freeze_bbox_embed=freeze_bbox_embed,
             bert_model_path=bert_model_path
         )
+
+    if lora_config is None:
+        lora_config = DEFAULT_DINO_LORA_CONFIG['lora']
 
     return GroundingDINOLoRA(
         base_checkpoint=base_checkpoint,
