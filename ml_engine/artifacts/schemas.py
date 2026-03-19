@@ -25,7 +25,8 @@ import json
 class BaseModelRef:
     """Reference to a base model"""
     checkpoint_path: str
-    model_type: str
+    model_type: Optional[str] = None
+    config_path: Optional[str] = None
     # sha256: Optional[str] = None
 
 @dataclass

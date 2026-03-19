@@ -297,7 +297,7 @@ class BaseModelTrainer(ABC):
             adapter_dir = self.output_dir / 'lora_adapters'
             self.model.save_lora_adapters(
                 output_dir=str(adapter_dir),
-                safe_serialization=True
+                # safe_serialization=True
                 )
             peft_files = {}
             for f in adapter_dir.iterdir():
@@ -311,7 +311,8 @@ class BaseModelTrainer(ABC):
             model_cfg = self.config.get("model", {})
             base_model = BaseModelRef(
                 checkpoint_path=model_cfg.get("base_checkpoint", None),
-                model_type=model_cfg.get("model_type", None)
+                model_type=model_cfg.get("model_type", None),
+                config_path=model_cfg.get("config_path", None)
             )
             manifest = AdapterManifest(
                 model_family=self.model_name,

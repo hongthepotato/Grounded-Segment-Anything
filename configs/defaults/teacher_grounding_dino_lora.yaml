@@ -6,6 +6,7 @@
 model:
   name: "grounding_dino"
   base_checkpoint: "data/models/pretrained/groundingdino_swint_ogc.pth"
+  config_path: "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 
 # LoRA Configuration (PEFT) - Grounding DINO specific
 lora:
