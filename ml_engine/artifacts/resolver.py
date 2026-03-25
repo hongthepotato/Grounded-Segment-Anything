@@ -36,12 +36,19 @@ class ResolvedArtifacts:
 
 
 def resolve_teacher_artifacts(teacher_dir: str) -> ResolvedArtifacts:
-    """
-    Discover and validate teacher artifacts from a job output directory.
+    """Discover teacher artifacts (LoRA adapters, merged checkpoints) from a job output directory.
 
-    Strategy:
-    1. If bundle.manifest.json exists -> manifest-based resolution
-    2. Otherwise -> legacy folder probing with warning
+    Reads ``bundle.manifest.json`` to locate detector and segmenter
+    adapters, then validates each adapter directory.
+
+    Args:
+        teacher_dir: Path to the teacher training output (e.g. ``experiments/teacher_training_xxx``).
+
+    Returns:
+        ResolvedArtifacts with paths to detector/segmenter adapters and manifests.
+
+    Raises:
+        FileNotFoundError: If bundle manifest is missing.
     """
     root = Path(teacher_dir)
     bundle_path = root / BUNDLE_MANIFEST_FILE
@@ -49,8 +56,8 @@ def resolve_teacher_artifacts(teacher_dir: str) -> ResolvedArtifacts:
     if bundle_path.exists():
         return _resolve_from_bundle(root)
 
-    # logger.warning("No bundle manifest at %s, falling back to legacy discovery", root)
-    # return None
+    raise FileNotFoundError(f"No {BUNDLE_MANIFEST_FILE} found in {root}")
+
 
 def _resolve_from_bundle(root: Path) -> ResolvedArtifacts:
     """Resolve artifacts from a bundle manifest"""
