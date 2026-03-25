@@ -129,10 +129,10 @@ class AutoLabeler:
 
         results = []
         total_images = len(image_paths)
+        logger.info("Starting sequential inference on %d images (mode=%s)",
+                     total_images, self.config.output_mode)
 
-        # Sequential processing - one image at a time
         for i, image_path in enumerate(image_paths):
-            # Load image
             image_bgr = cv2.imread(image_path)
             if image_bgr is None:
                 logger.warning("Could not load image: %s", image_path)
@@ -147,7 +147,6 @@ class AutoLabeler:
                 image=image_bgr,
                 prompts=class_prompts,
                 box_threshold=self.config.thresholds.box,
-                text_threshold=self.config.thresholds.text,
                 nms_threshold=self.config.thresholds.nms
             )
 
@@ -182,7 +181,12 @@ class AutoLabeler:
 
             results.append(result)
 
-            # Report progress
+            n_det = len(result.get('class_ids', []))
+            n_mask = len(result.get('masks', []))
+            if (i + 1) % 10 == 0 or (i + 1) == total_images:
+                logger.info("[%d/%d] %s — %d detections, %d masks",
+                            i + 1, total_images, file_name, n_det, n_mask)
+
             if progress_callback:
                 progress_callback(i + 1, total_images, f"Processed {file_name}")
 
