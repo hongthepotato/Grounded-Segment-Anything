@@ -168,14 +168,19 @@ def get_required_models_from_mode(annotation_mode: str) -> List[str]:
     This function maps the annotation mode to the required teacher models.
     It should be used with the mode returned by detect_annotation_mode().
     
+    For segmentation-only data, GroundingDINO is always co-trained alongside
+    SAM. The normalization step auto-generates bounding boxes from mask
+    contours, giving DINO valid training targets. This guarantees a detector
+    is available for pseudo-labeling during knowledge distillation.
+    
     Args:
         annotation_mode: One of 'detection', 'segmentation', or 'combined'
     
     Returns:
         List of model names to load:
-        - 'detection' -> ['grounding_dino']
-        - 'segmentation' -> ['sam']
-        - 'combined' -> ['grounding_dino', 'sam']
+        - 'detection'    -> ['grounding_dino']
+        - 'segmentation' -> ['grounding_dino', 'sam']
+        - 'combined'     -> ['grounding_dino', 'sam']
     
     Raises:
         ValueError: If unknown annotation mode
@@ -191,5 +196,30 @@ def get_required_models_from_mode(annotation_mode: str) -> List[str]:
     if annotation_mode == MODE_DETECTION:
         return [GROUNDING_DINO]
     if annotation_mode == MODE_SEGMENTATION:
-        return [SAM]
+        return [GROUNDING_DINO, SAM]
+    raise ValueError(f"Unknown annotation mode: {annotation_mode}")
+
+
+def get_recommended_student_model(annotation_mode: str, size: str = 's') -> str:
+    """
+    Select the appropriate student model based on annotation mode and size.
+    
+    Args:
+        annotation_mode: One of 'detection', 'segmentation', or 'combined'
+        size: Model size variant - 'n', 's', 'm', 'l', or 'x'
+    
+    Returns:
+        Ultralytics model name string, e.g. 'yolov8s-seg'
+    
+    Raises:
+        ValueError: If unknown annotation mode or invalid size
+    """
+    valid_sizes = ('n', 's', 'm', 'l', 'x')
+    if size not in valid_sizes:
+        raise ValueError(f"Invalid size '{size}'. Must be one of {valid_sizes}")
+
+    if annotation_mode in (MODE_COMBINED, MODE_SEGMENTATION):
+        return f'yolov8{size}-seg'
+    if annotation_mode == MODE_DETECTION:
+        return f'yolov8{size}'
     raise ValueError(f"Unknown annotation mode: {annotation_mode}")
