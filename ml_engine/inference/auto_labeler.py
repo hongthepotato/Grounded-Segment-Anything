@@ -121,7 +121,7 @@ class AutoLabeler:
                 - image_info: Dict with file_name, width, height
         """
         if len(image_paths) == 0:
-            return []
+            raise ValueError("No image found for carrying out auto-labeling")
 
         detector = self._get_detector()
         needs_masks = self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH)
