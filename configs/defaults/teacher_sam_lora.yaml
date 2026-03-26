@@ -33,7 +33,7 @@ lora:
 #   - frozen: No training, all parameters frozen
 #   - lora: LoRA adapters trainable, base weights frozen (requires target_modules match)
 #   - full: All parameters trainable (full fine-tuning)
-image_encoder_mode: "frozen"     # LoRA on ViT backbone (~1.5M trainable)
+image_encoder_mode: "lora"     # LoRA on ViT backbone (~1.5M trainable)
 prompt_encoder_mode: "frozen"  # Completely frozen (~3.8M frozen)
 mask_decoder_mode: "full"      # Full fine-tune (~4.1M trainable)
 
