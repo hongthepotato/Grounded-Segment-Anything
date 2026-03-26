@@ -89,6 +89,7 @@ def generate_pseudo_labels(
     class_names: List[str],
     teacher_dir: str,
     output_path: str,
+    distillation_cfg: Dict[str, Any],
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """
@@ -115,8 +116,6 @@ def generate_pseudo_labels(
             f"No fine-tuned teachers found in {teacher_dir}. "
         )
 
-    distillation_cfg = load_config(str(DEFAULT_CONFIGS_DIR / 'distillation.yaml'))
-    distillation_cfg = distillation_cfg.get('distillation', distillation_cfg)
     config = _build_autolabeler_config(artifacts, distillation_cfg)
     labeler = AutoLabeler(config)
 
