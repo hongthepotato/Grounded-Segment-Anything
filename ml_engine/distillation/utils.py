@@ -6,6 +6,8 @@ import random
 from collections import defaultdict
 import yaml
 
+from core.constants import transform_image_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,17 +108,6 @@ Converts COCO JSON annotations to the YOLO-seg label format that
 ultralytics expects for instance segmentation training.
 """
 
-def _find_image_file(file_name: str, source_dirs: List[str]) -> Optional[str]:
-    """Locate an image across multiple source directories."""
-    for src in source_dirs:
-        candidate = Path(src) / file_name
-        if candidate.exists():
-            return str(candidate)
-        for child in Path(src).rglob(os.path.basename(file_name)):
-            if child.is_file():
-                return str(child)
-    return None
-
 
 def _polygon_to_yolo_seg(
     polygon: List[float],
@@ -136,31 +127,29 @@ def _polygon_to_yolo_seg(
 
 def convert_coco_to_yolo_seg(
     coco_data: Dict[str, Any],
-    image_source_dirs: List[str],
     output_dir: str,
     split_ratios: Optional[Dict[str, float]] = None,
     class_names: Optional[List[str]] = None,
     seed: int = 42,
 ) -> str:
-    """
-    Convert COCO annotations to YOLO segmentation format.
+    """Convert COCO annotations to YOLO segmentation format.
 
-    Creates the directory structure ultralytics expects:
+    Creates the directory structure ultralytics expects::
+
         output_dir/
             images/train/  images/val/  [images/test/]
             labels/train/  labels/val/  [labels/test/]
             data.yaml
 
     Args:
-        coco_data: Merged COCO dict (images, annotations, categories)
-        image_source_dirs: Directories to search for image files
-        output_dir: Root output directory
-        split_ratios: e.g. {'train': 0.7, 'val': 0.15, 'test': 0.15}
-        class_names: Override category names (use COCO categories if None)
-        seed: Random seed for splitting
+        coco_data: Merged COCO dict (images, annotations, categories).
+        output_dir: Root output directory.
+        split_ratios: e.g. ``{'train': 0.7, 'val': 0.15, 'test': 0.15}``.
+        class_names: Override category names (use COCO categories if None).
+        seed: Random seed for splitting.
 
     Returns:
-        Absolute path to the generated data.yaml
+        Absolute path to the generated ``data.yaml``.
     """
     if split_ratios is None:
         split_ratios = {'train': 0.7, 'val': 0.15, 'test': 0.15}
@@ -209,7 +198,7 @@ def convert_coco_to_yolo_seg(
         file_name = img['file_name']
         w, h = img['width'], img['height']
 
-        src_path = _find_image_file(file_name, image_source_dirs)
+        src_path = transform_image_path(file_name)
         if src_path is None:
             logger.warning("Image not found: %s", file_name)
             skipped += 1
@@ -250,7 +239,7 @@ def convert_coco_to_yolo_seg(
         'path': str(out.resolve()),
         'train': 'images/train',
         'val': 'images/val',
-        'names': {i: name for i, name in enumerate(class_names)},
+        'names': dict(enumerate(class_names)),
     }
     if 'test' in split_names:
         data_yaml['test'] = 'images/test'

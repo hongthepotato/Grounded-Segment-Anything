@@ -33,6 +33,7 @@ from ml_engine.inference.config import (
     OUTPUT_MASKS_ONLY,
     OUTPUT_BOTH,
 )
+from core.constants import transform_image_path
 from ml_engine.inference.detectors.base import DetectorProtocol
 from ml_engine.inference.segmenters.base import SegmenterProtocol
 from ml_engine.inference.model_factory import InferenceModelFactory
@@ -132,7 +133,8 @@ class AutoLabeler:
         logger.info("Starting sequential inference on %d images (mode=%s)",
                      total_images, self.config.output_mode)
 
-        for i, image_path in enumerate(image_paths):
+        transformed_image_paths = [transform_image_path(image_path) for image_path in image_paths]
+        for i, image_path in enumerate(transformed_image_paths):
             image_bgr = cv2.imread(image_path)
             if image_bgr is None:
                 logger.warning("Could not load image: %s", image_path)
@@ -140,7 +142,6 @@ class AutoLabeler:
                 continue
 
             height, width = image_bgr.shape[:2]
-            file_name = os.path.basename(image_path)
 
             # Single-image detection
             detection = detector.detect(
@@ -162,6 +163,8 @@ class AutoLabeler:
                 image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
                 masks = segmenter.segment(image_rgb, detection.boxes_xyxy)
 
+            file_name = image_paths[i]
+            base_name = os.path.basename(file_name)
             # Build result
             result = {
                 'class_ids': detection.class_ids.tolist() if len(detection.class_ids) > 0 else [],
@@ -185,10 +188,10 @@ class AutoLabeler:
             n_mask = len(result.get('masks', []))
             if (i + 1) % 10 == 0 or (i + 1) == total_images:
                 logger.info("[%d/%d] %s — %d detections, %d masks",
-                            i + 1, total_images, file_name, n_det, n_mask)
+                            i + 1, total_images, base_name, n_det, n_mask)
 
             if progress_callback:
-                progress_callback(i + 1, total_images, f"Processed {file_name}")
+                progress_callback(i + 1, total_images, f"Processed {base_name}")
 
         logger.info("Labeled %d images", len(results))
         return results
