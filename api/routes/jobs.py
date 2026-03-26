@@ -85,17 +85,77 @@ JOB_CONFIG_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
         }
     },
     "student_distillation": {
-        "required": ["data_path", "image_paths", "teacher_checkpoint"],
+        "required": ["data_path", "image_paths"],
         "field_types": {
             "data_path": str,
             "image_paths": list,
-            "teacher_checkpoint": str,
+            "teacher_dir": str,
+            "unlabeled_image_paths": list,
+            "student_model": str,
+            "student_size": str,
+            "split_config": dict,
+            "training": dict,
         },
         "field_validations": {
             "image_paths": lambda v: len(v) > 0,
         }
     },
 }
+
+DISTILLATION_METADATA: Dict[str, Any] = {
+    "required": ["data_path", "image_paths"],
+    "optional": [
+        "teacher_dir",
+        "unlabeled_image_paths",
+        "student_model",
+        "student_size",
+        "split_config",
+        "training",
+    ],
+    "constraints": {
+        "student_size": ["n", "s", "m", "l", "x"],
+        "teacher_unlabeled_pair": "teacher_dir and unlabeled_image_paths must be provided together",
+        "split_config": "train/val/test must be non-negative and sum to 1.0",
+    },
+    "defaults": {
+        "student_size": "s",
+        "split_config": {"train": 0.8, "val": 0.2},
+    },
+    "example": {
+        "job_type": "student_distillation",
+        "config": {
+            "data_path": "upload/2026/03/12/train.json",
+            "image_paths": ["upload/2026/03/12/labeled/"],
+            "teacher_dir": "experiments/teacher_training_ab12cd34",
+            "unlabeled_image_paths": ["upload/2026/03/unlabeled/"],
+            "student_size": "s",
+            "training": {"epochs": 120, "batch_size": 16},
+        },
+    },
+}
+
+
+def _validate_split_config(split_cfg: Dict[str, Any]) -> Optional[str]:
+    """Validate train/val/test split ratios."""
+    allowed_keys = {"train", "val", "test"}
+    unknown_keys = set(split_cfg.keys()) - allowed_keys
+    if unknown_keys:
+        return f"split_config contains unsupported keys: {sorted(unknown_keys)}"
+
+    values: Dict[str, float] = {}
+    for k, v in split_cfg.items():
+        if not isinstance(v, (int, float)):
+            return f"split_config['{k}'] must be numeric"
+        if float(v) < 0:
+            return f"split_config['{k}'] must be >= 0"
+        values[k] = float(v)
+
+    total = sum(values.values())
+    if total <= 0:
+        return "split_config sum must be > 0"
+    if abs(total - 1.0) > 1e-6:
+        return f"split_config values must sum to 1.0, got {total:.6f}"
+    return None
 
 
 def validate_job_config(job_type: str, config: Dict[str, Any]) -> List[str]:
@@ -135,6 +195,36 @@ def validate_job_config(job_type: str, config: Dict[str, Any]) -> List[str]:
                     errors.append(f"'{field}' must contain at least one image path")
                 else:
                     errors.append(f"'{field}' validation failed")
+
+    if job_type == "student_distillation":
+        teacher_dir = config.get("teacher_dir")
+        unlabeled = config.get("unlabeled_image_paths")
+
+        # Require teacher_dir + unlabeled_image_paths as a pair.
+        if bool(teacher_dir) != bool(unlabeled):
+            errors.append(
+                "'teacher_dir' and 'unlabeled_image_paths' must be provided together "
+                "(or both omitted)"
+            )
+
+        if unlabeled is not None:
+            if not isinstance(unlabeled, list):
+                errors.append("'unlabeled_image_paths' must be a list")
+            elif len(unlabeled) == 0:
+                errors.append("'unlabeled_image_paths' must contain at least one image path")
+
+        student_size = config.get("student_size")
+        if student_size is not None and student_size not in {"n", "s", "m", "l", "x"}:
+            errors.append("'student_size' must be one of: n, s, m, l, x")
+
+        split_cfg = config.get("split_config")
+        if split_cfg is not None:
+            if not isinstance(split_cfg, dict):
+                errors.append("'split_config' must be an object")
+            else:
+                split_error = _validate_split_config(split_cfg)
+                if split_error:
+                    errors.append(split_error)
 
     return errors
 
@@ -275,6 +365,28 @@ async def list_jobs(
             data=response_data.model_dump(mode='json')
         )
     )
+
+
+@router.get("/types")
+async def list_job_types():
+    """
+    Get job type metadata for frontend form generation.
+
+    Includes required fields, optional fields, constraints and examples.
+    """
+    data = {
+        "job_types": {
+            "teacher_training": {
+                "required": ["data_path", "image_paths"],
+                "optional": ["training"],
+                "constraints": {
+                    "image_paths": "must contain at least one image path",
+                },
+            },
+            "student_distillation": DISTILLATION_METADATA,
+        }
+    }
+    return JSONResponse(status_code=200, content=success_response(data=data))
 
 
 @router.get("/{job_id}")

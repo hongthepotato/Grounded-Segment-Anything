@@ -287,6 +287,48 @@ class AutoLabelRequest(BaseModel):
     )
 
 
+class DistillationRequest(BaseModel):
+    """
+    Request body for student distillation submission.
+
+    This is a convenience schema for POST /api/distillation and maps to
+    job_type="student_distillation" in the jobs queue.
+    """
+
+    data_path: str = Field(..., description="Path to labeled COCO annotations JSON")
+    image_paths: List[str] = Field(..., description="Labeled image file paths")
+    teacher_dir: Optional[str] = Field(
+        default=None,
+        description="Teacher output directory (required with unlabeled_image_paths)"
+    )
+    unlabeled_image_paths: Optional[List[str]] = Field(
+        default=None,
+        description="Unlabeled image file paths (required with teacher_dir)"
+    )
+    student_model: Optional[str] = Field(
+        default=None,
+        description="Optional direct student model name override"
+    )
+    student_size: Optional[str] = Field(
+        default=None,
+        description="Optional student size enum: n/s/m/l/x"
+    )
+    split_config: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="Dataset split ratios: train/val/test (sum=1.0)"
+    )
+    training: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Training hyperparameter overrides"
+    )
+    priority: int = Field(default=0, description="Job priority (higher = more urgent)")
+    output_dir: Optional[str] = Field(
+        default=None,
+        description="Output directory (auto-generated if not provided)"
+    )
+    tags: List[str] = Field(default_factory=list, description="Optional tags for filtering")
+
+
 class COCOImageSchema(BaseModel):
     """COCO image entry."""
     id: int = Field(..., description="Image ID")
