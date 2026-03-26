@@ -23,8 +23,6 @@ from ml_engine.inference.config import (
 )
 from ml_engine.inference.exporters.coco import COCOExporter
 from ml_engine.artifacts import ResolvedArtifacts
-from core.constants import DEFAULT_CONFIGS_DIR
-from core.config import load_config
 
 logger = logging.getLogger(__name__)
 
