@@ -9,11 +9,11 @@ This module provides utilities for:
 """
 
 import os
-import torch
-import torch.nn as nn
-from peft import LoraConfig, get_peft_model, PeftModel
-from typing import Dict, List, Optional, Tuple
 import logging
+import torch
+from torch import nn
+from peft import LoraConfig, get_peft_model, PeftModel
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -181,17 +181,12 @@ def get_trainable_parameters_summary(model: nn.Module) -> str:
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     ratio = 100 * trainable / total if total > 0 else 0
-    
+
     return (
         f"Trainable params: {trainable:,} || "
         f"All params: {total:,} || "
         f"Trainable%: {ratio:.2f}%"
     )
-
-
-def print_trainable_parameters(model: nn.Module) -> None:
-    """Print trainable parameters information."""
-    print(get_trainable_parameters_summary(model))
 
 
 def load_lora_model(
@@ -253,13 +248,13 @@ def save_lora_adapters(
         >>> save_lora_adapters(model, 'experiments/exp1/teachers/dino_lora/')
     """
     os.makedirs(output_dir, exist_ok=True)
-    
+
     if hasattr(model, 'save_pretrained'):
         model.save_pretrained(
             output_dir,
             safe_serialization=safe_serialization
         )
-        logger.info(f"✓ Saved LoRA adapters to: {output_dir}")
+        logger.info("✓ Saved LoRA adapters to: %s", output_dir)
     else:
         logger.warning("Model does not have save_pretrained method. Saving full state dict.")
         torch.save(model.state_dict(), os.path.join(output_dir, 'adapter_model.bin'))
@@ -329,7 +324,7 @@ def partial_freeze_for_lora(
     for name, module in model.named_children():
         if name in freeze_modules:
             freeze_module(module)
-            logger.info(f"❄️  Frozen module: {name}")
+            logger.info("  Frozen module: %s", name)
     
     # Apply LoRA
     # Note: lora_modules filtering is only needed for full-path target_modules.
@@ -366,7 +361,7 @@ def count_lora_parameters(model: nn.Module) -> Dict[str, int]:
     lora_a_params = 0
     lora_b_params = 0
     other_lora_params = 0
-    
+
     for name, param in model.named_parameters():
         if 'lora' in name.lower():
             if 'lora_a' in name.lower():
@@ -375,9 +370,9 @@ def count_lora_parameters(model: nn.Module) -> Dict[str, int]:
                 lora_b_params += param.numel()
             else:
                 other_lora_params += param.numel()
-    
+
     total_lora = lora_a_params + lora_b_params + other_lora_params
-    
+
     return {
         'lora_a_params': lora_a_params,
         'lora_b_params': lora_b_params,
@@ -414,7 +409,7 @@ def enable_lora_dropout(model: nn.Module, dropout_rate: float = 0.1) -> None:
     for name, module in model.named_modules():
         if 'lora' in name.lower() and isinstance(module, nn.Dropout):
             module.p = dropout_rate
-            logger.info(f"Set dropout rate to {dropout_rate} for: {name}")
+            logger.info("Set dropout rate to %s for: %s", dropout_rate, name)
 
 
 def disable_lora_dropout(model: nn.Module) -> None:
