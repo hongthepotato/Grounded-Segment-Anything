@@ -100,7 +100,7 @@ class InferenceModelFactory:
             merge=True,
         )
         merged_ckpt.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({"model": merged_model.state_dict()}, str(merged_ckpt))
+        torch.save({"model": merged_model.model.state_dict()}, str(merged_ckpt))
         del merged_model
         logger.info("Saved merged checkpoint to %s", merged_ckpt)
         return str(merged_ckpt)
