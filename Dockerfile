@@ -29,7 +29,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV UV_LINK_MODE=copy
 ENV CUDA_HOME=/usr/local/cuda
-ENV TORCH_CUDA_ARCH_LIST="8.9;12.0"
+ENV TORCH_CUDA_ARCH_LIST="8.9"
 
 # Layer 1: dependency files only (cache-friendly).
 COPY pyproject.toml uv.lock ./

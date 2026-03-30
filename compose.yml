@@ -33,6 +33,7 @@ services:
       - ./data/models/pretrained:/app/data/models/pretrained
       - ./configs:/app/configs
       - ./logs:/app/logs
+      - ./experiments:/app/experiments
       - /srv/shared:/srv/shared
     gpus: all
     shm_size: "16gb"

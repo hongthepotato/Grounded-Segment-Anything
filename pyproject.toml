@@ -5,9 +5,9 @@ description = "ML platform: Grounding DINO + SAM for auto-labeling, training, an
 requires-python = ">=3.10,<3.11"
 dependencies = [
     # === PyTorch ecosystem ===
-    "torch==2.10.0",
-    "torchvision==0.25.0",
-    "torchaudio==2.10.0",
+    "torch==2.6.0",
+    "torchvision==0.21.0",
+    "torchaudio==2.6.0",
     "torchmetrics==1.8.2",
 
     # === ML / Training ===
@@ -49,6 +49,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = [
+    "debugpy>=1.8.0",
+]
 onnx = [
     "onnx>=1.14.0",
     "onnxruntime-gpu>=1.18.0",
@@ -85,14 +88,14 @@ python-preference = "only-system"
 no-build-isolation-package = ["groundingdino"]
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
-torchvision = { index = "pytorch-cu128" }
-torchaudio = { index = "pytorch-cu128" }
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }
 segment-anything = { path = "deps/segment_anything", editable = true }
 groundingdino = { path = "GroundingDINO", editable = true }
 
