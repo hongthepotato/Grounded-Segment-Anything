@@ -370,6 +370,16 @@ def _job_entry_point(
     # This ensures PyTorch only sees the assigned GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
+    if os.environ.get("DEBUG"):
+        try:
+            import debugpy
+            debugpy.listen(("0.0.0.0", 5678))
+            print("[DEBUG] debugpy listening on :5678, waiting for client...", flush=True)
+            debugpy.wait_for_client()
+            print("[DEBUG] debugger attached, continuing.", flush=True)
+        except ImportError:
+            pass
+
     # Setup logging for subprocess using centralized configuration
     # This saves logs to {output_dir}/logs/training_{timestamp}.log
     from core.logging_config import configure_logging, get_job_logger
