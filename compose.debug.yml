@@ -1,0 +1,17 @@
+services:
+  app:
+    ports:
+      - "8080:8080"
+      - "5678:5678"
+    environment:
+      DEBUG: "1"
+      GPU_WORKERS: "1"
+    volumes:
+      - .:/app
+      - ./data/models/pretrained:/app/data/models/pretrained
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./experiments:/app/experiments
+      - /srv/shared:/srv/shared
+    command: >
+      bash -c "uv pip install debugpy>=1.8.0 && bash startup.bash"
