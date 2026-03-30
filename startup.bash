@@ -37,7 +37,10 @@ GPU_COUNT=0
 if command -v nvidia-smi >/dev/null 2>&1; then
     GPU_COUNT="$(nvidia-smi -L | wc -l | tr -d ' ')"
 fi
-echo "Detected ${GPU_COUNT} GPUs"
+if [ -n "${GPU_WORKERS:-}" ] && [ "${GPU_WORKERS}" -lt "${GPU_COUNT}" ]; then
+    GPU_COUNT="${GPU_WORKERS}"
+fi
+echo "Detected ${GPU_COUNT} GPU worker(s)"
 
 if [ "${GPU_COUNT}" -gt 0 ]; then
     for gpu_id in $(seq 0 $((GPU_COUNT - 1))); do
