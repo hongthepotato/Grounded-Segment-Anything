@@ -1,14 +1,55 @@
-data/cats/
-data/coco/
-data/models/
-logs/
+# VCS & IDE
 .git/
+.cursor/
+.vscode/
 .venv/
+.pytest_cache/
 __pycache__/
 *.pyc
+
+# Large data / model weights
+data/
+logs/
+output/
+experiments/
+
+# Notebooks & demo scripts (not needed at runtime)
 notebooks/
+*.ipynb
+
+# Legacy / unused subprojects
 VISAM/
 grounded-sam-osx/
 voxelnext_3d_box/
 grounding-dino-tiny-ONNX/
-.cursor/
+EfficientSAM/
+playground/
+assets/
+
+# Documentation (not needed at runtime)
+*.md
+docs/
+CITATION.cff
+LICENSE
+
+# Build / config files not needed inside container
+compose*.yml
+docker-compose.yml
+Dockerfile
+.dockerignore
+.gitignore
+.gitignore_platform
+.gitmodules
+Makefile
+cog.yaml
+requirements.txt
+requirements-test.txt
+pytest.ini
+
+# Legacy demo scripts at repo root
+automatic_label_*.py
+grounded_sam*.py
+grounding_dino_demo.py
+gradio_app.py
+chatbot.py
+predict.py

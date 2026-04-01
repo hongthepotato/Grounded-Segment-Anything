@@ -1,8 +1,10 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+# ============================================================
+# Stage 1: builder — compile CUDA extensions, install all deps
+# ============================================================
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
 
 WORKDIR /app
 
-# System dependencies and Python 3.10 for uv project sync.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3.10-dev \
@@ -11,8 +13,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
     curl \
-    redis-tools \
     ca-certificates \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV UV_LINK_MODE=copy
+ENV CUDA_HOME=/usr/local/cuda
+ENV TORCH_CUDA_ARCH_LIST="8.9"
+
+COPY pyproject.toml uv.lock ./
+COPY deps/ deps/
+COPY GroundingDINO/ GroundingDINO/
+
+RUN uv sync --frozen --no-editable --no-install-project
+
+COPY . .
+RUN uv sync --frozen --no-editable
+
+# ============================================================
+# Stage 2: runtime — lean image with only what's needed
+# ============================================================
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-venv \
+    redis-tools \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -23,25 +55,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv from the official image.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
-
-ENV UV_PROJECT_ENVIRONMENT=/opt/venv
-ENV UV_LINK_MODE=copy
-ENV CUDA_HOME=/usr/local/cuda
-ENV TORCH_CUDA_ARCH_LIST="8.9"
-
-# Layer 1: dependency files only (cache-friendly).
-COPY pyproject.toml uv.lock ./
-COPY deps/ deps/
-COPY GroundingDINO/ GroundingDINO/
-
-# Install all locked dependencies and compile extension packages.
-RUN uv sync --frozen --no-editable --no-install-project
-
-# Layer 2: source code (changes frequently).
-COPY . .
-RUN uv sync --frozen --no-editable
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /app /app
 
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH=/app
