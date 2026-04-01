@@ -332,7 +332,7 @@ class ModelReportGenerator:
         logger.info("Saved evaluation report to: %s", output_path)
         
         # Save text summary
-        if also_save_text:
+        if also_save_text and 'model_name' in report:
             text_path = output_path.with_suffix('.txt')
             summary_text = self.generate_summary_text(report)
             

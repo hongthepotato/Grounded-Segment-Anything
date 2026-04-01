@@ -58,7 +58,8 @@ class SAMHQLoRA(nn.Module):
         lora_config: Dict = None,
         image_encoder_mode: str = 'lora',    # "frozen" | "lora" | "full"
         prompt_encoder_mode: str = 'frozen', # "frozen" | "lora" | "full"
-        mask_decoder_mode: str = 'full'      # "frozen" | "lora" | "full"
+        mask_decoder_mode: str = 'full',     # "frozen" | "lora" | "full"
+        _skip_lora_setup: bool = False
     ):
         """
         Args:
@@ -96,11 +97,12 @@ class SAMHQLoRA(nn.Module):
         logger.info("Loading SAM-HQ (%s) from: %s", model_type, base_checkpoint)
         self.model = self._load_base_model(base_checkpoint, model_type)
 
-        logger.info("Configuring training modes: %s", self.component_modes)
-        self._apply_training_modes()
+        if not _skip_lora_setup:
+            logger.info("Configuring training modes: %s", self.component_modes)
+            self._apply_training_modes()
 
-        # Verify freezing (non-strict because we intentionally unfreeze some modules)
-        verify_freezing(self.model, strict=False)
+            # Verify freezing (non-strict because we intentionally unfreeze some modules)
+            verify_freezing(self.model, strict=False)
 
         logger.info(" SAM-HQ with LoRA initialized")
 
@@ -486,10 +488,6 @@ class SAMHQLoRA(nn.Module):
         base_checkpoint: str,
         lora_adapter_path: str,
         model_type: str = 'vit_h',
-        lora_config: Dict = None,
-        image_encoder_mode: str = 'lora',
-        prompt_encoder_mode: str = 'frozen',
-        mask_decoder_mode: str = 'full',
         merge: bool = False
     ) -> 'SAMHQLoRA':
         """
@@ -499,32 +497,24 @@ class SAMHQLoRA(nn.Module):
             base_checkpoint: Path to base pretrained checkpoint
             lora_adapter_path: Path to LoRA adapter directory
             model_type: SAM model type
-            lora_config: LoRA configuration
-            image_encoder_mode: "frozen" | "lora" | "full"
-            prompt_encoder_mode: "frozen" | "lora" | "full"
-            mask_decoder_mode: "frozen" | "lora" | "full"
             merge: Whether to merge LoRA into base weights
         
         Returns:
             Model with LoRA adapters loaded
         """
-        # Create model with specified modes
-        model = cls(
+        instance = cls(
             base_checkpoint=base_checkpoint,
             model_type=model_type,
-            lora_config=lora_config or {},
-            image_encoder_mode=image_encoder_mode,
-            prompt_encoder_mode=prompt_encoder_mode,
-            mask_decoder_mode=mask_decoder_mode
+            _skip_lora_setup=True
         )
 
-        model.model = load_lora_model(
-            model.model,
-            lora_adapter_path,
-            merge=merge
-        )
+        from peft import PeftModel
+        instance.model = PeftModel.from_pretrained(instance.model, lora_adapter_path)
 
-        return model
+        if merge:
+            instance.model = instance.model.merge_and_unload()
+
+        return instance
 
 
 def load_sam_hq_with_lora(
@@ -569,7 +559,7 @@ def load_sam_hq_with_lora(
             base_checkpoint=base_checkpoint,
             lora_adapter_path=lora_adapter_path,
             model_type=model_type,
-            lora_config=lora_config or {},
+            # lora_config=lora_config or {},
             merge=merge
         )
     if lora_config is None:

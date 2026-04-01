@@ -28,7 +28,7 @@ class JobHandler(ABC):
             def run(self, config, output_dir, progress_queue, cancel_event):
                 # Import heavy deps here, inside subprocess
                 import torch
-                from ml_engine.training.teacher_trainer import TeacherTrainer
+                from ml_engine.training import Trainer
                 
                 # Run training...
     """

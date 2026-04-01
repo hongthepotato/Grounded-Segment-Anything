@@ -265,6 +265,28 @@ DEFAULT_LOG_LEVEL = 'INFO'
 VALID_LOG_LEVELS: List[str] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 
 # ============================================================================
+# Default LoRA Configurations
+# ============================================================================
+
+DEFAULT_DINO_LORA_CONFIG = {
+    'lora': {
+        'r': 16,
+        'lora_alpha': 32,
+        'target_modules': ['out_proj', 'in_proj', 'linear1', 'linear2'],
+        'lora_dropout': 0.1
+    }
+}
+
+DEFAULT_SAM_LORA_CONFIG = {
+    'lora': {
+        'r': 16,
+        'lora_alpha': 32,
+        'target_modules': ['qkv', 'proj'],
+        'lora_dropout': 0.1
+    }
+}
+
+# ============================================================================
 # Version Info
 # ============================================================================
 

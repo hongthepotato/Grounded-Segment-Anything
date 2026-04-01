@@ -1,10 +1,12 @@
 """
-Configuration for auto-labeling inference.
+Configuration contracts for inference pipelines.
 
-Contains AutoLabelerConfig and output mode constants.
+This module defines typed model-loading specs and runtime policy knobs used by
+AutoLabeler and distillation pseudo-labeling.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 import torch
 
@@ -14,34 +16,65 @@ OUTPUT_BOXES_ONLY = "boxes"
 OUTPUT_MASKS_ONLY = "masks"
 OUTPUT_BOTH = "both"
 
+# Segmenter backend options
+SEGMENTER_MOBILE_SAM = "mobile_sam"
+SEGMENTER_SAM_HQ = "sam_hq"
+
+# Detector model source options
+DETECTOR_SOURCE_CHECKPOINT = "checkpoint"
+DETECTOR_SOURCE_BASE_LORA = "base_plus_lora"
+
+
+@dataclass
+class DetectionThresholds:
+    """Detection threshold policy."""
+
+    box: float = 0.5
+    text: float = 0.5
+    nms: float = 0.7
+
+
+@dataclass
+class GroundingDINOModelSpec:
+    """
+    GroundingDINO model loading specification.
+
+    source:
+      - checkpoint: load directly from checkpoint_path
+      - base_plus_lora: merge LoRA into base checkpoint at load time
+    """
+
+    source: str = DETECTOR_SOURCE_CHECKPOINT
+    config_path: str = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+    checkpoint_path: Optional[str] = "data/models/pretrained/groundingdino_swint_ogc.pth"
+    base_checkpoint: Optional[str] = None
+    lora_adapter_path: Optional[str] = None
+    merged_cache_path: Optional[str] = None
+
+
+@dataclass
+class SegmenterModelSpec:
+    """Segmentation backend loading specification."""
+
+    backend: str = SEGMENTER_MOBILE_SAM
+    checkpoint_path: Optional[str] = "data/models/pretrained/mobile_sam.pt"
+    base_checkpoint: Optional[str] = None
+    lora_adapter_path: Optional[str] = None
+    model_type: str = "vit_b"
+
 
 @dataclass
 class AutoLabelerConfig:
     """
     Configuration for AutoLabeler.
-    
-    Attributes:
-        grounding_dino_config: Path to GroundingDINO config file
-        grounding_dino_checkpoint: Path to GroundingDINO weights
-        mobile_sam_checkpoint: Path to MobileSAM weights
-        box_threshold: Detection confidence threshold
-        text_threshold: Text matching threshold
-        nms_threshold: Non-maximum suppression threshold
-        output_mode: Output format - "boxes", "masks", or "both"
-        device: Device for inference - "cuda" or "cpu"
+
+    This config is intentionally split into:
+    - model specs (what to load)
+    - runtime policy (thresholds, output mode, device)
     """
-    # Model paths
-    grounding_dino_config: str = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-    grounding_dino_checkpoint: str = "data/models/pretrained/groundingdino_swint_ogc.pth"
-    mobile_sam_checkpoint: str = "data/models/pretrained/mobile_sam.pt"
 
-    # Detection thresholds
-    box_threshold: float = 0.5
-    text_threshold: float = 0.5
-    nms_threshold: float = 0.7
-
-    # Output mode
+    detector: GroundingDINOModelSpec = field(default_factory=GroundingDINOModelSpec)
+    segmenter: SegmenterModelSpec = field(default_factory=SegmenterModelSpec)
+    thresholds: DetectionThresholds = field(default_factory=DetectionThresholds)
     output_mode: str = OUTPUT_BOXES_ONLY
-
-    # Device
     device: str = "cuda" if torch.cuda.is_available() else "cpu"

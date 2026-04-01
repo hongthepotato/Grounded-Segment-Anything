@@ -63,7 +63,8 @@ def save_merged_model(
     model: nn.Module,
     output_path: Path,
     class_names: Optional[list] = None,
-    extra_metadata: Optional[Dict[str, Any]] = None
+    extra_metadata: Optional[Dict[str, Any]] = None,
+    model_name: str = "grounding_dino"
 ) -> Path:
     """
     Save merged model weights with metadata.
@@ -94,7 +95,7 @@ def save_merged_model(
         'model_state_dict': model.state_dict(),
         'class_names': class_names or [],
         'metadata': {
-            'format': 'merged_grounding_dino',
+            'format': f'merged_{model_name}',
             'peft_merged': True,
             'requires_peft': False,
         }
@@ -136,10 +137,10 @@ def load_merged_model(
 
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
 
-    # Verify format
     metadata = checkpoint.get('metadata', {})
-    if metadata.get('format') != 'merged_grounding_dino':
-        logger.warning("Checkpoint may not be a merged model format")
+    fmt = metadata.get('format', '')
+    if not fmt.startswith('merged_'):
+        logger.warning("Checkpoint may not be a merged model format (got: %s)", fmt)
 
     # Load weights
     model.load_state_dict(checkpoint['model_state_dict'], strict=strict)

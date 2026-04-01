@@ -13,43 +13,13 @@ import torch.nn.functional as F
 from typing import Dict, Optional, Tuple, List
 import numpy as np
 
-# Import box utilities from GroundingDINO
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "GroundingDINO"))
 from groundingdino.util.box_ops import (
     box_cxcywh_to_xyxy,
     generalized_box_iou,
 )
 from groundingdino.models.GroundingDINO.utils import sigmoid_focal_loss
 
-"""
-Proper Grounding DINO Loss Implementation
-Based on DETR (https://github.com/facebookresearch/detr) and Grounding DINO paper.
-
-Key components:
-1. HungarianMatcher for bipartite matching
-2. SetCriterion for loss computation
-3. Focal loss for token-level contrastive classification
-4. L1 + GIoU for box regression
-5. Auxiliary losses from all decoder layers + encoder
-"""
-
-import torch
-from torch import nn
-import torch.nn.functional as F
-from typing import Dict, List, Tuple, Optional
 from scipy.optimize import linear_sum_assignment
-
-# Import box utilities from GroundingDINO
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "GroundingDINO"))
-from groundingdino.util.box_ops import (
-    box_cxcywh_to_xyxy,
-    generalized_box_iou,
-)
-from groundingdino.models.GroundingDINO.utils import sigmoid_focal_loss
 
 
 class HungarianMatcher(nn.Module):

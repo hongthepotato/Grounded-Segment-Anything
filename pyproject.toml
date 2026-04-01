@@ -1,0 +1,118 @@
+[project]
+name = "grounded-segment-anything"
+version = "0.1.0"
+description = "ML platform: Grounding DINO + SAM for auto-labeling, training, and inference"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    # === PyTorch ecosystem ===
+    "torch==2.6.0",
+    "torchvision==0.21.0",
+    "torchaudio==2.6.0",
+    "torchmetrics==1.8.2",
+
+    # === ML / Training ===
+    "peft>=0.18.0",
+    "transformers>=4.40.0,<5.0.0",
+    "timm>=1.0.0",
+    "supervision>=0.26.0",
+    "albumentations>=2.0.0",
+    "ultralytics>=8.0.0",
+    "iterative-stratification>=0.1.9",
+    "tensorboard>=2.14.0",
+    "scikit-learn>=1.7.0",
+    "scipy>=1.15.0",
+    "pycocotools>=2.0.0",
+
+    # === GroundingDINO transitive deps ===
+    "addict",
+    "yapf",
+    "termcolor",
+
+    # === API / Server ===
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+    "pydantic>=2.0.0",
+    "websockets>=11.0",
+    "redis>=7.0.0",
+
+    # === Data / IO ===
+    "numpy>=2.0.0",
+    "opencv-python>=4.10.0",
+    "Pillow>=11.0.0",
+    "PyYAML>=6.0",
+    "tqdm>=4.60.0",
+    "matplotlib>=3.9.0",
+
+    # === Source-installed packages ===
+    "segment-anything",
+    "groundingdino",
+]
+
+[project.optional-dependencies]
+dev = [
+    "debugpy>=1.8.0",
+]
+onnx = [
+    "onnx>=1.14.0",
+    "onnxruntime-gpu>=1.18.0",
+]
+test = [
+    "pytest>=7.4.0",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-timeout",
+    "pytest-xdist",
+    "mock>=5.1.0",
+    "faker>=19.0.0",
+    "hypothesis>=6.82.0",
+]
+lint = [
+    "ruff",
+    "mypy",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["api*", "core*", "ml_engine*", "cli*", "augmentation*"]
+
+# =============================================================================
+# uv configuration
+# =============================================================================
+
+[tool.uv]
+python-preference = "only-system"
+# GroundingDINO needs torch at build time for CUDA extensions.
+no-build-isolation-package = ["groundingdino"]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }
+segment-anything = { path = "deps/segment_anything", editable = true }
+groundingdino = { path = "GroundingDINO", editable = true }
+
+# =============================================================================
+# Tool configuration
+# =============================================================================
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

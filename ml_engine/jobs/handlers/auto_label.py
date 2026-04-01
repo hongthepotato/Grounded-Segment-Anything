@@ -47,6 +47,7 @@ class AutoLabelHandler(JobHandler):
         from ml_engine.inference import (
             AutoLabeler,
             AutoLabelerConfig,
+            DetectionThresholds,
             COCOExporter,
             visualize_detections,
         )
@@ -91,9 +92,11 @@ class AutoLabelHandler(JobHandler):
 
         # Create AutoLabeler config
         labeler_config = AutoLabelerConfig(
-            box_threshold=box_threshold,
-            text_threshold=text_threshold,
-            nms_threshold=nms_threshold,
+            thresholds=DetectionThresholds(
+                box=box_threshold,
+                text=text_threshold,
+                nms=nms_threshold,
+            ),
             output_mode=output_mode,
             device="cuda"
         )
@@ -104,7 +107,6 @@ class AutoLabelHandler(JobHandler):
         # Track progress
         show_boxes = output_mode in ("boxes", "both")
         show_masks = output_mode in ("masks", "both")
-        total_images = len(image_paths)
         annotation_count = 0
 
         # Progress callback for AutoLabeler

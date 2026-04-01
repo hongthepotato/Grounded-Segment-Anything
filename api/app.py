@@ -30,6 +30,7 @@ from api.routes.websocket import router as websocket_router
 from api.routes.exports import router as exports_router
 from api.schemas import success_response, error_response
 from api.routes.autolabel import router as autolabel_router
+from api.routes.distillation import router as distillation_router
 from ml_engine.jobs import get_job_manager
 from core.logging_config import configure_logging, get_logger
 
@@ -94,6 +95,7 @@ API for managing ML training jobs and auto-labeling.
 
 ### Jobs
 - `POST /api/jobs` - Submit new job
+- `POST /api/distillation` - Submit student distillation job (convenience)
 - `GET /api/jobs` - List jobs with filtering
 - `GET /api/jobs/{id}` - Get job details
 - `DELETE /api/jobs/{id}` - Cancel job
@@ -140,6 +142,7 @@ app.include_router(queue_router)
 app.include_router(websocket_router)
 app.include_router(exports_router)
 app.include_router(autolabel_router)
+app.include_router(distillation_router)
 
 
 # =============================================================================

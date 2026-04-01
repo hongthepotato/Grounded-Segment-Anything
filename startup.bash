@@ -1,30 +1,64 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-export TOKENIZERS_PARALLELISM=false
+set -euo pipefail
 
-mkdir -p logs
+export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+export REDIS_URL="${REDIS_URL:-redis://redis:6379}"
 
-# 启动 Redis (如果没运行)
-if ! pgrep -x "redis-server" > /dev/null; then
-    redis-server --daemonize yes
-    echo " Redis started"
+mkdir -p logs data/models/pretrained
+
+if [ -x "scripts/download_models.sh" ]; then
+    echo "Checking pretrained model files..."
+    ./scripts/download_models.sh
 fi
 
-# 启动 FastAPI (后台)
-nohup uvicorn api.app:app --host 0.0.0.0 --port 8080 >> logs/api.log 2>&1 &
-echo " FastAPI started on :8080"
+# Keep child PIDs so we can stop everything cleanly on container shutdown.
+PIDS=()
 
-# 自动检测GPU数量并启动Workers
-GPU_COUNT=$(nvidia-smi -L | wc -l)
-echo " Detected $GPU_COUNT GPUs"
+cleanup() {
+    echo "Stopping services..."
+    for pid in "${PIDS[@]:-}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+    wait || true
+    echo "All services stopped."
+}
 
-for gpu_id in $(seq 0 $((GPU_COUNT - 1))); do
-    nohup python -m ml_engine.jobs.worker --gpu $gpu_id >> logs/worker_$gpu_id.log 2>&1 &
-    echo " Worker started on GPU $gpu_id"
-done
+trap cleanup SIGINT SIGTERM
+
+uvicorn api.app:app --host 0.0.0.0 --port 8080 >> logs/api.log 2>&1 &
+API_PID=$!
+PIDS+=("$API_PID")
+echo "FastAPI started on :8080 (pid=$API_PID)"
+
+GPU_COUNT=0
+if command -v nvidia-smi >/dev/null 2>&1; then
+    GPU_COUNT="$(nvidia-smi -L | wc -l | tr -d ' ')"
+fi
+if [ -n "${GPU_WORKERS:-}" ] && [ "${GPU_WORKERS}" -lt "${GPU_COUNT}" ]; then
+    GPU_COUNT="${GPU_WORKERS}"
+fi
+echo "Detected ${GPU_COUNT} GPU worker(s)"
+
+if [ "${GPU_COUNT}" -gt 0 ]; then
+    for gpu_id in $(seq 0 $((GPU_COUNT - 1))); do
+        python -m ml_engine.jobs.worker --redis-url "${REDIS_URL}" --gpu "$gpu_id" >> "logs/worker_${gpu_id}.log" 2>&1 &
+        worker_pid=$!
+        PIDS+=("$worker_pid")
+        echo "Worker started on GPU ${gpu_id} (pid=${worker_pid})"
+    done
+else
+    echo "No GPU detected; worker processes are not started."
+fi
 
 echo ""
-echo " All services running!"
-echo "   API:  http://localhost:8080/docs"
-echo "   Workers: $GPU_COUNT (GPU 0-$((GPU_COUNT - 1)))"
-echo "   Logs: tail -f logs/*.log"
+echo "All services running."
+echo "  API:  http://localhost:8080/docs"
+echo "  Redis URL: ${REDIS_URL}"
+echo "  Workers: ${GPU_COUNT}"
+echo "  Logs: tail -f logs/*.log"
+
+wait -n
+cleanup

@@ -1,10 +1,12 @@
 """
-Auto-labeling service using Grounding DINO + MobileSAM.
+Auto-labeling service using Grounding DINO + segmenter (MobileSAM or SAM-HQ).
 
 This module provides automatic annotation generation for images using:
 1. Grounding DINO: Text-prompted object detection (text -> boxes)
 2. NMS: Non-Maximum Suppression to filter duplicate detections
-3. MobileSAM: Box-prompted segmentation (boxes -> masks)
+3. Segmenter: Box-prompted segmentation (boxes -> masks)
+   - MobileSAM: lightweight pretrained segmenter (default)
+   - SAM-HQ: fine-tuned segmenter with LoRA adapters
 
 This is the coordinator class that delegates to:
 - detectors/ for object detection
@@ -31,8 +33,10 @@ from ml_engine.inference.config import (
     OUTPUT_MASKS_ONLY,
     OUTPUT_BOTH,
 )
-from ml_engine.inference.detectors.grounding_dino import GroundingDINODetector
-from ml_engine.inference.segmenters.mobile_sam import MobileSAMSegmenter
+from core.constants import transform_image_path
+from ml_engine.inference.detectors.base import DetectorProtocol
+from ml_engine.inference.segmenters.base import SegmenterProtocol
+from ml_engine.inference.model_factory import InferenceModelFactory
 
 logger = logging.getLogger(__name__)
 
@@ -68,31 +72,25 @@ class AutoLabeler:
             config: Configuration object. If None, uses defaults.
         """
         self.config = config or AutoLabelerConfig()
+        self._factory = InferenceModelFactory(device=self.config.device)
 
         # Initialize detector and segmenter (lazy loading)
-        self._detector: Optional[GroundingDINODetector] = None
-        self._segmenter: Optional[MobileSAMSegmenter] = None
+        self._detector: Optional[DetectorProtocol] = None
+        self._segmenter: Optional[SegmenterProtocol] = None
 
         logger.info("AutoLabeler initialized (device: %s, mode: %s)",
                    self.config.device, self.config.output_mode)
 
-    def _get_detector(self) -> GroundingDINODetector:
+    def _get_detector(self) -> DetectorProtocol:
         """Get or create detector instance."""
         if self._detector is None:
-            self._detector = GroundingDINODetector(
-                config_path=self.config.grounding_dino_config,
-                checkpoint_path=self.config.grounding_dino_checkpoint,
-                device=self.config.device
-            )
+            self._detector = self._factory.create_detector(self.config.detector)
         return self._detector
 
-    def _get_segmenter(self) -> MobileSAMSegmenter:
-        """Get or create segmenter instance."""
+    def _get_segmenter(self) -> SegmenterProtocol:
+        """Get or create segmenter instance based on config."""
         if self._segmenter is None:
-            self._segmenter = MobileSAMSegmenter(
-                checkpoint_path=self.config.mobile_sam_checkpoint,
-                device=self.config.device
-            )
+            self._segmenter = self._factory.create_segmenter(self.config.segmenter)
         return self._segmenter
 
     def label_images(
@@ -124,7 +122,7 @@ class AutoLabeler:
                 - image_info: Dict with file_name, width, height
         """
         if len(image_paths) == 0:
-            return []
+            raise ValueError("No image found for carrying out auto-labeling")
 
         detector = self._get_detector()
         needs_masks = self.config.output_mode in (OUTPUT_MASKS_ONLY, OUTPUT_BOTH)
@@ -132,10 +130,11 @@ class AutoLabeler:
 
         results = []
         total_images = len(image_paths)
+        logger.info("Starting sequential inference on %d images (mode=%s)",
+                     total_images, self.config.output_mode)
 
-        # Sequential processing - one image at a time
-        for i, image_path in enumerate(image_paths):
-            # Load image
+        transformed_image_paths = [transform_image_path(image_path) for image_path in image_paths]
+        for i, image_path in enumerate(transformed_image_paths):
             image_bgr = cv2.imread(image_path)
             if image_bgr is None:
                 logger.warning("Could not load image: %s", image_path)
@@ -143,15 +142,13 @@ class AutoLabeler:
                 continue
 
             height, width = image_bgr.shape[:2]
-            file_name = os.path.basename(image_path)
 
             # Single-image detection
             detection = detector.detect(
                 image=image_bgr,
                 prompts=class_prompts,
-                box_threshold=self.config.box_threshold,
-                text_threshold=self.config.text_threshold,
-                nms_threshold=self.config.nms_threshold
+                box_threshold=self.config.thresholds.box,
+                nms_threshold=self.config.thresholds.nms
             )
 
             # Convert boxes to COCO format [x, y, width, height]
@@ -166,6 +163,8 @@ class AutoLabeler:
                 image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
                 masks = segmenter.segment(image_rgb, detection.boxes_xyxy)
 
+            file_name = image_paths[i]
+            base_name = os.path.basename(file_name)
             # Build result
             result = {
                 'class_ids': detection.class_ids.tolist() if len(detection.class_ids) > 0 else [],
@@ -185,9 +184,14 @@ class AutoLabeler:
 
             results.append(result)
 
-            # Report progress
+            n_det = len(result.get('class_ids', []))
+            n_mask = len(result.get('masks', []))
+            if (i + 1) % 10 == 0 or (i + 1) == total_images:
+                logger.info("[%d/%d] %s — %d detections, %d masks",
+                            i + 1, total_images, base_name, n_det, n_mask)
+
             if progress_callback:
-                progress_callback(i + 1, total_images, f"Processed {file_name}")
+                progress_callback(i + 1, total_images, f"Processed {base_name}")
 
         logger.info("Labeled %d images", len(results))
         return results

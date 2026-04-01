@@ -23,6 +23,14 @@ distillation:
   # Knowledge distillation parameters
   temperature: 4.0        # Temperature for soft targets
   alpha: 0.5              # Balance between KD loss and task loss
+
+  # Pseudo-label inference policy
+  pseudo_label:
+    output_mode: "both"
+    thresholds:
+      box: 0.9
+      text: 0.9
+      nms: 0.7
   
   # Training hyperparameters
   training:
@@ -76,5 +84,3 @@ distillation:
     interval: 10
     save_best: true
     metric: "mAP50"      # Primary metric for student models
-
-

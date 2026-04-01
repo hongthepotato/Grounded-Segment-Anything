@@ -1,89 +1,67 @@
-# Multi-stage Dockerfile for Training Job Manager
-#
-# Targets:
-#   - api: FastAPI server
-#   - worker: Training worker with GPU support
-#
-# Build:
-#   docker build --target api -t training-api .
-#   docker build --target worker -t training-worker .
-
-# Base image with Python and system dependencies
-FROM python:3.10-slim as base
+# ============================================================
+# Stage 1: builder — compile CUDA extensions, install all deps
+# ============================================================
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-dev \
+    python3.10-venv \
+    python3-pip \
     build-essential \
     git \
     curl \
+    ca-certificates \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY requirements.txt .
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-# Install base Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV UV_LINK_MODE=copy
+ENV CUDA_HOME=/usr/local/cuda
+ENV TORCH_CUDA_ARCH_LIST="8.9"
 
-# Install additional dependencies for job manager
-RUN pip install --no-cache-dir \
-    redis>=4.5.0 \
-    fastapi>=0.100.0 \
-    uvicorn[standard]>=0.22.0 \
-    pydantic>=2.0.0 \
-    websockets>=11.0
+COPY pyproject.toml uv.lock ./
+COPY deps/ deps/
+COPY GroundingDINO/ GroundingDINO/
 
-# Copy source code
+RUN uv sync --frozen --no-editable --no-install-project
+
 COPY . .
+RUN uv sync --frozen --no-editable
 
-# =====================================================================
-# API Server target
-# =====================================================================
-FROM base as api
-
-# Expose API port
-EXPOSE 8080
-
-# Default command
-CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8080"]
-
-# =====================================================================
-# Worker target (with GPU support)
-# =====================================================================
-FROM nvidia/cuda:11.8-runtime-ubuntu22.04 as worker-base
+# ============================================================
+# Stage 2: runtime — lean image with only what's needed
+# ============================================================
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 WORKDIR /app
 
-# Install Python and system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
-    python3-pip \
-    python3-dev \
-    build-essential \
-    git \
+    python3.10-venv \
+    redis-tools \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgl1 \
+    libxcb1 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
-# Make python3 default
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /app /app
 
-# Copy requirements
-COPY requirements.txt .
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH=/app
+ENV TOKENIZERS_PARALLELISM=false
 
-# Install Python dependencies (including PyTorch with CUDA)
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-RUN pip install --no-cache-dir -r requirements.txt
+EXPOSE 8080
 
-# Install job manager dependencies
-RUN pip install --no-cache-dir \
-    redis>=4.5.0 \
-    fastapi>=0.100.0 \
-    pydantic>=2.0.0
-
-# Copy source code
-COPY . .
-
-FROM worker-base as worker
-
-# Default command
-CMD ["python", "-m", "ml_engine.jobs", "--gpu", "0"]
+CMD ["bash", "startup.bash"]

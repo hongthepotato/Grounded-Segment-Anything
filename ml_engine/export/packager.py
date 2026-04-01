@@ -33,47 +33,30 @@ def create_export_package(
     training_info: Optional[Dict[str, Any]] = None
 ) -> Path:
     """
-    Create a downloadable ZIP package with model and inference scripts.
-    
-    The package includes:
-    - merged_model.pth: Model weights (merged LoRA)
-    - inference.py: Ready-to-run inference script
-    - README.md: Usage instructions
-    - requirements.txt: Python dependencies
-    - class_names.txt: Classes the model was trained on
-    
+    Create a downloadable ZIP package with merged model weights and docs.
+
     Args:
-        model: GroundingDINOLoRA model to export
-        output_dir: Directory to save the package
-        class_names: List of class names used in training
-        model_name: Name prefix for the model (default: grounding_dino)
-        training_info: Optional training metadata (epochs, mAP, etc.)
-        
+        model: Model with LoRA adapters (GroundingDINOLoRA or SAMHQLoRA)
+        output_dir: Experiment directory
+        class_names: Class names used in training
+        model_name: Model identifier ("grounding_dino" or "sam")
+        training_info: Optional training metadata (epochs, metrics, etc.)
+
     Returns:
         Path to the created ZIP file
-        
-    Example:
-        >>> package_path = create_export_package(
-        ...     model=trained_model,
-        ...     output_dir=Path("exports"),
-        ...     class_names=["dog", "cat", "car"],
-        ...     training_info={"epochs": 50, "mAP50": 0.85}
-        ... )
     """
     output_dir = Path(output_dir)
     exports_dir = output_dir / "exports"
     exports_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create temporary directory for package contents
     package_dir = exports_dir / f"{model_name}_package"
     if package_dir.exists():
         shutil.rmtree(package_dir)
     package_dir.mkdir(parents=True)
 
-    logger.info("Creating export package in: %s", package_dir)
+    logger.info("Creating %s export package in: %s", model_name, package_dir)
 
-    # 1. Merge LoRA weights and save model
-    logger.info("Step 1/5: Merging LoRA weights...")
+    logger.info("Step 1/4: Merging LoRA weights...")
     merged_model = merge_lora_weights(model)
 
     model_path = package_dir / "merged_model.pth"
@@ -81,41 +64,33 @@ def create_export_package(
         model=merged_model,
         output_path=model_path,
         class_names=class_names,
-        extra_metadata=training_info
+        extra_metadata=training_info,
+        model_name=model_name,
     )
 
-    # 2. Copy inference script
-    logger.info("Step 2/5: Adding inference script...")
-    inference_template = TEMPLATES_DIR / "inference_template.py"
+    logger.info("Step 2/4: Adding inference script...")
+    template_name = f"{model_name}_inference_template.py"
+    inference_template = TEMPLATES_DIR / template_name
+    if not inference_template.exists():
+        inference_template = TEMPLATES_DIR / "inference_template.py"
     if inference_template.exists():
         shutil.copy(inference_template, package_dir / "inference.py")
     else:
-        logger.warning("Inference template not found: %s", inference_template)
-        _create_minimal_inference_script(package_dir / "inference.py")
+        _create_minimal_inference_script(package_dir / "inference.py", model_name)
 
-    # 3. Create README with filled-in values
-    logger.info("Step 3/5: Generating README...")
+    logger.info("Step 3/4: Generating README...")
     _create_readme(
         output_path=package_dir / "README.md",
         class_names=class_names,
-        training_info=training_info
+        training_info=training_info,
+        model_name=model_name,
     )
 
-    # 4. Copy requirements
-    logger.info("Step 4/5: Adding requirements...")
-    requirements_template = TEMPLATES_DIR / "requirements.txt"
-    if requirements_template.exists():
-        shutil.copy(requirements_template, package_dir / "requirements.txt")
-    else:
-        _create_requirements(package_dir / "requirements.txt")
-
-    # 5. Create class_names.txt
-    logger.info("Step 5/5: Saving class names...")
+    logger.info("Step 4/4: Saving class names...")
     with open(package_dir / "class_names.txt", "w", encoding="utf-8") as f:
         f.write("\n".join(class_names))
 
-    # Create ZIP archive
-    zip_path = exports_dir / "model_package.zip"
+    zip_path = exports_dir / f"{model_name}_package.zip"
     logger.info("Creating ZIP archive: %s", zip_path)
 
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -124,38 +99,39 @@ def create_export_package(
                 arcname = file_path.relative_to(package_dir)
                 zipf.write(file_path, arcname)
 
-    # Get ZIP size
     zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
     logger.info("Export package created: %s (%.1f MB)", zip_path, zip_size_mb)
 
-    # Clean up temporary directory (keep ZIP only)
     shutil.rmtree(package_dir)
-
     return zip_path
 
 
 def _create_readme(
     output_path: Path,
     class_names: List[str],
-    training_info: Optional[Dict[str, Any]] = None
+    training_info: Optional[Dict[str, Any]] = None,
+    model_name: str = "grounding_dino",
 ) -> None:
     """Create README with filled-in template values."""
-    readme_template = TEMPLATES_DIR / "README_template.md"
+    readme_template = TEMPLATES_DIR / f"{model_name}_README_template.md"
+    if not readme_template.exists():
+        readme_template = TEMPLATES_DIR / "README_template.md"
 
     if readme_template.exists():
         content = readme_template.read_text()
     else:
-        content = _get_minimal_readme()
+        content = _get_minimal_readme(model_name)
 
-    # Fill in template values
     training_info = training_info or {}
 
     replacements = {
+        "{model_name}": model_name,
         "{class_names}": ", ".join(class_names),
         "{num_classes}": str(len(class_names)),
         "{training_date}": training_info.get("training_date", "N/A"),
         "{epochs}": str(training_info.get("epochs", "N/A")),
         "{map50}": f"{training_info.get('mAP50', 0):.1%}" if training_info.get('mAP50') else "N/A",
+        "{miou}": f"{training_info.get('mIoU', 0):.1%}" if training_info.get('mIoU') else "N/A",
         "{generation_date}": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -165,25 +141,11 @@ def _create_readme(
     output_path.write_text(content)
 
 
-def _create_requirements(output_path: Path) -> None:
-    """Create minimal requirements file."""
-    content = """# Requirements for Grounding DINO Inference
-torch>=2.0.0
-torchvision>=0.15.0
-numpy>=1.21.0
-pillow>=9.0.0
-transformers>=4.25.0
-opencv-python>=4.7.0
-"""
-    output_path.write_text(content)
-
-
-def _create_minimal_inference_script(output_path: Path) -> None:
+def _create_minimal_inference_script(output_path: Path, model_name: str = "grounding_dino") -> None:
     """Create minimal inference script if template not found."""
-    content = '''#!/usr/bin/env python3
+    content = f'''#!/usr/bin/env python3
 """
-Grounding DINO Inference Script
-Usage: python inference.py --image photo.jpg --text "dog . cat"
+{model_name} Inference Script
 """
 import argparse
 import torch
@@ -191,14 +153,11 @@ import torch
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", required=True)
-    parser.add_argument("--text", default="object")
     parser.add_argument("--model", default="merged_model.pth")
     args = parser.parse_args()
-    
-    # Load model
+
     checkpoint = torch.load(args.model, map_location="cpu")
-    print(f"Model loaded. Classes: {checkpoint.get('class_names', [])}")
-    print("For full inference, install GroundingDINO and update this script.")
+    print(f"Model loaded ({model_name}). Classes: {{checkpoint.get('class_names', [])}}")
 
 if __name__ == "__main__":
     main()
@@ -206,31 +165,21 @@ if __name__ == "__main__":
     output_path.write_text(content)
 
 
-def _get_minimal_readme() -> str:
+def _get_minimal_readme(model_name: str = "grounding_dino") -> str:
     """Return minimal README content."""
-    return """# Fine-tuned Grounding DINO Model
+    return f"""# Fine-tuned {model_name} Model
 
 ## Quick Start
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Clone GroundingDINO:
-   ```bash
-   git clone https://github.com/IDEA-Research/GroundingDINO.git
-   cd GroundingDINO && pip install -e .
-   ```
-
-3. Run inference:
-   ```bash
-   python inference.py --image your_image.jpg
-   ```
+```bash
+pip install torch torchvision
+python inference.py --image your_image.jpg
+```
 
 ## Model Info
-- Trained classes: {class_names}
-- Training date: {training_date}
+- Model: {{model_name}}
+- Trained classes: {{class_names}}
+- Epochs: {{epochs}}
 
-Generated on {generation_date}
+Generated on {{generation_date}}
 """

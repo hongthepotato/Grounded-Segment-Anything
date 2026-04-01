@@ -40,7 +40,7 @@ class TeacherTrainingHandler(JobHandler):
             cancel_event: Cancellation signal
         """
         # Late imports - these load in subprocess, not parent
-        from ml_engine.training.teacher_trainer import TeacherTrainer, TrainingCancelledException
+        from ml_engine.training import Trainer, TrainingCancelledException
         from ml_engine.data.manager import DataManager
         from core.constants import transform_image_path
 
@@ -78,7 +78,7 @@ class TeacherTrainingHandler(JobHandler):
             return cancel_event.is_set()
 
         # Create and run trainer
-        trainer = TeacherTrainer(
+        trainer = Trainer(
             data_manager=data_manager,
             output_dir=output_dir,
             config=config,

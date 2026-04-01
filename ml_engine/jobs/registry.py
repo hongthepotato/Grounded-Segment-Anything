@@ -10,12 +10,14 @@ from typing import Dict, Type
 from ml_engine.jobs.handlers.base import JobHandler
 from ml_engine.jobs.handlers.teacher import TeacherTrainingHandler
 from ml_engine.jobs.handlers.auto_label import AutoLabelHandler
+from ml_engine.jobs.handlers.distillation import StudentDistillationHandler
 
 
 # Registry of job type -> handler class
 JOB_HANDLERS: Dict[str, Type[JobHandler]] = {
     "teacher_training": TeacherTrainingHandler,
     "auto_label": AutoLabelHandler,
+    "student_distillation": StudentDistillationHandler,
 }
 
 

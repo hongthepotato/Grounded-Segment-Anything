@@ -357,21 +357,28 @@ def _job_entry_point(
         result_queue: Queue to send final result
         cancel_event: Event to check for cancellation
     """
-    # CRITICAL: Set up sys.path BEFORE any imports
-    # Subprocess with 'spawn' starts fresh, doesn't inherit sys.path
+    # Set up sys.path for subprocess ('spawn' context starts fresh).
+    # Only add project root for app code (api, core, ml_engine, cli).
+    # Do NOT add GroundingDINO/deps source dirs — those are installed as
+    # proper packages in site-packages (with compiled CUDA extensions).
     from pathlib import Path
-    project_root = Path(__file__).parent.parent.parent
-    deps_segment_anything = project_root / "deps" / "segment_anything"
-    deps_groundingdino = project_root / "GroundingDINO"
-    deps_efficientsam = project_root / "EfficientSAM"
-
-    for path in [str(project_root), str(deps_segment_anything), str(deps_groundingdino), str(deps_efficientsam)]:
-        if path not in sys.path:
-            sys.path.insert(0, path)
+    project_root = str(Path(__file__).parent.parent.parent)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
 
     # CRITICAL: Set CUDA_VISIBLE_DEVICES BEFORE any torch imports
     # This ensures PyTorch only sees the assigned GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    if os.environ.get("DEBUG"):
+        try:
+            import debugpy
+            debugpy.listen(("0.0.0.0", 5678))
+            print("[DEBUG] debugpy listening on :5678, waiting for client...", flush=True)
+            debugpy.wait_for_client()
+            print("[DEBUG] debugger attached, continuing.", flush=True)
+        except ImportError:
+            pass
 
     # Setup logging for subprocess using centralized configuration
     # This saves logs to {output_dir}/logs/training_{timestamp}.log
