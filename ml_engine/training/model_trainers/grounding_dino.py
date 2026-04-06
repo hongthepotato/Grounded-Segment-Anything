@@ -7,12 +7,13 @@ using LoRA (Low-Rank Adaptation) for memory-efficient training.
 
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
 
 from ml_engine.models.teacher.grounding_dino_lora import load_grounding_dino_with_lora
+from ml_engine.training.config_types import GroundingDINOConfig, LoopConfig
 from ml_engine.training.losses import build_criterion
 from ml_engine.training.dino_utils import build_positive_map, build_detr_targets
 from .base import BaseModelTrainer
@@ -44,20 +45,18 @@ class GroundingDINOTrainer(BaseModelTrainer):
     
     def __init__(
         self,
-        config: Dict[str, Any],
+        config: GroundingDINOConfig,
+        loop: LoopConfig,
         device: torch.device,
         output_dir: Path,
         dataset_info: Dict[str, Any]
     ):
         """
         Initialize the Grounding DINO trainer.
-        
+
         Args:
-            config: Model configuration with keys:
-                - model.base_checkpoint: Path to pretrained weights
-                - lora: LoRA configuration (r, lora_alpha, target_modules, lora_dropout)
-                - freeze_backbone: Whether to freeze the backbone
-                - learning_rate: Learning rate
+            config: Typed Grounding DINO model configuration
+            loop: Shared training loop config (epochs, optimizer settings)
             device: Device to train on
             output_dir: Root output directory
             dataset_info: Dataset metadata with class_mapping, category_id_to_index
@@ -65,36 +64,22 @@ class GroundingDINOTrainer(BaseModelTrainer):
         # Store class names before calling super().__init__
         self.class_names = list(dataset_info['class_mapping'].values())
         self.category_id_to_index = dataset_info['category_id_to_index']
-        
+
         # Cache for positive map (computed once)
         self._positive_map_cache: Optional[torch.Tensor] = None
         self._positive_map_max_len: Optional[int] = None
-        
-        super().__init__(config, device, output_dir, dataset_info)
+
+        super().__init__(config, loop, device, output_dir, dataset_info)
     
     def _load_model(self) -> nn.Module:
         """Load Grounding DINO with LoRA adapters."""
-        model_section = self.config.get('model', {})
-        base_ckpt = model_section.get(
-            'base_checkpoint',
-            'data/models/pretrained/groundingdino_swint_ogc.pth'
-        )
-        
-        # LoRA config is required
-        if 'lora' not in self.config:
-            raise ValueError(
-                "LoRA training requires 'lora' config!\n"
-                "Expected keys: r, lora_alpha, target_modules, lora_dropout"
-            )
-        
         model = load_grounding_dino_with_lora(
-            base_checkpoint=base_ckpt,
-            lora_config=self.config['lora'],
-            freeze_backbone=self.config.get('freeze_backbone', True),
-            freeze_bbox_embed=self.config.get('freeze_bbox_embed', False),
-            bert_model_path=self.config.get('bert_model_path', None)
+            base_checkpoint=self.config.base_checkpoint,
+            lora_config=self.config.lora.to_peft_dict(),
+            freeze_backbone=self.config.freeze_backbone,
+            freeze_bbox_embed=self.config.freeze_bbox_embed,
+            bert_model_path=self.config.bert_model_path,
         )
-        
         return model
     
     def _create_criterion(self) -> nn.Module:

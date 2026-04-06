@@ -4,12 +4,14 @@ Teacher training job handler.
 Handles the teacher_training job type for fine-tuning GroundingDINO and SAM models.
 """
 
+import dataclasses
 import logging
 import multiprocessing as mp
 import queue
 from typing import Dict, Any
 
 from ml_engine.jobs.handlers.base import JobHandler, TrainingCancelledError
+from ml_engine.training.config_types import TeacherTrainingConfig
 
 
 class TeacherTrainingHandler(JobHandler):
@@ -95,62 +97,111 @@ class TeacherTrainingHandler(JobHandler):
         self,
         data_manager,
         job_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    ) -> TeacherTrainingConfig:
         """
-        Build complete teacher training config from defaults + job overrides.
-        
+        Build typed teacher training config from defaults + job overrides.
+
         Args:
             data_manager: DataManager instance with dataset info
             job_config: User-provided job configuration
-            
+
         Returns:
-            Complete training configuration dictionary
+            TeacherTrainingConfig with typed fields for all training parameters
         """
         from core.config import load_config, merge_configs
         from core.constants import DEFAULT_CONFIGS_DIR
+        from ml_engine.training.config_types import (
+            ConfigurationError, GroundingDINOConfig, LoopConfig, LoraConfig,
+            SAMConfig, TeacherTrainingConfig,
+        )
 
         logger = logging.getLogger(__name__)
 
-        # Load shared training defaults
-        shared_config_path = DEFAULT_CONFIGS_DIR / 'teacher_training.yaml'
-        shared_config = load_config(str(shared_config_path))
-        logger.info("Loaded shared training config from %s", shared_config_path)
+        shared_raw = load_config(str(DEFAULT_CONFIGS_DIR / 'teacher_training.yaml'))
+        logger.info("Loaded shared training config")
 
-        # Load model-specific configs based on dataset
         dataset_info = data_manager.get_dataset_info()
         required_models = data_manager.get_required_models()
         logger.info("Required teacher models: %s", required_models)
 
-        model_configs = {}
-        if 'grounding_dino' in required_models:
-            dino_config_path = DEFAULT_CONFIGS_DIR / 'teacher_grounding_dino_lora.yaml'
-            model_configs['grounding_dino'] = load_config(str(dino_config_path))
-            logger.info("Loaded Grounding DINO config")
-
-        if 'sam' in required_models:
-            sam_config_path = DEFAULT_CONFIGS_DIR / 'teacher_sam_lora.yaml'
-            model_configs['sam'] = load_config(str(sam_config_path))
-            logger.info("Loaded SAM config")
-
-        if not model_configs:
-            raise ValueError("No models to train! Dataset has no valid annotations.")
-
-        # Build base config
-        config = {
-            **shared_config['training'],
-            'num_classes': dataset_info['num_classes'],
-            'class_names': list(dataset_info['class_mapping'].values()),
-            'class_mapping': dataset_info['class_mapping'],
-            'augmentation': shared_config.get('augmentation'),
-            'evaluation': shared_config.get('evaluation'),
-            'checkpointing': shared_config.get('checkpointing'),
-            'models': model_configs
-        }
-
-        # Merge user overrides
         user_overrides = job_config.get("training", {})
         if user_overrides:
-            config = merge_configs(config, user_overrides)
+            shared_raw = merge_configs(shared_raw, user_overrides)
             logger.info("Applied user config overrides")
 
-        return config
+        # Build immutable loop config from shared training section
+        # Unknown YAML keys are silently discarded — intentional to allow YAML evolution
+        try:
+            loop_field_names = {f.name for f in dataclasses.fields(LoopConfig)}
+            loop = LoopConfig(**{k: v for k, v in shared_raw['training'].items()
+                                 if k in loop_field_names})
+        except (TypeError, KeyError) as e:
+            raise ConfigurationError(
+                f"Failed to build LoopConfig from teacher_training.yaml: {e}"
+            ) from e
+
+        lora_field_names = {f.name for f in dataclasses.fields(LoraConfig)}
+        models = {}
+
+        if 'grounding_dino' in required_models:
+            raw = load_config(str(DEFAULT_CONFIGS_DIR / 'teacher_grounding_dino_lora.yaml'))
+            if 'models' in user_overrides and 'grounding_dino' in user_overrides['models']:
+                raw = merge_configs(raw, user_overrides['models']['grounding_dino'])
+            try:
+                models['grounding_dino'] = GroundingDINOConfig(
+                    lora=LoraConfig(**{k: v for k, v in raw['lora'].items()
+                                       if k in lora_field_names}),
+                    learning_rate=raw['learning_rate'],
+                    base_checkpoint=raw['model']['base_checkpoint'],
+                    config_path=raw['model']['config_path'],
+                    freeze_backbone=raw.get('freeze_backbone', True),
+                    freeze_bbox_embed=raw.get('freeze_bbox_embed', False),
+                    bert_model_path=raw.get('bert_model_path'),
+                    momentum=raw.get('momentum', 0.9),
+                    evaluation_metric=raw.get('evaluation', {}).get('metric', 'mAP50'),
+                )
+                logger.info("Loaded Grounding DINO config")
+            except (TypeError, KeyError) as e:
+                raise ConfigurationError(
+                    f"Failed to build GroundingDINOConfig from teacher_grounding_dino_lora.yaml: {e}"
+                ) from e
+
+        if 'sam' in required_models:
+            raw = load_config(str(DEFAULT_CONFIGS_DIR / 'teacher_sam_lora.yaml'))
+            if 'models' in user_overrides and 'sam' in user_overrides['models']:
+                raw = merge_configs(raw, user_overrides['models']['sam'])
+            try:
+                models['sam'] = SAMConfig(
+                    lora=LoraConfig(**{k: v for k, v in raw['lora'].items()
+                                       if k in lora_field_names}),
+                    learning_rate=raw['learning_rate'],
+                    base_checkpoint=raw['model']['base_checkpoint'],
+                    model_type=raw['model'].get('model_type', 'vit_b'),
+                    image_encoder_mode=raw.get('image_encoder_mode', 'lora'),
+                    prompt_encoder_mode=raw.get('prompt_encoder_mode', 'frozen'),
+                    mask_decoder_mode=raw.get('mask_decoder_mode', 'full'),
+                    mask_decoder_lr_multiplier=raw.get('mask_decoder_lr_multiplier', 0.1),
+                    prompt_type=raw.get('prompt_type', 'boxes'),
+                    multimask_output=raw.get('multimask_output', True),
+                    single_object_sampling=raw.get('training', {}).get('single_object_sampling', True),
+                    evaluation_metric=raw.get('evaluation', {}).get('metric', 'mask_IoU'),
+                )
+                logger.info("Loaded SAM config")
+            except (TypeError, KeyError) as e:
+                raise ConfigurationError(
+                    f"Failed to build SAMConfig from teacher_sam_lora.yaml: {e}"
+                ) from e
+
+        if not models:
+            raise ValueError("No models to train — dataset has no valid annotations.")
+
+        return TeacherTrainingConfig(
+            loop=loop,
+            num_classes=dataset_info['num_classes'],
+            class_names=list(dataset_info['class_mapping'].values()),
+            class_mapping=dataset_info['class_mapping'],
+            models=models,
+            augmentation=shared_raw.get('augmentation'),
+            evaluation=shared_raw.get('evaluation'),
+            checkpointing=shared_raw.get('checkpointing'),
+        )

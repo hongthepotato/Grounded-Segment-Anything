@@ -11,10 +11,11 @@ It coordinates:
 - Test evaluation and export
 """
 
+import dataclasses
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
+from typing import Callable, Dict, Any, Optional
 
 import torch
 from tqdm import tqdm
@@ -26,6 +27,7 @@ from ml_engine.evaluation import PredictionVisualizer
 from ml_engine.evaluation.evaluator import ModelEvaluator
 from ml_engine.evaluation.report import ModelReportGenerator
 from ml_engine.export import create_export_package
+from ml_engine.training.config_types import SAMConfig, TeacherTrainingConfig
 from core.constants import GROUNDING_DINO, SAM
 from core.config import save_config
 from core.log_utils import log_config, log_metrics
@@ -81,18 +83,18 @@ class Trainer:
         self,
         data_manager: DataManager,
         output_dir: str,
-        config: Dict[str, Any],
+        config: TeacherTrainingConfig,
         resume_from: Optional[str] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None
     ):
         """
         Initialize the Trainer.
-        
+
         Args:
             data_manager: DataManager instance with train/val/test splits
             output_dir: Output directory for checkpoints and logs
-            config: Training configuration
+            config: Typed training configuration (TeacherTrainingConfig)
             resume_from: Optional checkpoint path to resume from
             progress_callback: Optional callback for progress reporting
             cancel_check: Optional function that returns True to cancel training
@@ -107,9 +109,10 @@ class Trainer:
         # Create output directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save config for reproducibility
+        # Save config for reproducibility (saved YAML is for human inspection only —
+        # cannot be re-parsed into typed objects; _build_config always reconstructs from YAML defaults)
         config_path = self.output_dir / 'teacher_config.yaml'
-        save_config(config, str(config_path))
+        save_config(config.to_dict(), str(config_path))
         logger.info("Saved config to: %s", config_path)
 
         # Setup device
@@ -141,22 +144,26 @@ class Trainer:
         """Initialize datasets and dataloaders."""
         train_data = self.data_manager.get_split('train')
         val_data = self.data_manager.get_split('val')
-        
+
         # Check SAM single object sampling
-        sam_config = self.config.get('models', {}).get('sam', {})
-        sam_single_object_sampling = sam_config.get('training', {}).get('single_object_sampling', False)
-        
+        sam_model_cfg = self.config.models.get('sam')
+        sam_single_object_sampling = (
+            sam_model_cfg.single_object_sampling
+            if isinstance(sam_model_cfg, SAMConfig)
+            else False
+        )
+
         # Create datasets
         self.train_dataset = DatasetFactory.create_dataset(
             coco_data=train_data,
             image_path_resolver=self.data_manager.get_image_path,
             dataset_info=self.dataset_info,
             model_names=self.required_models,
-            augmentation_config=self.config.get('augmentation'),
+            augmentation_config=self.config.augmentation,
             is_training=True,
             sam_single_object_sampling=sam_single_object_sampling
         )
-        
+
         self.val_dataset = DatasetFactory.create_dataset(
             coco_data=val_data,
             image_path_resolver=self.data_manager.get_image_path,
@@ -166,18 +173,20 @@ class Trainer:
             is_training=False,
             sam_single_object_sampling=False
         )
-        
-        # Create dataloaders
-        batch_size = self.config.get('batch_size', 8)
-        num_workers = self.config.get('num_workers', 4)
-        
+
         self.train_loader = create_dataloader(
-            self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            self.train_dataset,
+            batch_size=self.config.loop.batch_size,
+            shuffle=True,
+            num_workers=self.config.loop.num_workers,
         )
         self.val_loader = create_dataloader(
-            self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
+            self.val_dataset,
+            batch_size=self.config.loop.batch_size,
+            shuffle=False,
+            num_workers=self.config.loop.num_workers,
         )
-        
+
         logger.info("✓ Datasets: %d train, %d val", len(self.train_dataset), len(self.val_dataset))
     
     def _init_trainers(self) -> None:
@@ -189,13 +198,9 @@ class Trainer:
                 raise ValueError(f"Unknown model: {model_name}. Available: {list(TRAINER_REGISTRY.keys())}")
 
             trainer_cls = TRAINER_REGISTRY[model_name]
-            model_config = self.config['models'][model_name]
-
-            # Add shared config values
-            model_config = {**model_config, 'epochs': self.config.get('epochs', 50)}
-
             self.trainers[model_name] = trainer_cls(
-                config=model_config,
+                config=self.config.models[model_name],
+                loop=self.config.loop,
                 device=self.device,
                 output_dir=self.output_dir,
                 dataset_info=self.dataset_info
@@ -205,7 +210,7 @@ class Trainer:
     
     def _init_visualizer(self) -> None:
         """Initialize prediction visualizer."""
-        save_predictions = self.config.get('evaluation', {}).get('save_predictions', False)
+        save_predictions = (self.config.evaluation or {}).get('save_predictions', False)
         if save_predictions:
             self.visualizer = PredictionVisualizer(
                 output_dir=str(self.output_dir / 'predictions'),
@@ -222,12 +227,12 @@ class Trainer:
         Raises:
             TrainingCancelledException: If cancel_check returns True
         """
-        epochs = self.config.get('epochs', 50)
-        
+        epochs = self.config.loop.epochs
+
         logger.info("=" * 60)
         logger.info("Starting Teacher Model Training")
         logger.info("=" * 60)
-        log_config(logger, self.config, "Training Configuration")
+        log_config(logger, self.config.to_dict(), "Training Configuration")
         
         try:
             for epoch in range(epochs):
@@ -243,7 +248,7 @@ class Trainer:
                 train_metrics = self._train_epoch(epoch)
                 
                 # Validate (at specified interval)
-                eval_interval = self.config.get('evaluation', {}).get('interval', 1)
+                eval_interval = (self.config.evaluation or {}).get('interval', 1)
                 if (epoch + 1) % eval_interval == 0:
                     val_metrics = self._validate_epoch(epoch)
                 else:
@@ -267,10 +272,10 @@ class Trainer:
                 if self.progress_callback:
                     self.progress_callback({
                         'current_epoch': epoch + 1,
-                        'total_epochs': epochs,
+                        'total_epochs': self.config.loop.epochs,
                         'train_metrics': train_metrics,
                         'val_metrics': val_metrics,
-                        'message': f"Completed epoch {epoch + 1}/{epochs}"
+                        'message': f"Completed epoch {epoch + 1}/{self.config.loop.epochs}"
                     })
             
             logger.info("=" * 60)
@@ -317,7 +322,7 @@ class Trainer:
                 if step % report_interval == 0:
                     self.progress_callback({
                         'current_epoch': epoch,
-                        'total_epochs': self.config.get('epochs', 50),
+                        'total_epochs': self.config.loop.epochs,
                         'current_step': step + 1,
                         'total_steps': total_steps,
                         'message': f"Epoch {epoch + 1}, Step {step + 1}/{total_steps}"
@@ -398,9 +403,9 @@ class Trainer:
         
         test_loader = create_dataloader(
             test_dataset,
-            batch_size=self.config.get('batch_size', 8),
+            batch_size=self.config.loop.batch_size,
             shuffle=False,
-            num_workers=self.config.get('num_workers', 4)
+            num_workers=self.config.loop.num_workers,
         )
         
         logger.info("Test set: %d images", len(test_dataset))
@@ -408,7 +413,7 @@ class Trainer:
         # Initialize evaluator
         evaluator = ModelEvaluator(
             device=str(self.device),
-            confidence_threshold=self.config.get('evaluation', {}).get('confidence_threshold', 0.3)
+            confidence_threshold=(self.config.evaluation or {}).get('confidence_threshold', 0.3)
         )
         report_generator = ModelReportGenerator()
         class_names = list(self.dataset_info['class_mapping'].values())
@@ -438,12 +443,12 @@ class Trainer:
             else:
                 continue
             
-            # Generate report
+            # Generate report (asdict used here to produce JSON-serializable dict)
             report = report_generator.generate_report(
                 evaluation_results=results,
                 model_name=name,
                 test_set_size=len(test_dataset),
-                extra_info={'config': self.config['models'][name]}
+                extra_info={'config': dataclasses.asdict(self.config.models[name])}
             )
             
             report_path = self.output_dir / 'evaluation' / f'{name}_report.json'
@@ -469,11 +474,12 @@ class Trainer:
         
         for name, trainer in self.trainers.items():
             try:
-                model_config = self.config['models'][name]
+                model_config = self.config.models[name]
+                # Using attribute access here (not asdict) since only scalar fields needed
                 training_info = {
-                    'epochs': self.config.get('epochs'),
-                    'batch_size': self.config.get('batch_size'),
-                    'learning_rate': model_config.get('learning_rate')
+                    'epochs': self.config.loop.epochs,
+                    'batch_size': self.config.loop.batch_size,
+                    'learning_rate': model_config.learning_rate,
                 }
 
                 report_path = self.output_dir / 'evaluation' / f'{name}_report.json'

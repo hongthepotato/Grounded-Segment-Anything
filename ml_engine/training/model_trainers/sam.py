@@ -7,12 +7,13 @@ using LoRA (Low-Rank Adaptation) for memory-efficient training.
 
 import logging
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 import torch
 import torch.nn as nn
 
 from ml_engine.models.teacher.sam_lora import load_sam_hq_with_lora
+from ml_engine.training.config_types import LoopConfig, SAMConfig
 from ml_engine.training.losses import SegmentationLoss
 from .base import BaseModelTrainer
 
@@ -42,61 +43,38 @@ class SAMTrainer(BaseModelTrainer):
     
     def __init__(
         self,
-        config: Dict[str, Any],
+        config: SAMConfig,
+        loop: LoopConfig,
         device: torch.device,
         output_dir: Path,
         dataset_info: Dict[str, Any]
     ):
         """
         Initialize the SAM trainer.
-        
+
         Args:
-            config: Model configuration with keys:
-                - model.base_checkpoint: Path to pretrained weights
-                - model.model_type: Model type (vit_h, vit_l, vit_b)
-                - lora: LoRA configuration
-                - image_encoder_mode: 'lora' or 'frozen'
-                - prompt_encoder_mode: 'frozen' or 'full'
-                - mask_decoder_mode: 'full' or 'frozen'
-                - learning_rate: Learning rate
+            config: Typed SAM model configuration
+            loop: Shared training loop config (epochs, optimizer settings)
             device: Device to train on
             output_dir: Root output directory
             dataset_info: Dataset metadata
         """
-        super().__init__(config, device, output_dir, dataset_info)
-    
+        super().__init__(config, loop, device, output_dir, dataset_info)
+
     def _load_model(self) -> nn.Module:
         """Load SAM-HQ with LoRA adapters."""
-        model_section = self.config.get('model', {})
-        base_ckpt = model_section.get(
-            'base_checkpoint',
-            'data/models/pretrained/sam_vit_h_4b8939.pth'
-        )
-        model_type = model_section.get('model_type', 'vit_h')
-        
-        # LoRA config is required
-        if 'lora' not in self.config:
-            raise ValueError(
-                "LoRA training requires 'lora' config!\n"
-                "Expected keys: r, lora_alpha, target_modules, lora_dropout"
-            )
-        
-        # Get training modes
-        image_encoder_mode = self.config.get('image_encoder_mode', 'lora')
-        prompt_encoder_mode = self.config.get('prompt_encoder_mode', 'frozen')
-        mask_decoder_mode = self.config.get('mask_decoder_mode', 'full')
-        
         model = load_sam_hq_with_lora(
-            base_checkpoint=base_ckpt,
-            model_type=model_type,
-            lora_config=self.config['lora'],
-            image_encoder_mode=image_encoder_mode,
-            prompt_encoder_mode=prompt_encoder_mode,
-            mask_decoder_mode=mask_decoder_mode
+            base_checkpoint=self.config.base_checkpoint,
+            model_type=self.config.model_type,
+            lora_config=self.config.lora.to_peft_dict(),
+            image_encoder_mode=self.config.image_encoder_mode,
+            prompt_encoder_mode=self.config.prompt_encoder_mode,
+            mask_decoder_mode=self.config.mask_decoder_mode,
         )
-        
-        logger.info(f"  Modes: encoder={image_encoder_mode}, prompt={prompt_encoder_mode}, decoder={mask_decoder_mode}")
-        
+        logger.info("  Modes: encoder=%s, prompt=%s, decoder=%s",
+                    self.config.image_encoder_mode,
+                    self.config.prompt_encoder_mode,
+                    self.config.mask_decoder_mode)
         return model
     
     def _create_criterion(self) -> nn.Module:

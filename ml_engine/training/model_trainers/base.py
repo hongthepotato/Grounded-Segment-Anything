@@ -10,16 +10,18 @@ It handles common functionality:
 - LoRA adapter saving
 """
 
+import dataclasses
 import logging
 from datetime import datetime
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional, Union
 
 import torch
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
+from ml_engine.training.config_types import GroundingDINOConfig, LoopConfig, SAMConfig
 from ml_engine.training.training_manager import TrainingManager
 from ml_engine.training.checkpoint_manager import CheckpointManager
 from core.constants import DEFAULT_CONFIGS_DIR
@@ -56,21 +58,24 @@ class BaseModelTrainer(ABC):
 
     def __init__(
         self,
-        config: Dict[str, Any],
+        config: Union[GroundingDINOConfig, SAMConfig],
+        loop: LoopConfig,
         device: torch.device,
         output_dir: Path,
         dataset_info: Dict[str, Any]
     ):
         """
         Initialize the base trainer.
-        
+
         Args:
-            config: Model-specific configuration
+            config: Model-specific typed configuration (GroundingDINOConfig or SAMConfig)
+            loop: Shared training loop config (epochs, batch size, optimizer settings)
             device: Device to train on
             output_dir: Root output directory
             dataset_info: Dataset metadata (class mapping, etc.)
         """
         self.config = config
+        self.loop = loop
         self.device = device
         self.output_dir = output_dir / self.model_name
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -134,9 +139,9 @@ class BaseModelTrainer(ABC):
 
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """Create optimizer for trainable parameters."""
-        lr = self.config.get('learning_rate', 1e-4)
-        weight_decay = self.config.get('weight_decay', 1e-4)
-        optimizer_type = self.config.get('optimizer', 'AdamW')
+        lr = self.config.learning_rate
+        weight_decay = self.loop.weight_decay
+        optimizer_type = self.loop.optimizer
 
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
 
@@ -147,7 +152,7 @@ class BaseModelTrainer(ABC):
                 weight_decay=weight_decay
             )
         elif optimizer_type == 'SGD':
-            momentum = self.config.get('momentum', 0.9)
+            momentum = getattr(self.config, 'momentum', 0.9)  # only on GroundingDINOConfig
             optimizer = torch.optim.SGD(
                 trainable_params,
                 lr=lr,
@@ -162,8 +167,8 @@ class BaseModelTrainer(ABC):
 
     def _create_scheduler(self) -> Optional[torch.optim.lr_scheduler._LRScheduler]:
         """Create learning rate scheduler."""
-        total_epochs = self.config.get('epochs', 50)
-        warmup_epochs = self.config.get('warmup_epochs', 3)
+        total_epochs = self.loop.epochs
+        warmup_epochs = self.loop.warmup_epochs
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
@@ -242,7 +247,7 @@ class BaseModelTrainer(ABC):
             metrics=metrics,
             scheduler=self.scheduler,
             scaler=self.training_manager.scaler,
-            extra_info={'config': self.config}
+            extra_info={'config': dataclasses.asdict(self.config)}
         )
 
         return self.checkpoint_manager.best_epoch == epoch
@@ -308,11 +313,10 @@ class BaseModelTrainer(ABC):
 
 
             from ml_engine.artifacts import AdapterManifest, BaseModelRef, CreateByInfo
-            model_cfg = self.config.get("model", {})
             base_model = BaseModelRef(
-                checkpoint_path=model_cfg.get("base_checkpoint", None),
-                model_type=model_cfg.get("model_type", None),
-                config_path=model_cfg.get("config_path", None)
+                checkpoint_path=self.config.base_checkpoint,
+                model_type=getattr(self.config, 'model_type', None),    # SAMConfig only
+                config_path=getattr(self.config, 'config_path', None)   # GroundingDINOConfig only
             )
             manifest = AdapterManifest(
                 model_family=self.model_name,
