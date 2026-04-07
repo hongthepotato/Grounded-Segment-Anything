@@ -52,6 +52,11 @@ class SubprocessResult:
     cancelled: bool
     error_message: Optional[str] = None
     output_dir: Optional[str] = None
+    outcome: Dict[str, Any] = None  # contents of outcome.json, if written
+
+    def __post_init__(self):
+        if self.outcome is None:
+            self.outcome = {}
 
 
 class TrainingSubprocess:
@@ -273,7 +278,8 @@ class TrainingSubprocess:
             self._result = SubprocessResult(
                 success=True,
                 cancelled=False,
-                output_dir=result_from_queue.get('output_dir') if result_from_queue else self.output_dir
+                output_dir=result_from_queue.get('output_dir') if result_from_queue else self.output_dir,
+                outcome=result_from_queue.get('outcome', {}) if result_from_queue else {},
             )
         elif exit_code == EXIT_CANCELLED:
             self._result = SubprocessResult(
@@ -411,8 +417,13 @@ def _job_entry_point(
             cancel_event=cancel_event,
         )
 
-        # Success
-        result_queue.put({'success': True, 'output_dir': output_dir})
+        # Read outcome.json written by the handler
+        from pathlib import Path
+        import json as _json
+        outcome_path = Path(output_dir) / 'outcome.json'
+        outcome = _json.loads(outcome_path.read_text()) if outcome_path.exists() else {}
+
+        result_queue.put({'success': True, 'output_dir': output_dir, 'outcome': outcome})
         sub_logger.info("Job completed successfully")
         sys.exit(EXIT_SUCCESS)
 

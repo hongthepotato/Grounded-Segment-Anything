@@ -33,6 +33,7 @@ class JobType(str, Enum):
     MODEL_OPTIMIZATION = "model_optimization"
     EVALUATION = "evaluation"
     AUTO_LABEL = "auto_label"
+    EXPERIMENT_LOOP = "experiment_loop"
 
 
 @dataclass
@@ -99,12 +100,60 @@ class JobProgress:
 
 
 @dataclass
+class JobOutcome:
+    """
+    Structured result of a completed job.
+
+    Written to {output_dir}/outcome.json at job completion.
+    Included in the job_completed event so the Coordinator (Stage 1+)
+    can read metrics and artifact paths without touching the filesystem.
+
+    Attributes:
+        status: Terminal status ("completed", "failed", "cancelled")
+        metrics: Final validation metrics from training (e.g. val_mAP50)
+        artifacts: Paths to produced files (checkpoints, evaluation reports)
+        wall_time_seconds: Elapsed time from job start to finish
+        error_message: Set only when status is "failed"
+    """
+    status: str = "completed"
+    metrics: Dict[str, float] = field(default_factory=dict)
+    artifacts: List[str] = field(default_factory=list)
+    wall_time_seconds: float = 0.0
+    error_message: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "metrics": self.metrics,
+            "artifacts": self.artifacts,
+            "wall_time_seconds": self.wall_time_seconds,
+            "error_message": self.error_message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "JobOutcome":
+        if not data:
+            return cls()
+        return cls(
+            status=data.get("status", "completed"),
+            metrics=data.get("metrics", {}),
+            artifacts=data.get("artifacts", []),
+            wall_time_seconds=float(data.get("wall_time_seconds", 0.0)),
+            error_message=data.get("error_message"),
+        )
+
+
+@dataclass
 class Job:
     """
     Training job representation.
 
     Attributes:
         id: Unique job identifier (UUID)
+        run_id: Pipeline run identifier. For standalone jobs equals job.id.
+            When a Coordinator (Stage 1+) submits jobs as part of a pipeline,
+            all jobs in that pipeline share the same run_id. This is the key
+            the Coordinator uses to group jobs and route events.
         type: Job type (teacher_training, distillation, etc.)
         status: Current job status
         config: Training configuration dictionary
@@ -117,8 +166,10 @@ class Job:
         output_dir: Directory for job outputs (checkpoints, logs)
         priority: Job priority (higher = more urgent)
         tags: Optional tags for filtering/grouping
+        outcome: Structured result written at job completion (Stage 0+)
     """
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    run_id: Optional[str] = None
     type: str = JobType.TEACHER_TRAINING.value
     status: JobStatus = JobStatus.PENDING
     config: Dict[str, Any] = field(default_factory=dict)
@@ -131,11 +182,16 @@ class Job:
     output_dir: Optional[str] = None
     priority: int = 0
     tags: List[str] = field(default_factory=list)
+    outcome: Optional[JobOutcome] = None
 
     def __post_init__(self):
         """Set defaults after initialization."""
         if self.created_at is None:
             self.created_at = datetime.now()
+        # Standalone jobs are their own pipeline.
+        # The Coordinator (Stage 1+) overrides run_id when submitting pipeline jobs.
+        if self.run_id is None:
+            self.run_id = self.id
         # Note: output_dir is intentionally left as-is (None or user-provided base path)
         # The worker will build the full path with job-specific subdirectory
         # Convert status string to enum if needed
@@ -145,11 +201,12 @@ class Job:
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert to dictionary for Redis storage.
-        
+
         Handles datetime serialization and nested objects.
         """
         return {
             "id": self.id,
+            "run_id": self.run_id or self.id,
             "type": self.type,
             "status": self.status.value if isinstance(self.status, JobStatus) else self.status,
             "config": json.dumps(self.config),
@@ -162,6 +219,7 @@ class Job:
             "output_dir": self.output_dir or "",
             "priority": str(self.priority),
             "tags": json.dumps(self.tags),
+            "outcome": json.dumps(self.outcome.to_dict() if self.outcome else None),
         }
 
     @classmethod
@@ -173,8 +231,8 @@ class Job:
         """
         # Handle bytes from Redis
         if data and isinstance(list(data.values())[0], bytes):
-            data = {k.decode() if isinstance(k, bytes) else k: 
-                    v.decode() if isinstance(v, bytes) else v 
+            data = {k.decode() if isinstance(k, bytes) else k:
+                    v.decode() if isinstance(v, bytes) else v
                     for k, v in data.items()}
 
         # Parse JSON fields
@@ -195,6 +253,13 @@ class Job:
         else:
             tags = tags_str or []
 
+        outcome_str = data.get("outcome", "null")
+        if isinstance(outcome_str, str):
+            outcome_data = json.loads(outcome_str) if outcome_str and outcome_str != "null" else None
+        else:
+            outcome_data = outcome_str
+        outcome = JobOutcome.from_dict(outcome_data) if outcome_data else None
+
         # Parse datetimes
         def parse_datetime(value: str) -> Optional[datetime]:
             if not value or value == "":
@@ -211,8 +276,10 @@ class Job:
         except (ValueError, TypeError):
             priority = 0
 
+        job_id = data.get("id", str(uuid.uuid4()))
         return cls(
-            id=data.get("id", str(uuid.uuid4())),
+            id=job_id,
+            run_id=data.get("run_id") or job_id,
             type=data.get("type", JobType.TEACHER_TRAINING.value),
             status=JobStatus(data.get("status", JobStatus.PENDING.value)),
             config=config,
@@ -225,6 +292,7 @@ class Job:
             output_dir=data.get("output_dir") or None,
             priority=priority,
             tags=tags,
+            outcome=outcome,
         )
 
     @property

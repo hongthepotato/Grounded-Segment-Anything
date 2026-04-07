@@ -11,6 +11,7 @@ from ml_engine.jobs.handlers.base import JobHandler
 from ml_engine.jobs.handlers.teacher import TeacherTrainingHandler
 from ml_engine.jobs.handlers.auto_label import AutoLabelHandler
 from ml_engine.jobs.handlers.distillation import StudentDistillationHandler
+from ml_engine.jobs.handlers.experiment_loop import ExperimentLoopHandler
 
 
 # Registry of job type -> handler class
@@ -18,6 +19,7 @@ JOB_HANDLERS: Dict[str, Type[JobHandler]] = {
     "teacher_training": TeacherTrainingHandler,
     "auto_label": AutoLabelHandler,
     "student_distillation": StudentDistillationHandler,
+    "experiment_loop": ExperimentLoopHandler,
 }
 
 

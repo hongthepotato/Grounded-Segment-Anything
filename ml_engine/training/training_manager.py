@@ -19,6 +19,17 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def _deep_merge(base: dict, overrides: dict) -> dict:
+    """Recursively merge overrides into base. Returns a new dict."""
+    result = dict(base)
+    for k, v in overrides.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
 class TrainingManager:
     """
     Manages training dynamics: AMP, gradient clipping, accumulation.
@@ -39,17 +50,29 @@ class TrainingManager:
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
         config_path: str,
-        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+        config_overrides: Optional[Dict] = None,
     ):
         """
         Args:
             model: The model being trained
             optimizer: The optimizer
-            config_path: Path to training dynamics config
+            config_path: Path to training dynamics config YAML
             scheduler: Optional learning rate scheduler
+            config_overrides: Dict of training_dynamics overrides from experiment loop.
+                Deep-merged over the YAML values after loading. Keys match the YAML
+                structure under the top-level 'training_dynamics' key, e.g.
+                {'gradient_clipping': {'max_norm': 0.5}, 'mixed_precision': {'enabled': False}}.
         """
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
+
+        # Deep-merge experiment-loop overrides over YAML defaults
+        if config_overrides:
+            td_overrides = config_overrides.get('training_dynamics', config_overrides)
+            config = _deep_merge(config.get('training_dynamics', config), td_overrides)
+        else:
+            config = config.get('training_dynamics', config)
 
         self.model = model
         self.optimizer = optimizer

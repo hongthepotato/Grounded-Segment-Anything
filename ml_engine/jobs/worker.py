@@ -35,7 +35,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo
+from ml_engine.jobs.models import Job, JobStatus, JobProgress, JobOutcome, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
 from ml_engine.jobs.subprocess_runner import TrainingSubprocess
 
@@ -202,6 +202,7 @@ class TrainingWorker:
         self.store.publish_event(job.id, {
             "type": "job_started",
             "job_id": job.id,
+            "run_id": job.run_id,
             "worker_id": self.worker_id,
             "timestamp": datetime.now().isoformat()
         })
@@ -223,7 +224,7 @@ class TrainingWorker:
             # Get result
             result = subprocess_runner.get_result()
             if result.success:
-                self._complete_job(job, result.output_dir)
+                self._complete_job(job, result)
             elif result.cancelled:
                 self._cancel_job(job)
             else:
@@ -334,21 +335,27 @@ class TrainingWorker:
                     progress.current_epoch, progress.total_epochs,
                     progress.current_step, progress.total_steps)
 
-    def _complete_job(self, job: Job, output_dir: Optional[str] = None):
-        """Mark job as completed."""
+    def _complete_job(self, job: Job, result) -> None:
+        """Mark job as completed and persist structured outcome."""
         logger.info("Job %s completed successfully", job.id[:8])
+
+        outcome = JobOutcome.from_dict(result.outcome) if result.outcome else JobOutcome()
+        output_dir = result.output_dir or job.output_dir
 
         self.store.update_job(
             job.id,
             status=JobStatus.COMPLETED,
-            finished_at=datetime.now()
+            finished_at=datetime.now(),
+            outcome=outcome.to_dict(),
         )
 
         self.store.publish_event(job.id, {
             "type": "job_completed",
             "job_id": job.id,
-            "output_dir": output_dir or job.output_dir,
-            "timestamp": datetime.now().isoformat()
+            "run_id": job.run_id,
+            "output_dir": output_dir,
+            "outcome": outcome.to_dict(),
+            "timestamp": datetime.now().isoformat(),
         })
 
     def _cancel_job(self, job: Job):
@@ -358,13 +365,14 @@ class TrainingWorker:
         self.store.update_job(
             job.id,
             status=JobStatus.CANCELLED,
-            finished_at=datetime.now()
+            finished_at=datetime.now(),
         )
 
         self.store.publish_event(job.id, {
             "type": "job_cancelled",
             "job_id": job.id,
-            "timestamp": datetime.now().isoformat()
+            "run_id": job.run_id,
+            "timestamp": datetime.now().isoformat(),
         })
 
     def _fail_job(self, job: Job, error_message: str):
@@ -375,14 +383,15 @@ class TrainingWorker:
             job.id,
             status=JobStatus.FAILED,
             finished_at=datetime.now(),
-            error_message=error_message
+            error_message=error_message,
         )
 
         self.store.publish_event(job.id, {
             "type": "job_failed",
             "job_id": job.id,
+            "run_id": job.run_id,
             "error": error_message,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         })
 
 

@@ -215,54 +215,61 @@ class Trainer:
         else:
             self.visualizer = None
     
-    def train(self) -> None:
+    def train(self) -> Dict[str, float]:
         """
         Main training loop.
-        
+
+        Returns:
+            Final validation metrics dict (e.g. {"val_mAP50": 0.72, ...}).
+            Empty dict if no validation was run (e.g. cancelled before first eval).
+
         Raises:
             TrainingCancelledException: If cancel_check returns True
         """
         epochs = self.config.get('epochs', 50)
-        
+        last_val_metrics: Dict[str, float] = {}
+
         logger.info("=" * 60)
         logger.info("Starting Teacher Model Training")
         logger.info("=" * 60)
         log_config(logger, self.config, "Training Configuration")
-        
+
         try:
             for epoch in range(epochs):
                 # Check cancellation
                 if self.cancel_check and self.cancel_check():
                     logger.info("Training cancelled by user")
                     raise TrainingCancelledException("Training cancelled")
-                
+
                 logger.info("\nEpoch %d/%d", epoch + 1, epochs)
                 logger.info("-" * 60)
-                
+
                 # Train
                 train_metrics = self._train_epoch(epoch)
-                
+
                 # Validate (at specified interval)
                 eval_interval = self.config.get('evaluation', {}).get('interval', 1)
                 if (epoch + 1) % eval_interval == 0:
                     val_metrics = self._validate_epoch(epoch)
+                    if val_metrics:
+                        last_val_metrics = val_metrics
                 else:
                     val_metrics = {}
-                
+
                 # Merge metrics
                 all_metrics = {**train_metrics, **val_metrics, 'epoch': epoch}
-                
+
                 # Save checkpoints and log
                 for name, trainer in self.trainers.items():
                     trainer.save_checkpoint(epoch, all_metrics)
                     trainer.log_metrics(train_metrics, epoch, prefix='train')
                     if val_metrics:
                         trainer.log_metrics(val_metrics, epoch, prefix='val')
-                    
+
                     if trainer.should_stop:
                         logger.info("Early stopping triggered for %s", name)
                         break
-                
+
                 # Report progress
                 if self.progress_callback:
                     self.progress_callback({
@@ -272,32 +279,34 @@ class Trainer:
                         'val_metrics': val_metrics,
                         'message': f"Completed epoch {epoch + 1}/{epochs}"
                     })
-            
+
             logger.info("=" * 60)
             logger.info("Training Completed!")
             logger.info("=" * 60)
-            
+
             # Finalize
             self._save_adapters()
             self._evaluate_on_test_set()
             self._create_export_package()
-        
+
         finally:
             # Cleanup
             for trainer in self.trainers.values():
                 trainer.close()
+
+        return last_val_metrics
     
     def _train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train for one epoch across all models."""
         metrics_acc = defaultdict(list)
         total_steps = len(self.train_loader)
-        
+
         pbar = tqdm(self.train_loader, desc=f"Train {epoch + 1}")
         for step, batch in enumerate(pbar):
             # Check cancellation
             if self.cancel_check and self.cancel_check():
                 raise TrainingCancelledException("Training cancelled")
-            
+
             # Train each model
             for name, trainer in self.trainers.items():
                 losses = trainer.train_batch(batch)
@@ -333,23 +342,23 @@ class Trainer:
     def _validate_epoch(self, epoch: int) -> Dict[str, float]:
         """Validate for one epoch across all models."""
         metrics_acc = defaultdict(list)
-        
+
         pbar = tqdm(self.val_loader, desc="Validation")
         for batch in pbar:
             for name, trainer in self.trainers.items():
                 losses = trainer.validate_batch(batch)
                 for k, v in losses.items():
                     metrics_acc[f"{name}_{k}"].append(v)
-            
+
             postfix = {}
             for k, v in metrics_acc.items():
                 if 'total_loss' in k:
                     postfix[k] = f"{v[-1]:.4f}"
             pbar.set_postfix(postfix)
-        
+
         val_metrics = {f'val_{k}': sum(v) / len(v) for k, v in metrics_acc.items()}
         log_metrics(logger, val_metrics, epoch, prefix="Val")
-        
+
         return val_metrics
     
     def _save_adapters(self) -> None:

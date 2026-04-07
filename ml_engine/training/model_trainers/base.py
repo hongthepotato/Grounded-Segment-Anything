@@ -89,12 +89,15 @@ class BaseModelTrainer(ABC):
         self.optimizer = self._create_optimizer()
         self.scheduler = self._create_scheduler()
 
-        # Training manager for AMP and gradient handling
+        # Training manager for AMP and gradient handling.
+        # config may carry a 'training_dynamics' sub-dict from the experiment loop;
+        # pass it through so AutoResearch HPO mutations take effect.
         self.training_manager = TrainingManager(
             model=self.model,
             optimizer=self.optimizer,
             config_path=str(DEFAULT_CONFIGS_DIR / 'training_dynamics.yaml'),
-            scheduler=self.scheduler
+            scheduler=self.scheduler,
+            config_overrides=config.get('training_dynamics'),
         )
 
         # Checkpoint manager

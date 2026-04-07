@@ -4,9 +4,11 @@ Teacher training job handler.
 Handles the teacher_training job type for fine-tuning GroundingDINO and SAM models.
 """
 
-import logging
+import json
 import multiprocessing as mp
 import queue
+import time
+from pathlib import Path
 from typing import Dict, Any
 
 from ml_engine.jobs.handlers.base import JobHandler, TrainingCancelledError
@@ -64,7 +66,8 @@ class TeacherTrainingHandler(JobHandler):
         )
 
         # Build config
-        config = self._build_config(data_manager, job_config)
+        from ml_engine.training.config import build_teacher_training_config
+        config = build_teacher_training_config(data_manager, job_config.get("training"))
 
         # Progress callback that sends to queue
         def progress_callback(progress_info: Dict[str, Any]):
@@ -86,71 +89,28 @@ class TeacherTrainingHandler(JobHandler):
             cancel_check=cancel_check
         )
 
+        started_at = time.monotonic()
         try:
-            trainer.train()
+            val_metrics = trainer.train()
         except TrainingCancelledException as e:
             raise TrainingCancelledError("Training cancelled by user") from e
 
-    def _build_config(
-        self,
-        data_manager,
-        job_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Build complete teacher training config from defaults + job overrides.
-        
-        Args:
-            data_manager: DataManager instance with dataset info
-            job_config: User-provided job configuration
-            
-        Returns:
-            Complete training configuration dictionary
-        """
-        from core.config import load_config, merge_configs
-        from core.constants import DEFAULT_CONFIGS_DIR
+        wall_time = time.monotonic() - started_at
 
-        logger = logging.getLogger(__name__)
+        # Collect artifact paths produced by this job
+        out = Path(output_dir)
+        artifacts = []
+        for pattern in ("evaluation/*.json", "**/*.pth", "export/**/*"):
+            artifacts.extend(str(p) for p in out.glob(pattern) if p.is_file())
 
-        # Load shared training defaults
-        shared_config_path = DEFAULT_CONFIGS_DIR / 'teacher_training.yaml'
-        shared_config = load_config(str(shared_config_path))
-        logger.info("Loaded shared training config from %s", shared_config_path)
-
-        # Load model-specific configs based on dataset
-        dataset_info = data_manager.get_dataset_info()
-        required_models = data_manager.get_required_models()
-        logger.info("Required teacher models: %s", required_models)
-
-        model_configs = {}
-        if 'grounding_dino' in required_models:
-            dino_config_path = DEFAULT_CONFIGS_DIR / 'teacher_grounding_dino_lora.yaml'
-            model_configs['grounding_dino'] = load_config(str(dino_config_path))
-            logger.info("Loaded Grounding DINO config")
-
-        if 'sam' in required_models:
-            sam_config_path = DEFAULT_CONFIGS_DIR / 'teacher_sam_lora.yaml'
-            model_configs['sam'] = load_config(str(sam_config_path))
-            logger.info("Loaded SAM config")
-
-        if not model_configs:
-            raise ValueError("No models to train! Dataset has no valid annotations.")
-
-        # Build base config
-        config = {
-            **shared_config['training'],
-            'num_classes': dataset_info['num_classes'],
-            'class_names': list(dataset_info['class_mapping'].values()),
-            'class_mapping': dataset_info['class_mapping'],
-            'augmentation': shared_config.get('augmentation'),
-            'evaluation': shared_config.get('evaluation'),
-            'checkpointing': shared_config.get('checkpointing'),
-            'models': model_configs
+        # Write outcome.json -- read by worker and included in job_completed event
+        outcome = {
+            "status": "completed",
+            "metrics": val_metrics,
+            "artifacts": artifacts,
+            "wall_time_seconds": wall_time,
+            "error_message": None,
         }
-
-        # Merge user overrides
-        user_overrides = job_config.get("training", {})
-        if user_overrides:
-            config = merge_configs(config, user_overrides)
-            logger.info("Applied user config overrides")
-
-        return config
+        outcome_path = out / "outcome.json"
+        outcome_path.parent.mkdir(parents=True, exist_ok=True)
+        outcome_path.write_text(json.dumps(outcome, indent=2))
