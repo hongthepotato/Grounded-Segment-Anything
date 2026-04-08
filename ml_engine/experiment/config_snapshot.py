@@ -5,10 +5,11 @@ Replaces git keep/revert. No git at runtime.
 """
 
 import copy
-import json
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,6 @@ class ConfigSnapshot:
         self._best_metric = metric
 
         best_path = self._output_dir / "best_config.yaml"
-        import yaml
         with open(best_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self._snapshots[snapshot_id], f)
         logger.info("New best config (metric=%.4f) written to %s", metric, best_path)
@@ -85,7 +85,6 @@ class ConfigSnapshot:
         best_path = Path(output_dir) / "best_config.yaml"
         if not best_path.exists():
             return None
-        import yaml
         with open(best_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
         logger.info("Loaded best config from %s (crash recovery)", best_path)
