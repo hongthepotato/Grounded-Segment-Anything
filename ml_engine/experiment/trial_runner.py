@@ -42,6 +42,7 @@ def _trial_subprocess(
     result_queue: mp.Queue,
     progress_queue: mp.Queue,
     cancel_event: mp.Event,
+    primary_metric_key: str = _PRIMARY_METRIC_KEY,
 ) -> None:
     """Entry point for per-trial subprocess."""
     from pathlib import Path as _Path
@@ -74,7 +75,7 @@ def _trial_subprocess(
         val_metrics = trainer.train()
 
         # Try to read mAP50 from evaluation report (more reliable than val_metrics)
-        primary = _extract_primary_metric(output_dir, val_metrics)
+        primary = _extract_primary_metric(output_dir, val_metrics, primary_metric_key)
         result_queue.put({
             "status": "completed",
             "metrics": val_metrics,
@@ -89,26 +90,32 @@ def _trial_subprocess(
         result_queue.put({"status": "crashed", "error": f"{type(e).__name__}: {e}\n{traceback.format_exc()}"})
 
 
-def _extract_primary_metric(output_dir: str, val_metrics: Dict[str, float]) -> Optional[float]:
+def _extract_primary_metric(
+    output_dir: str,
+    val_metrics: Dict[str, float],
+    primary_metric_key: str = _PRIMARY_METRIC_KEY,
+) -> Optional[float]:
     """
-    Extract mAP50 from evaluation report JSON (preferred) or fall back to val_metrics.
+    Extract the primary metric from evaluation report JSON (preferred) or fall back to val_metrics.
 
     TrialRunner uses best-checkpoint evaluation (written by _evaluate_on_test_set),
     not the proxy loss from _validate_epoch.
     """
+    # Derive the bare metric name for report lookup (strip 'val_' prefix)
+    bare_key = primary_metric_key.removeprefix("val_")
     eval_dir = Path(output_dir) / "evaluation"
     for report_path in eval_dir.glob("*_report.json"):
         try:
             report = json.loads(report_path.read_text(encoding="utf-8"))
             # Report structure: {"metrics": {"mAP50": 0.72, ...}} or {"mAP50": 0.72}
             metrics = report.get("metrics", report)
-            if "mAP50" in metrics:
-                return float(metrics["mAP50"])
+            if bare_key in metrics:
+                return float(metrics[bare_key])
         except Exception:
             pass
 
-    # Fallback: look for val_mAP50 in training val_metrics
-    return val_metrics.get(_PRIMARY_METRIC_KEY)
+    # Fallback: look for the metric in training val_metrics
+    return val_metrics.get(primary_metric_key)
 
 
 class TrialRunner:
@@ -120,6 +127,11 @@ class TrialRunner:
     come from the experiment loop rather than job_config["training"].
     """
 
+    # Kill a hung subprocess after this many seconds without exit.
+    # 3 epochs × ~10 min/epoch × 3 safety margin = ~90 min upper bound.
+    # Override per-call via max_wall_time_seconds if needed.
+    DEFAULT_TIMEOUT_SECONDS = 5400  # 90 minutes
+
     def run(
         self,
         data_manager,
@@ -128,6 +140,8 @@ class TrialRunner:
         trial_id: Optional[str] = None,
         progress_callback: Optional[Callable[[Dict], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
+        max_wall_time_seconds: Optional[int] = None,
+        primary_metric_key: str = _PRIMARY_METRIC_KEY,
     ) -> TrialResult:
         """
         Run one trial.
@@ -144,6 +158,7 @@ class TrialRunner:
             trial_id: Optional explicit ID; auto-generated if None.
             progress_callback: Called with progress dicts from the subprocess.
             cancel_check: Returns True if the loop should abort.
+            primary_metric_key: Metric key to extract as the primary scalar (e.g. 'val_mAP50').
         """
         from ml_engine.training.config import build_teacher_training_config
 
@@ -164,13 +179,17 @@ class TrialRunner:
 
         proc = ctx.Process(
             target=_trial_subprocess,
-            args=(data_manager, config, trial_output_dir, result_q, progress_q, cancel_ev),
+            args=(data_manager, config, trial_output_dir, result_q, progress_q, cancel_ev,
+                  primary_metric_key),
             daemon=False,
         )
         proc.start()
 
+        timeout = max_wall_time_seconds or self.DEFAULT_TIMEOUT_SECONDS
+
         # Monitor
         result_payload: Optional[Dict] = None
+        timed_out = False
         while proc.is_alive():
             # Forward progress
             while True:
@@ -184,7 +203,22 @@ class TrialRunner:
             if cancel_check and cancel_check():
                 cancel_ev.set()
 
+            elapsed = time.monotonic() - t0
+            if elapsed > timeout:
+                logger.warning("Trial %s exceeded wall-time limit (%.0fs), killing.", trial_id, timeout)
+                proc.kill()
+                timed_out = True
+                break
+
             time.sleep(0.5)
+
+        # Ensure subprocess is fully reaped before reading the result queue.
+        # join() waits for the OS to reclaim the process and for Queue feeder
+        # threads to finish flushing — prevents the result being silently lost.
+        proc.join(timeout=5)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
 
         # Drain progress
         while True:
@@ -200,6 +234,9 @@ class TrialRunner:
             result_payload = result_q.get_nowait()
         except queue.Empty:
             result_payload = None
+
+        if timed_out and result_payload is None:
+            result_payload = {"status": "crashed", "error": f"Trial exceeded wall-time limit ({timeout}s)"}
 
         # Cleanup queues
         for q in (result_q, progress_q):
