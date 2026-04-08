@@ -6,7 +6,8 @@ JSON persistence on disk. Readable by the LLM Executor at Stage 4.
 
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+import os
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TrialRecord:
+    r"""Data class for a single trial record in the experiment log."""
     trial_id: str
     overrides: Dict[str, Any]
     primary_metric: Optional[float]
@@ -54,7 +56,7 @@ class TrialLog:
         self._trials.append(record)
 
         # Track best
-        if record.primary_metric is not None and record.status not in ("crashed", "oom"):
+        if record.primary_metric is not None and record.status not in ("crashed", "oom", "skip"):
             is_better = (
                 self._best_metric is None
                 or (self._metric_mode == "max" and record.primary_metric > self._best_metric)
@@ -67,16 +69,19 @@ class TrialLog:
         self._flush()
 
     def get_best(self) -> Optional[TrialRecord]:
+        r"""Return the best trial record, or None if no trials yet."""
         if self._best_trial_id is None:
             return None
         return next((t for t in self._trials if t.trial_id == self._best_trial_id), None)
 
     @property
     def best_metric(self) -> Optional[float]:
+        r"""Return the best primary metric value, or None if no trials yet."""
         return self._best_metric
 
     @property
     def trials(self) -> List[TrialRecord]:
+        r"""Return a list of all trial records in order."""
         return list(self._trials)
 
     def to_llm_context(self) -> str:
@@ -121,7 +126,9 @@ class TrialLog:
             "best_metric": self._best_metric,
             "trials": [asdict(t) for t in self._trials],
         }
-        self._path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp = self._path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, self._path)
 
     @classmethod
     def load(cls, output_dir: str) -> "TrialLog":
@@ -139,8 +146,9 @@ class TrialLog:
         log._best_trial_id = data.get("best_trial_id")
         log._best_metric = data.get("best_metric")
 
+        _fields = {f.name for f in TrialRecord.__dataclass_fields__.values()}
         for t in data.get("trials", []):
-            log._trials.append(TrialRecord(**t))
+            log._trials.append(TrialRecord(**{k: v for k, v in t.items() if k in _fields}))
 
         logger.info("Loaded TrialLog from %s (%d trials)", path, len(log._trials))
         return log
