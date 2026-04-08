@@ -41,6 +41,7 @@ class ExperimentResult:
     trials_completed: int
     wall_time_seconds: float
     output_dir: str
+    cancelled: bool = False
 
 
 # Signature: propose_fn(trial_log) -> overrides dict
@@ -106,10 +107,12 @@ class ExperimentLoop:
 
         t_start = time.monotonic()
         trials_run = 0
+        cancelled = False
 
         for trial_num in range(budget.max_trials):
             if cancel_check and cancel_check():
                 logger.info("ExperimentLoop cancelled at trial %d", trial_num)
+                cancelled = True
                 break
 
             if budget.max_wall_time_seconds is not None:
@@ -149,9 +152,10 @@ class ExperimentLoop:
 
             logger.info("Running %s: %s", trial_id, description)
 
-            # Inject epochs_per_trial override
+            # Inject epochs_per_trial override (using the flat key that matches
+            # the top-level config produced by build_teacher_training_config)
             effective_overrides = {
-                "training.epochs": budget.epochs_per_trial,
+                "epochs": budget.epochs_per_trial,
                 **overrides,
             }
 
@@ -162,6 +166,7 @@ class ExperimentLoop:
                 trial_id=trial_id,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
+                primary_metric_key=budget.metric_name,
             )
 
             trials_run += 1
@@ -218,4 +223,5 @@ class ExperimentLoop:
             trials_completed=trials_run,
             wall_time_seconds=wall_time,
             output_dir=output_dir,
+            cancelled=cancelled,
         )
