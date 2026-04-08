@@ -191,8 +191,13 @@ class Trainer:
             trainer_cls = TRAINER_REGISTRY[model_name]
             model_config = self.config['models'][model_name]
 
-            # Add shared config values
-            model_config = {**model_config, 'epochs': self.config.get('epochs', 50)}
+            # Add shared config values. training_dynamics must be forwarded from the
+            # top-level config so HPO mutations to training_dynamics.* reach TrainingManager.
+            model_config = {
+                **model_config,
+                'epochs': self.config.get('epochs', 50),
+                'training_dynamics': self.config.get('training_dynamics'),
+            }
 
             self.trainers[model_name] = trainer_cls(
                 config=model_config,
