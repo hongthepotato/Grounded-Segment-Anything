@@ -113,4 +113,4 @@ class TeacherTrainingHandler(JobHandler):
         }
         outcome_path = out / "outcome.json"
         outcome_path.parent.mkdir(parents=True, exist_ok=True)
-        outcome_path.write_text(json.dumps(outcome, indent=2))
+        outcome_path.write_text(json.dumps(outcome, indent=2), encoding="utf-8")
