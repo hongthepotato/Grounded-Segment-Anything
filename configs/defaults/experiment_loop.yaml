@@ -10,41 +10,54 @@ experiment:
   metric_mode: max           # "min" or "max"
 
 # Keys the experiment loop is allowed to mutate.
+# Paths must match the merged config produced by build_teacher_training_config():
+#   - Training-loop keys are at the TOP LEVEL (config['epochs'], not config['training']['epochs'])
+#     because build_teacher_training_config spreads shared_config['training'] to the top level.
+#   - Model-specific keys are at config['models']['<name>']['<key>'].
+#   - training_dynamics keys are at config['training_dynamics']['<key>'].
 # Schema: {dotted_key: {type: int|float|bool|choice|list, min?, max?, choices?, log_scale?}}
 # Keys NOT listed here are immutable by default.
 mutable_keys:
-  # --- Shared training (teacher_training.yaml) ---
-  "training.batch_size":          {type: int,    min: 1,    max: 32}
-  "training.epochs":              {type: int,    min: 1,    max: 100}
-  "training.optimizer":           {type: choice, choices: ["AdamW", "SGD"]}
-  "training.weight_decay":        {type: float,  min: 0.0,  max: 0.1}
-  "training.warmup_epochs":       {type: int,    min: 0,    max: 20}
-  "training.warmup_ratio":        {type: float,  min: 0.0,  max: 1.0}
+  # --- Shared training loop (top-level in merged config) ---
+  "batch_size":               {type: int,    min: 1,    max: 32}
+  "epochs":                   {type: int,    min: 1,    max: 100}
+  "optimizer":                {type: choice, choices: ["AdamW", "SGD"]}
+  "weight_decay":             {type: float,  min: 0.0,  max: 0.1}
+  "warmup_epochs":            {type: int,    min: 0,    max: 20}
 
-  # --- GroundingDINO LoRA ---
-  "lora.r":                       {type: int,    min: 2,    max: 128}
-  "lora.lora_alpha":              {type: int,    min: 4,    max: 256}
-  "lora.lora_dropout":            {type: float,  min: 0.0,  max: 0.5}
-  "lora.bias":                    {type: choice, choices: ["none", "all", "lora_only"]}
-  "freeze_backbone":              {type: bool}
-  "freeze_bbox_embed":            {type: bool}
-  "learning_rate":                {type: float,  min: 1.0e-6, max: 1.0e-2, log_scale: true}
-  "momentum":                     {type: float,  min: 0.8,  max: 0.99}
+  # --- GroundingDINO LoRA (config['models']['grounding_dino']['lora']) ---
+  "models.grounding_dino.lora.r":            {type: int,   min: 2,    max: 128}
+  "models.grounding_dino.lora.lora_alpha":   {type: int,   min: 4,    max: 256}
+  "models.grounding_dino.lora.lora_dropout": {type: float, min: 0.0,  max: 0.5}
+  "models.grounding_dino.lora.bias":         {type: choice, choices: ["none", "all", "lora_only"]}
+  "models.grounding_dino.freeze_backbone":   {type: bool}
+  "models.grounding_dino.freeze_bbox_embed": {type: bool}
+  "models.grounding_dino.learning_rate":     {type: float, min: 1.0e-6, max: 1.0e-2, log_scale: true}
+  "models.grounding_dino.momentum":          {type: float, min: 0.8,  max: 0.99}
 
-  # --- Training dynamics (training_dynamics.yaml) ---
-  "training_dynamics.gradient_clipping.max_norm":   {type: float, min: 0.01, max: 10.0}
-  "training_dynamics.gradient_clipping.enabled":    {type: bool}
-  "training_dynamics.mixed_precision.enabled":      {type: bool}
+  # --- SAM LoRA (config['models']['sam']['lora']) ---
+  "models.sam.lora.r":                       {type: int,   min: 2,    max: 128}
+  "models.sam.lora.lora_alpha":              {type: int,   min: 4,    max: 256}
+  "models.sam.lora.lora_dropout":            {type: float, min: 0.0,  max: 0.5}
+  "models.sam.learning_rate":                {type: float, min: 1.0e-6, max: 1.0e-2, log_scale: true}
+
+  # --- Training dynamics (config['training_dynamics']) ---
+  # These reach TrainingManager via Trainer._init_trainers injecting
+  # 'training_dynamics' into model_config. See trainer.py._init_trainers.
+  "training_dynamics.gradient_clipping.max_norm":      {type: float, min: 0.01, max: 10.0}
+  "training_dynamics.gradient_clipping.enabled":       {type: bool}
+  "training_dynamics.mixed_precision.enabled":         {type: bool}
   "training_dynamics.normalization.freeze_bn_teacher": {type: bool}
 
 # Keys the experiment loop must NEVER mutate.
 # Changing these would alter model identity or break dataset compatibility.
 immutable_keys:
-  - "model.base_checkpoint"
-  - "model.config_path"
-  - "bert_model_path"
+  - "models.grounding_dino.model.base_checkpoint"
+  - "models.grounding_dino.model.config_path"
+  - "models.grounding_dino.bert_model_path"
+  - "models.sam.model.base_checkpoint"
+  - "models.sam.model.model_type"
   - "num_classes"
   - "class_names"
   - "class_mapping"
-  - "model.name"
   - "checkpointing"
