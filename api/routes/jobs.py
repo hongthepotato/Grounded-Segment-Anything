@@ -100,6 +100,18 @@ JOB_CONFIG_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
             "image_paths": lambda v: len(v) > 0,
         }
     },
+    "experiment_loop": {
+        "required": ["data_path", "image_paths"],
+        "field_types": {
+            "data_path": str,
+            "image_paths": list,
+            "split_config": dict,
+            "experiment": dict,
+        },
+        "field_validations": {
+            "image_paths": lambda v: len(v) > 0,
+        }
+    },
 }
 
 DISTILLATION_METADATA: Dict[str, Any] = {
@@ -220,7 +232,7 @@ def validate_job_config(job_type: str, config: Dict[str, Any]) -> List[str]:
         split_cfg = config.get("split_config")
         if split_cfg is not None:
             if not isinstance(split_cfg, dict):
-                errors.append("'split_config' must be an object")
+                errors.append("'split_config' must be an dict with keys 'train', 'val', 'test'")
             else:
                 split_error = _validate_split_config(split_cfg)
                 if split_error:
