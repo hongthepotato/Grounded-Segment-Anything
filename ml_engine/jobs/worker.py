@@ -26,6 +26,7 @@ Usage:
     worker.run()  # Blocks until shutdown
 """
 
+import json
 import os
 import signal
 import socket
@@ -37,6 +38,9 @@ from typing import Dict, Any, Optional
 
 from ml_engine.jobs.models import Job, JobStatus, JobProgress, JobOutcome, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
+
+# Agent Stream key pattern -- mirrors ml_engine/agent/loop.py (no import to avoid circular dep)
+_AGENT_STREAM_KEY = "agent:{run_id}:events"
 from ml_engine.jobs.subprocess_runner import TrainingSubprocess
 
 from core.logging_config import configure_logging, get_logger
@@ -335,6 +339,27 @@ class TrainingWorker:
                     progress.current_epoch, progress.total_epochs,
                     progress.current_step, progress.total_steps)
 
+    def _publish_to_agent_stream(self, job: Job, event: Dict[str, Any]) -> None:
+        """
+        Forward a terminal job event to the pipeline-level agent Stream.
+
+        This is the bridge between the job layer (pub/sub on job:{id}:events)
+        and the agent layer (Redis Streams on agent:{run_id}:events). Without
+        this, the Coordinator's AgentLoop never learns that a job finished.
+
+        Only publishes when the agent Stream already exists (i.e., when a
+        Coordinator has been started for this run_id). Harmless no-op otherwise.
+        """
+        stream_key = _AGENT_STREAM_KEY.format(run_id=job.run_id)
+        try:
+            # Only publish if the stream already exists (coordinator is active)
+            if self.store.redis.exists(stream_key):
+                self.store.redis.xadd(stream_key, {"data": json.dumps(event)})
+                logger.debug("Forwarded %s to agent stream %s", event.get("type"), stream_key)
+        except Exception as e:
+            # Non-fatal -- job layer continues regardless of agent layer health
+            logger.warning("Failed to forward event to agent stream: %s", e)
+
     def _complete_job(self, job: Job, result) -> None:
         """Mark job as completed and persist structured outcome."""
         logger.info("Job %s completed successfully", job.id[:8])
@@ -349,14 +374,16 @@ class TrainingWorker:
             outcome=outcome.to_dict(),
         )
 
-        self.store.publish_event(job.id, {
+        event = {
             "type": "job_completed",
             "job_id": job.id,
             "run_id": job.run_id,
             "output_dir": output_dir,
             "outcome": outcome.to_dict(),
             "timestamp": datetime.now().isoformat(),
-        })
+        }
+        self.store.publish_event(job.id, event)
+        self._publish_to_agent_stream(job, event)
 
     def _cancel_job(self, job: Job):
         """Mark job as cancelled."""
@@ -368,12 +395,14 @@ class TrainingWorker:
             finished_at=datetime.now(),
         )
 
-        self.store.publish_event(job.id, {
+        event = {
             "type": "job_cancelled",
             "job_id": job.id,
             "run_id": job.run_id,
             "timestamp": datetime.now().isoformat(),
-        })
+        }
+        self.store.publish_event(job.id, event)
+        self._publish_to_agent_stream(job, event)
 
     def _fail_job(self, job: Job, error_message: str):
         """Mark job as failed with error message."""
@@ -386,13 +415,15 @@ class TrainingWorker:
             error_message=error_message,
         )
 
-        self.store.publish_event(job.id, {
+        event = {
             "type": "job_failed",
             "job_id": job.id,
             "run_id": job.run_id,
             "error": error_message,
             "timestamp": datetime.now().isoformat(),
-        })
+        }
+        self.store.publish_event(job.id, event)
+        self._publish_to_agent_stream(job, event)
 
 
 def main():
