@@ -6,10 +6,100 @@ Handles the teacher_training job type for fine-tuning GroundingDINO and SAM mode
 
 import logging
 import multiprocessing as mp
+import os
 import queue
-from typing import Dict, Any
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from ml_engine.jobs.handlers.base import JobHandler, TrainingCancelledError
+
+logger = logging.getLogger(__name__)
+
+
+class _NullProgressQueue:
+    """Drop progress updates (e.g. CLI runs without a worker queue)."""
+
+    def put_nowait(self, _item: Any) -> None:
+        pass
+
+
+def auto_student_distillation_enabled(job_config: Dict[str, Any]) -> bool:
+    """True by default; set ``auto_student_distillation`` to false to skip chained student training."""
+    v = job_config.get("auto_student_distillation", True)
+    if v is None:
+        return True
+    return bool(v)
+
+
+def run_chained_student_distillation_after_teacher(
+    job_config: Dict[str, Any],
+    data_path_raw: str,
+    image_paths: list,
+    output_dir: str,
+    data_manager: Any,
+    progress_queue: Optional[Any] = None,
+    cancel_event: Optional[mp.Event] = None,
+) -> None:
+    """
+    Run student YOLO training after teacher training when enabled (default on).
+
+    Only runs if the dataset required SAM (masks). Default student model is ``yolov8n-seg``.
+    Writes under ``{output_dir}/student_distillation/``.
+    """
+    from core.constants import SAM
+    from ml_engine.jobs.handlers.distillation import StudentDistillationHandler
+
+    required = data_manager.get_required_models()
+    if SAM not in required:
+        logger.warning(
+            "Chained student distillation is enabled but SAM is not in required_models %s; "
+            "skipping (train masks in COCO to enable SAM + YOLO-seg).",
+            required,
+        )
+        return
+
+    student_out = str(Path(output_dir) / "student_distillation")
+    Path(student_out).mkdir(parents=True, exist_ok=True)
+
+    distill_cfg: Dict[str, Any] = {
+        "data_path": data_path_raw,
+        "image_paths": image_paths,
+        "teacher_dir": os.path.abspath(output_dir),
+        "unlabeled_image_paths": job_config.get("unlabeled_image_paths") or [],
+        "student_model": job_config.get("distillation_student_model", "yolov8n-seg"),
+        "split_config": job_config.get(
+            "distillation_split_config", {"train": 0.8, "val": 0.2}
+        ),
+        "training": job_config.get("distillation_training") or {},
+    }
+
+    pq = progress_queue if progress_queue is not None else _NullProgressQueue()
+    ce = cancel_event if cancel_event is not None else mp.Event()
+
+    try:
+        pq.put_nowait(
+            {
+                "message": "Starting automatic student distillation (YOLO) after SAM training...",
+                "phase": "student_distillation",
+            }
+        )
+    except queue.Full:
+        pass
+
+    logger.info(
+        "Chaining student distillation: output=%s student_model=%s teacher_dir=%s",
+        student_out,
+        distill_cfg["student_model"],
+        distill_cfg["teacher_dir"],
+    )
+
+    handler = StudentDistillationHandler()
+    handler.run(
+        job_config=distill_cfg,
+        output_dir=student_out,
+        progress_queue=pq,
+        cancel_event=ce,
+    )
 
 
 class TeacherTrainingHandler(JobHandler):
@@ -35,6 +125,11 @@ class TeacherTrainingHandler(JobHandler):
                 - image_paths: List of image paths
                 - split_config: Train/val/test split ratios (optional)
                 - training: Training hyperparameter overrides (optional)
+                - auto_student_distillation: After teacher training, run YOLO student training
+                  when SAM is in the dataset (default: true; set false to skip). Default student:
+                  yolov8n-seg; output in ``{output_dir}/student_distillation/``
+                - distillation_student_model, distillation_split_config, distillation_training,
+                  unlabeled_image_paths: Optional overrides forwarded to student distillation
             output_dir: Directory for checkpoints and logs
             progress_queue: Queue for progress updates
             cancel_event: Cancellation signal
@@ -90,6 +185,17 @@ class TeacherTrainingHandler(JobHandler):
             trainer.train()
         except TrainingCancelledException as e:
             raise TrainingCancelledError("Training cancelled by user") from e
+
+        if auto_student_distillation_enabled(job_config):
+            run_chained_student_distillation_after_teacher(
+                job_config=job_config,
+                data_path_raw=data_path_raw,
+                image_paths=image_paths,
+                output_dir=output_dir,
+                data_manager=data_manager,
+                progress_queue=progress_queue,
+                cancel_event=cancel_event,
+            )
 
     def _build_config(
         self,

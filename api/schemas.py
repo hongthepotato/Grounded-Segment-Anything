@@ -107,8 +107,11 @@ class JobProgressSchema(BaseModel):
 
 class JobCreate(BaseModel):
     """
-    Request body for job submission.
-    
+    Request body for **POST /api/jobs** (labeled yolov8n-seg training).
+
+    ``job_type`` is accepted for client compatibility but **ignored**; the server always
+    queues ``yolo_seg_labeled``.
+
     Example:
         {
             "job_type": "teacher_training",
@@ -126,7 +129,7 @@ class JobCreate(BaseModel):
     """
     job_type: str = Field(
         ...,
-        description="Type of job (teacher_training, student_distillation)"
+        description="Ignored for POST /api/jobs; kept for request-shape compatibility",
     )
     config: Dict[str, Any] = Field(
         ...,

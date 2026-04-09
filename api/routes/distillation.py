@@ -35,8 +35,8 @@ async def submit_distillation(
     """
     Submit a student distillation job.
 
-    This is a convenience wrapper around POST /api/jobs with:
-    job_type="student_distillation".
+    Submits ``job_type="student_distillation"`` to the job queue (distinct from
+    ``POST /api/jobs``, which only queues labeled YOLO-seg training).
     """
     config: Dict[str, Any] = {
         "data_path": request.data_path,

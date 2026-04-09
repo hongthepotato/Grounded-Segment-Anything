@@ -23,9 +23,10 @@ Platform responsibility: Everything else.
 """
 
 import argparse
+import multiprocessing as mp
+import os
 import sys
 from pathlib import Path
-import os
 from typing import Dict, Any
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -118,6 +119,21 @@ Note: User provides ONE dataset file. Platform automatically:
                         help='Resume from checkpoint path')
     parser.add_argument('--experiment-name', type=str, default=None,
                         help='Experiment name (default: auto-generated)')
+    parser.add_argument(
+        '--no-auto-student-distillation',
+        dest='auto_student_distillation',
+        action='store_false',
+        help=(
+            'Skip YOLO student training after teachers (default is to run when SAM is trained).'
+        ),
+    )
+    parser.set_defaults(auto_student_distillation=True)
+    parser.add_argument(
+        '--distillation-student-model',
+        type=str,
+        default='yolov8n-seg',
+        help='Ultralytics student model when distillation runs (default: yolov8n-seg)',
+    )
 
     return parser.parse_args()
 
@@ -338,6 +354,25 @@ def main():
     logger.info("\n Training completed successfully!")
     logger.info(f"Output directory: {exp_dir}")
     logger.info(f"LoRA adapters saved to: {exp_dir / 'teachers'}")
+
+    if args.auto_student_distillation:
+        from ml_engine.jobs.handlers.teacher import run_chained_student_distillation_after_teacher
+
+        chain_cfg: Dict[str, Any] = {
+            "auto_student_distillation": True,
+            "distillation_student_model": args.distillation_student_model,
+        }
+        logger.info("\n Running chained student distillation (%s)...", args.distillation_student_model)
+        run_chained_student_distillation_after_teacher(
+            job_config=chain_cfg,
+            data_path_raw=args.data,
+            image_paths=image_paths,
+            output_dir=str(exp_dir),
+            data_manager=data_manager,
+            progress_queue=None,
+            cancel_event=mp.Event(),
+        )
+        logger.info("Student weights: %s", exp_dir / "student_distillation" / "student_model" / "best.pt")
 
 
 if __name__ == '__main__':

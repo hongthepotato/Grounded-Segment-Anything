@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: training-app
+    networks:
+      - ruoyi-net
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://ruoyi-redis:6379
+      MODEL_MANIFEST_PATH: configs/model_urls.json
+      MODEL_ROOT_DIR: data/models/pretrained
+      TOKENIZERS_PARALLELISM: "false"
+    # depends_on:
+    #   redis:
+    #     condition: service_healthy
+    volumes:
+      - c:/docker/data/models/pretrained:/app/data/models/pretrained
+      - c:/docker/configs:/app/configs
+      - c:/docker/logs:/app/logs
+      - c:/docker/experiments:/app/experiments
+      - c:/docker/avop-upload:/srv/shared
+    gpus: all
+    shm_size: "16gb"
+    command: bash startup.bash
+    restart: unless-stopped
+
+networks:
+  ruoyi-net:
+    driver: bridge

@@ -40,8 +40,9 @@ def _find_model_packages(output_dir: Path) -> Dict[str, Path]:
             model = zp.stem.replace("_package", "")
             packages[model] = zp
 
+    # Prefer student ZIP (same pattern as teacher *_package.zip); else raw .pt for legacy runs
     student_pt = output_dir / "student_model" / "best.pt"
-    if student_pt.exists():
+    if "student_model" not in packages and student_pt.exists():
         packages["student_model"] = student_pt
 
     return packages
@@ -58,6 +59,31 @@ def _find_lora_adapters(output_dir: Path) -> Dict[str, Path]:
             if lora_dir.is_dir() and any(lora_dir.iterdir()):
                 adapters[child.name] = lora_dir
     return adapters
+
+
+def _zip_student_model_for_download(output_dir: Path) -> Path:
+    """
+    Build a temporary ZIP that contains ``best.pt`` and optional ``data.yaml``.
+
+    Used so downloads are always a normal archive with named entries — not a raw
+    PyTorch checkpoint (``.pt`` is itself a zip internally; serving it with a
+    ``.zip`` filename makes tools show ``data.pkl`` / ``byteorder`` at the top level).
+    """
+    student_pt = output_dir / "student_model" / "best.pt"
+    if not student_pt.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Student model not found at student_model/best.pt",
+        )
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    data_yaml = output_dir / "yolo_dataset" / "data.yaml"
+    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        zipf.write(student_pt, "best.pt")
+        if data_yaml.exists():
+            zipf.write(data_yaml, "data.yaml")
+    return tmp_path
 
 
 def _validate_completed_job(job_id: str, manager: JobManager):
@@ -133,11 +159,14 @@ async def download_model(
     job_id: str,
     format: str = Query(
         default="merged_pth",
-        description="Export format: merged_pth, lora_adapters"
+        description="Export format: merged_pth, lora_adapters, student_model",
     ),
     model: Optional[str] = Query(
         default=None,
-        description="Model name (grounding_dino, sam). Auto-detected if omitted."
+        description=(
+            "Model key: grounding_dino, sam, student_model, etc. "
+            "Auto-detected if only one merged package exists."
+        ),
     ),
     manager: JobManager = Depends(get_manager)
 ):
@@ -160,36 +189,31 @@ async def download_model(
             raise HTTPException(status_code=404, detail="No export packages found.")
 
         model_name = _resolve_model(model, list(packages.keys()), "merged package")
-        zip_path = packages[model_name]
+        artifact = packages[model_name]
+
+        # Legacy / fallback: merged_pth pointed at raw .pt — wrap so the file is a real export zip
+        if artifact.suffix.lower() in (".pt", ".pth"):
+            tmp_path = _zip_student_model_for_download(output_dir)
+            return FileResponse(
+                path=str(tmp_path),
+                filename=f"{model_name}_model_{job_id[:8]}.zip",
+                media_type="application/zip",
+                background=BackgroundTask(tmp_path.unlink),
+            )
 
         return FileResponse(
-            path=str(zip_path),
+            path=str(artifact),
             filename=f"{model_name}_model_{job_id[:8]}.zip",
-            media_type="application/zip"
+            media_type="application/zip",
         )
 
     if format == "student_model":
-        student_pt = output_dir / "student_model" / "best.pt"
-        if not student_pt.exists():
-            raise HTTPException(
-                status_code=404,
-                detail="Student model not found. Was this a student_distillation job?"
-            )
-
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-
-        with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write(student_pt, "best.pt")
-            class_names_file = output_dir / "yolo_dataset" / "data.yaml"
-            if class_names_file.exists():
-                zipf.write(class_names_file, "data.yaml")
-
+        tmp_path = _zip_student_model_for_download(output_dir)
         return FileResponse(
             path=str(tmp_path),
             filename=f"student_model_{job_id[:8]}.zip",
             media_type="application/zip",
-            background=BackgroundTask(tmp_path.unlink)
+            background=BackgroundTask(tmp_path.unlink),
         )
 
     if format == "lora_adapters":

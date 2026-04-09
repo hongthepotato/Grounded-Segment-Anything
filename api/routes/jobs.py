@@ -2,7 +2,7 @@
 REST endpoints for job management.
 
 Provides:
-- POST /api/jobs - Submit new job
+- POST /api/jobs - Submit labeled YOLOv8n-seg training (always queues yolo_seg_labeled)
 - GET /api/jobs - List all jobs
 - GET /api/jobs/{id} - Get job details
 - DELETE /api/jobs/{id} - Cancel job
@@ -82,7 +82,7 @@ JOB_CONFIG_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
         },
         "field_validations": {
             "image_paths": lambda v: len(v) > 0,  # Must have at least one image
-        }
+        },
     },
     "student_distillation": {
         "required": ["data_path", "image_paths"],
@@ -100,37 +100,39 @@ JOB_CONFIG_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
             "image_paths": lambda v: len(v) > 0,
         }
     },
+    "yolo_seg_labeled": {
+        "required": ["data_path", "image_paths"],
+        "field_types": {
+            "data_path": str,
+            "image_paths": list,
+            "split_config": dict,
+            "training": dict,
+        },
+        "field_validations": {
+            "image_paths": lambda v: len(v) > 0,
+        },
+    },
 }
 
-DISTILLATION_METADATA: Dict[str, Any] = {
+YOLO_SEG_LABELED_METADATA: Dict[str, Any] = {
     "required": ["data_path", "image_paths"],
-    "optional": [
-        "teacher_dir",
-        "unlabeled_image_paths",
-        "student_model",
-        "student_size",
-        "split_config",
-        "training",
-    ],
+    "optional": ["split_config", "training"],
     "constraints": {
-        "student_size": ["n", "s", "m", "l", "x"],
-        "teacher_unlabeled_pair": "teacher_dir and unlabeled_image_paths must be provided together",
+        "annotations": "COCO must include segmentation (polygon) masks for yolov8n-seg",
         "split_config": "train/val/test must be non-negative and sum to 1.0",
     },
     "defaults": {
-        "student_size": "s",
+        "student_model": "yolov8n-seg",
         "split_config": {"train": 0.8, "val": 0.2},
     },
     "example": {
-        "job_type": "student_distillation",
+        "job_type": "teacher_training",
         "config": {
-            "data_path": "upload/2026/03/12/train.json",
-            "image_paths": ["upload/2026/03/12/labeled/"],
-            "teacher_dir": "experiments/teacher_training_ab12cd34",
-            "unlabeled_image_paths": ["upload/2026/03/unlabeled/"],
-            "student_size": "s",
-            "training": {"epochs": 120, "batch_size": 16},
+            "data_path": "upload/data/annotations/coco.json",
+            "image_paths": ["upload/2025/12/17/boxes/rgb_image_20251229_141826_663.png"],
+            "training": {"epochs": 100, "batch_size": 16},
         },
+        "note": "POST /api/jobs accepts this envelope; job_type is ignored; job stored as yolo_seg_labeled",
     },
 }
 
@@ -226,6 +228,29 @@ def validate_job_config(job_type: str, config: Dict[str, Any]) -> List[str]:
                 if split_error:
                     errors.append(split_error)
 
+    if job_type == "teacher_training":
+        auto = config.get("auto_student_distillation")
+        if auto is not None and not isinstance(auto, bool):
+            errors.append("'auto_student_distillation' must be a boolean")
+        dsplit = config.get("distillation_split_config")
+        if dsplit is not None:
+            if not isinstance(dsplit, dict):
+                errors.append("'distillation_split_config' must be an object")
+            else:
+                split_error = _validate_split_config(dsplit)
+                if split_error:
+                    errors.append(f"distillation_split_config: {split_error}")
+
+    if job_type == "yolo_seg_labeled":
+        split_cfg = config.get("split_config")
+        if split_cfg is not None:
+            if not isinstance(split_cfg, dict):
+                errors.append("'split_config' must be an object")
+            else:
+                split_error = _validate_split_config(split_cfg)
+                if split_error:
+                    errors.append(split_error)
+
     return errors
 
 
@@ -274,51 +299,46 @@ def job_to_response(job: Job) -> JobResponse:
 @router.post("", status_code=200)
 async def submit_job(
     request: JobCreate,
-    manager: JobManager = Depends(get_manager)
+    manager: JobManager = Depends(get_manager),
 ):
     """
-    Submit a new training job.
-    
-    The job is queued and will be executed by an available worker.
-    Returns immediately with job details.
-    
-    Example:
-        POST /api/jobs
-        {
-            "job_type": "teacher_training",
-            "config": {
-                "data_path": "data/annotations.json",
-                "image_paths": [
-                    "upload/2025/12/16/xxx1.jpeg",
-                    "upload/2025/12/16/xxx2.jpeg"
-                ],
-                "training": {"epochs": 50, "batch_size": 8}
-            }
-        }
+    Submit **yolov8n-seg** training on labeled COCO only (no teachers).
+
+    Body is `JobCreate` (`job_type`, `config`, `priority`, `output_dir`, `tags`).
+    The top-level ``job_type`` field is kept for client parity (e.g. ``teacher_training``)
+    but is **ignored**; the queue always receives ``yolo_seg_labeled``.
+
+    ``config`` must include ``data_path`` and ``image_paths``. Optional: ``split_config``,
+    ``training``. COCO must include segmentation masks.
     """
-    # Validate config before accepting job
-    validation_errors = validate_job_config(request.job_type, request.config)
+    config: Dict[str, Any] = dict(request.config)
+
+    validation_errors = validate_job_config("yolo_seg_labeled", config)
     if validation_errors:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid job config: {'; '.join(validation_errors)}"
+            detail=f"Invalid job config: {'; '.join(validation_errors)}",
         )
 
     try:
         job = manager.submit_job(
-            job_type=request.job_type,
-            config=request.config,
+            job_type="yolo_seg_labeled",
+            config=config,
             priority=request.priority,
             output_dir=request.output_dir,
             tags=request.tags,
         )
-        logger.info("Submitted job %s (type=%s)", job.id[:8], request.job_type)
+        logger.info(
+            "Submitted yolo_seg_labeled job %s (client job_type=%r)",
+            job.id[:8],
+            request.job_type,
+        )
         return JSONResponse(
             status_code=200,
             content=success_response(
-                data={"jobs": [job_to_response(job).model_dump(mode='json')]},
-                code=200
-            )
+                data={"jobs": [job_to_response(job).model_dump(mode="json")]},
+                code=200,
+            ),
         )
 
     except ValueError as e:
@@ -370,21 +390,18 @@ async def list_jobs(
 @router.get("/types")
 async def list_job_types():
     """
-    Get job type metadata for frontend form generation.
+    Metadata for **POST /api/jobs** (labeled YOLO-seg submission).
 
-    Includes required fields, optional fields, constraints and examples.
+    Other job kinds (e.g. ``student_distillation``) use dedicated endpoints; types may
+    still appear on listed jobs from earlier runs or internal queues.
     """
     data = {
         "job_types": {
-            "teacher_training": {
-                "required": ["data_path", "image_paths"],
-                "optional": ["training"],
-                "constraints": {
-                    "image_paths": "must contain at least one image path",
-                },
-            },
-            "student_distillation": DISTILLATION_METADATA,
-        }
+            "yolo_seg_labeled": YOLO_SEG_LABELED_METADATA,
+        },
+        "other_routes": {
+            "student_distillation": "POST /api/distillation",
+        },
     }
     return JSONResponse(status_code=200, content=success_response(data=data))
 

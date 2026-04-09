@@ -3,9 +3,16 @@ Student model trainer using ultralytics.
 
 Wraps ultralytics YOLO training with config from distillation.yaml,
 mapping platform config keys to ultralytics train() arguments.
+
+Ultralytics 8.4+ runs AMP self-tests using a hardcoded ``YOLO("yolo26n.pt")`` load
+(``ultralytics.utils.checks.check_amp``), not your student weights. That can trigger a
+GitHub download unless ``yolo26n.pt`` exists in the process CWD when the check runs.
+We temporarily ``chdir`` to ``PRETRAINED_MODELS_DIR`` during ``model.train()`` so a
+pre-placed ``data/models/pretrained/yolo26n.pt`` satisfies the check offline.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 
@@ -71,6 +78,9 @@ class StudentTrainer:
             'verbose': True,
         }
 
+        if 'amp' in training:
+            args['amp'] = training['amp']
+
         aug_keys = [
             'mosaic', 'mixup', 'copy_paste',
             'hsv_h', 'hsv_s', 'hsv_v',
@@ -111,8 +121,20 @@ class StudentTrainer:
         model = YOLO(str(pretrained))
 
         train_args = self._build_train_args()
+        train_args['data'] = str(Path(self.data_yaml).resolve())
+        train_args['project'] = str(self.output_dir.resolve())
         logger.info("Starting student training: model=%s, epochs=%d, batch=%d",
                      self.model_name, train_args['epochs'], train_args['batch'])
+
+        amp_probe = PRETRAINED_MODELS_DIR / 'yolo26n.pt'
+        if not amp_probe.exists():
+            logger.warning(
+                "Optional %s missing: Ultralytics AMP check will try to download "
+                "yolo26n.pt from GitHub (separate from %s). Place yolo26n.pt there to "
+                "train fully offline, or set training.amp=false to disable AMP.",
+                amp_probe,
+                pretrained.name,
+            )
 
         if progress_callback:
             def _on_train_epoch_end(trainer):
@@ -139,7 +161,13 @@ class StudentTrainer:
 
             model.add_callback('on_train_batch_end', _on_train_batch_end)
 
-        results = model.train(**train_args)
+        pt_dir = Path(PRETRAINED_MODELS_DIR).resolve()
+        prev_cwd = Path.cwd()
+        try:
+            os.chdir(pt_dir)
+            results = model.train(**train_args)
+        finally:
+            os.chdir(prev_cwd)
 
         best_pt = self.output_dir / 'student' / 'weights' / 'best.pt'
         if not best_pt.exists():

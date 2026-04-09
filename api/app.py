@@ -85,7 +85,7 @@ API for managing ML training jobs and auto-labeling.
 
 ## Features
 
-- **Job Submission**: Submit teacher training and distillation jobs
+- **Job Submission**: Submit labeled YOLO-seg jobs (`POST /api/jobs`); student distillation via `POST /api/distillation`
 - **Auto-Labeling**: Automatic annotation generation with Grounding DINO + MobileSAM
 - **Job Management**: Cancel, list, and query job status
 - **Real-time Updates**: WebSocket for live progress updates
@@ -94,8 +94,8 @@ API for managing ML training jobs and auto-labeling.
 ## Endpoints
 
 ### Jobs
-- `POST /api/jobs` - Submit new job
-- `POST /api/distillation` - Submit student distillation job (convenience)
+- `POST /api/jobs` - Train yolov8n-seg on labeled COCO (`JobCreate`; always queues `yolo_seg_labeled`)
+- `POST /api/distillation` - Submit student distillation job
 - `GET /api/jobs` - List jobs with filtering
 - `GET /api/jobs/{id}` - Get job details
 - `DELETE /api/jobs/{id}` - Cancel job

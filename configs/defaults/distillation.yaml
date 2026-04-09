@@ -33,6 +33,8 @@ distillation:
       nms: 0.7
   
   # Training hyperparameters
+  # Optional: amp: false disables mixed precision and skips Ultralytics' yolo26n.pt AMP probe.
+  # With amp true (default), place yolo26n.pt under data/models/pretrained/ for offline AMP checks.
   training:
     epochs: 300
     batch_size: 32

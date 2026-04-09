@@ -171,4 +171,8 @@ class StudentDistillationHandler(JobHandler):
         shutil.copy2(best_pt, str(final_weights))
         logger.info("Student model saved to %s", final_weights)
 
+        from ml_engine.export.student_yolo_export import create_student_yolo_export_zip
+
+        create_student_yolo_export_zip(out)
+
         _report("Student distillation complete!", best_pt=str(final_weights))

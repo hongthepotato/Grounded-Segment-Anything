@@ -30,6 +30,7 @@ class JobType(str, Enum):
     """Supported job types."""
     TEACHER_TRAINING = "teacher_training"
     STUDENT_DISTILLATION = "student_distillation"
+    YOLO_SEG_LABELED = "yolo_seg_labeled"
     MODEL_OPTIMIZATION = "model_optimization"
     EVALUATION = "evaluation"
     AUTO_LABEL = "auto_label"
