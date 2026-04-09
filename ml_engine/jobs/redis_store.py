@@ -155,6 +155,56 @@ class RedisJobStore:
             logger.error("Failed to dequeue job: %s", e)
             return None
 
+    def store_job(self, job: Job) -> None:
+        """
+        Persist job state to Redis WITHOUT adding it to the work queue.
+
+        Used by the Coordinator's DispatchStageTool so that the ExecutorWorker
+        can validate contract constraints before the job enters the queue.
+
+        Args:
+            job: Job to persist
+        """
+        job_key = f"{self.JOB_PREFIX}{job.id}"
+        try:
+            self.redis.hset(job_key, mapping=job.to_dict())
+            logger.debug("Stored job %s (not yet queued)", job.id[:8])
+        except RedisError as e:
+            logger.error("Failed to store job %s: %s", job.id[:8], e)
+            raise
+
+    def enqueue_by_id(self, job_id: str) -> bool:
+        """
+        Move an already-stored job into the work queue.
+
+        Used by ExecutorWorker after contract validation passes.
+
+        Args:
+            job_id: ID of a job previously saved via store_job()
+
+        Returns:
+            True if queued, False if job_id not found
+        """
+        job = self.get_job(job_id)
+        if job is None:
+            logger.warning("enqueue_by_id: job %s not found", job_id[:8])
+            return False
+        try:
+            if job.priority > 0:
+                self.redis.lpush(self.JOB_QUEUE_KEY, job_id)
+            else:
+                self.redis.rpush(self.JOB_QUEUE_KEY, job_id)
+            logger.info("Queued job %s (priority=%d)", job_id[:8], job.priority)
+            self.publish_event(job_id, {
+                "type": "job_enqueued",
+                "job_id": job_id,
+                "timestamp": datetime.now().isoformat(),
+            })
+            return True
+        except RedisError as e:
+            logger.error("Failed to queue job %s: %s", job_id[:8], e)
+            return False
+
     def requeue_job(self, job_id: str, to_front: bool = True) -> bool:
         """
         Put job back in queue (e.g., after worker failure).
