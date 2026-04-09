@@ -97,8 +97,26 @@ class ExperimentLoopHandler(JobHandler):
         immutable_keys = defaults.get("immutable_keys", [])
         guard = ConfigGuard(mutable_keys=mutable_keys, immutable_keys=immutable_keys)
 
-        # --- Mutator ---
-        mutator = SimpleMutator(mutable_keys=mutable_keys)
+        # --- Mutator / propose_fn ---
+        # use_llm_propose=True enables LLM-guided HPO (Stage 4).
+        # Falls back to SimpleMutator automatically on LLM errors.
+        use_llm = bool(exp_cfg.get("use_llm_propose", False))
+
+        if use_llm:
+            from ml_engine.experiment.llm_propose import LLMProposeFn
+            fallback = SimpleMutator(mutable_keys=mutable_keys)
+            proposer = LLMProposeFn(
+                mutable_keys=mutable_keys,
+                fallback=fallback,
+                provider=exp_cfg.get("llm_provider", "anthropic"),
+                model=exp_cfg.get("llm_model") or None,
+                timeout=float(exp_cfg.get("llm_timeout", 30.0)),
+            )
+            propose_fn = proposer.propose
+            logger.info("ExperimentLoopHandler: using LLM-guided propose_fn (Stage 4)")
+        else:
+            mutator = SimpleMutator(mutable_keys=mutable_keys)
+            propose_fn = mutator.propose
 
         # --- Progress forwarding ---
         def _progress_cb(info: Dict) -> None:
@@ -116,7 +134,7 @@ class ExperimentLoopHandler(JobHandler):
             data_manager=data_manager,
             output_dir=output_dir,
             budget=budget,
-            propose_fn=mutator.propose,
+            propose_fn=propose_fn,
             progress_callback=_progress_cb,
             cancel_check=_cancel_check,
         )
@@ -129,17 +147,23 @@ class ExperimentLoopHandler(JobHandler):
         )
 
         # Write outcome.json so worker can publish it in job_completed event
+        # Only include best_config.yaml in artifacts if it was actually written
+        # (mark_best is only called when a trial improves — all-crash runs produce no file)
+        artifacts = [
+            str(Path(output_dir) / "experiment_log.json"),
+            str(Path(output_dir) / "feedback.json"),
+        ]
+        best_cfg = Path(output_dir) / "best_config.yaml"
+        if best_cfg.exists():
+            artifacts.insert(0, str(best_cfg))
+
         outcome = {
-            "status": "completed",
+            "status": "cancelled" if result.cancelled else "completed",
             "metrics": {
-                "best_metric": result.best_metric,
-                "trials_completed": result.trials_completed,
+                "best_metric": result.best_metric or 0.0,
+                "trials_completed": float(result.trials_completed),
             },
-            "artifacts": [
-                str(Path(output_dir) / "experiment_log.json"),
-                str(Path(output_dir) / "best_config.yaml"),
-                str(Path(output_dir) / "feedback.json"),
-            ],
+            "artifacts": artifacts,
             "wall_time_seconds": result.wall_time_seconds,
             "error_message": None,
             "experiment_result": {
@@ -147,6 +171,7 @@ class ExperimentLoopHandler(JobHandler):
                 "best_trial_id": result.best_trial_id,
                 "best_metric": result.best_metric,
                 "trials_completed": result.trials_completed,
+                "cancelled": result.cancelled,
             },
         }
         (Path(output_dir) / "outcome.json").write_text(
