@@ -8,6 +8,12 @@ experiment:
   max_wall_time_seconds: null  # null = no wall-time limit
   metric_name: val_mAP50    # direct detection quality (not proxy loss)
   metric_mode: max           # "min" or "max"
+  # Stage 4: LLM-guided HPO. Set use_llm_propose=true to enable.
+  # Falls back to SimpleMutator automatically on LLM errors or timeout.
+  use_llm_propose: false
+  llm_provider: anthropic    # "anthropic" | "openai"
+  llm_model: null            # null = use ANTHROPIC_MODEL / OPENAI_MODEL env var
+  llm_timeout: 30.0          # seconds before falling back to SimpleMutator
 
 # Keys the experiment loop is allowed to mutate.
 # Paths must match the merged config produced by build_teacher_training_config():
