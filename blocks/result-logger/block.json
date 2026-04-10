@@ -1,0 +1,48 @@
+{
+  "id": "result-logger",
+  "version": "1.0.0",
+  "display_name": "Result Logger",
+  "category": "output",
+  "icon": "log",
+  "ports": {
+    "input": [
+      {
+        "id": "detections_in",
+        "alias": "detections",
+        "ros2_type": "vision_msgs/Detection2DArray",
+        "label": "Detections"
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "output_path",
+      "type": "string",
+      "label": "Log file path",
+      "default": "/data/detections.jsonl"
+    },
+    {
+      "id": "format",
+      "type": "enum",
+      "label": "Output format",
+      "default": "jsonl",
+      "options": ["jsonl", "csv"]
+    }
+  ],
+  "engineer_params": [
+    {
+      "id": "max_file_size_mb",
+      "type": "int",
+      "label": "Max log file size (MB, 0 = unlimited)",
+      "default": 500,
+      "min": 0,
+      "units": "MB"
+    },
+    {
+      "id": "rotate_on_start",
+      "type": "bool",
+      "label": "Rotate log file on node start",
+      "default": false
+    }
+  ]
+}
