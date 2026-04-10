@@ -139,6 +139,7 @@ class StateMachine:
 
     @property
     def current_state(self) -> str:
+        r"""Return the current lifecycle state. Raises KeyError if state not found."""
         raw = self._r.hget(self._key, "state")
         if raw is None:
             raise KeyError(f"No state for run {self.run_id}")
@@ -146,6 +147,7 @@ class StateMachine:
 
     @property
     def retry_count(self) -> int:
+        r"""Return the current retry count (number of times we've entered failed_retrying)."""
         raw = self._r.hget(self._key, "retry_count") or b"0"
         return int(raw.decode() if isinstance(raw, bytes) else raw)
 
@@ -196,9 +198,11 @@ class StateMachine:
         self._r.hset(self._key, "stage_summaries", json.dumps(summaries))
 
     def get_stage_summaries(self) -> List[Dict[str, Any]]:
+        r"""Return the list of stage summaries, or empty list if none."""
         raw = self._r.hget(self._key, "stage_summaries") or b"[]"
         return json.loads(raw.decode() if isinstance(raw, bytes) else raw)
 
     @classmethod
     def exists(cls, redis_client: _redis.Redis, run_id: str) -> bool:
+        r"""Check if state exists for given run_id."""
         return redis_client.exists(f"{cls._PREFIX}{run_id}:state") > 0

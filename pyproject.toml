@@ -65,6 +65,7 @@ test = [
     "mock>=5.1.0",
     "faker>=19.0.0",
     "hypothesis>=6.82.0",
+    "fakeredis>=2.20.0",
 ]
 lint = [
     "ruff",

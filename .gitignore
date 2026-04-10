@@ -34,6 +34,8 @@ env/
 *.swo
 *~
 .DS_Store
+.claude
+# *.md
 
 # Jupyter Notebook
 .ipynb_checkpoints

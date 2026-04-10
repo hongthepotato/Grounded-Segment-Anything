@@ -23,7 +23,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV UV_LINK_MODE=copy
 ENV CUDA_HOME=/usr/local/cuda
-ENV TORCH_CUDA_ARCH_LIST="8.9"
+ENV TORCH_CUDA_ARCH_LIST="7.5"
 
 COPY pyproject.toml uv.lock ./
 COPY deps/ deps/
@@ -55,6 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app /app
 
