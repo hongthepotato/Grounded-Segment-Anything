@@ -2,12 +2,15 @@
 REST endpoints for model export and download.
 
 Provides:
-- GET /api/jobs/{job_id}/exports - List available exports (per model)
-- GET /api/jobs/{job_id}/export  - Download trained model package
+- GET  /api/jobs/{job_id}/exports     - List available exports (per model)
+- GET  /api/jobs/{job_id}/export      - Download trained model package
+- POST /api/jobs/{job_id}/build-ros2  - Trigger ROS2 container build
+- GET  /api/jobs/{job_id}/deploy-info - Pull/run commands for edge device
 """
 
 import os
 import logging
+import threading
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import tempfile
@@ -238,4 +241,157 @@ def _resolve_model(requested: Optional[str], available: List[str], label: str) -
     raise HTTPException(
         status_code=400,
         detail=f"Multiple models have {label}: {available}. Specify ?model=<name>"
+    )
+
+
+@router.post("/{job_id}/build-ros2")
+async def build_ros2(
+    job_id: str,
+    manager: JobManager = Depends(get_manager)
+):
+    """
+    Trigger a ROS2 inference container build for a completed distillation job.
+
+    Runs in the background — returns immediately. Poll /deploy-info to check
+    when ros2_image_tag appears (set after push completes).
+
+    Returns:
+        {"status": "building", "message": "..."}
+    """
+    job = _validate_completed_job(job_id, manager)
+    output_dir = Path(job.output_dir)
+    student_pt = output_dir / "student_model" / "best.pt"
+
+    if not student_pt.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="student_model/best.pt not found. Was this a student_distillation job?"
+        )
+
+    registry_url = os.environ.get("REGISTRY_PUSH_URL", "localhost:5000")
+
+    def _build_in_background():
+        try:
+            from ml_engine.export.container_builder import build_ros2_container
+            image_tag = build_ros2_container(
+                model_weights=student_pt,
+                job_id=job_id,
+                registry_url=registry_url,
+            )
+            # Persist to Redis so deploy-info can return it
+            store = manager._store if hasattr(manager, '_store') else None
+            if store:
+                store.update_job(job_id, ros2_image_tag=image_tag)
+            logger.info("Background ROS2 build complete: %s", image_tag)
+        except Exception as exc:
+            logger.error("Background ROS2 build failed for job %s: %s", job_id[:8], exc)
+
+    thread = threading.Thread(target=_build_in_background, daemon=True)
+    thread.start()
+
+    return JSONResponse(
+        status_code=202,
+        content=success_response(data={
+            "status": "building",
+            "message": (
+                "ROS2 container build started in background. "
+                "This takes 5-90 min on first ARM64 build. "
+                "Poll GET /api/jobs/{job_id}/deploy-info for the image_tag."
+            ),
+        })
+    )
+
+
+@router.get("/{job_id}/deploy-info")
+async def deploy_info(
+    job_id: str,
+    manager: JobManager = Depends(get_manager)
+):
+    """
+    Return pull/run commands for deploying the ROS2 inference container on an edge device.
+
+    Returns 404 if the container has not been built yet (trigger via POST /build-ros2
+    or by setting build_ros2_container=true in the distillation job config).
+
+    Example response:
+        {
+          "image_tag": "workstation:5000/yolo-inference-abc12345:20260406",
+          "pull_command": "docker pull workstation:5000/yolo-inference-abc12345:20260406",
+          "run_command": "docker run --gpus all ...",
+          "setup_script_url": "http://workstation:8080/api/setup-edge-device.sh",
+          "topics": {...},
+          "notes": "..."
+        }
+    """
+    job = _validate_completed_job(job_id, manager)
+
+    # image_tag persisted by worker._complete_job reading image_tag.txt,
+    # or by the background /build-ros2 endpoint.
+    ros2_image_tag = getattr(job, 'ros2_image_tag', None)
+
+    # Fallback: check the filesystem directly (handles re-runs / legacy)
+    if not ros2_image_tag and job.output_dir:
+        tag_file = Path(job.output_dir) / "image_tag.txt"
+        if tag_file.exists():
+            ros2_image_tag = tag_file.read_text().strip() or None
+
+    if not ros2_image_tag:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "ROS2 container not yet built for this job. "
+                "Trigger via POST /api/jobs/{job_id}/build-ros2 "
+                "or rerun with build_ros2_container=true."
+            )
+        )
+
+    registry_external = os.environ.get("REGISTRY_EXTERNAL_URL", "workstation:5000")
+    registry_push = os.environ.get("REGISTRY_PUSH_URL", "localhost:5000")
+    # Swap internal push URL for the edge-accessible external URL
+    external_tag = ros2_image_tag.replace(registry_push, registry_external)
+
+    workstation_host = registry_external.split(":")[0]
+    api_port = os.environ.get("API_PORT", "8080")
+
+    run_command = (
+        f"docker run --gpus all --network host "
+        f"-v yolo-cache:/model/cache "
+        f"{external_tag} "
+        f"--ros-args -p input_topic:=/camera/image_raw -p confidence:=0.5"
+    )
+
+    return JSONResponse(
+        status_code=200,
+        content=success_response(data={
+            "image_tag": external_tag,
+            "pull_command": f"docker pull {external_tag}",
+            "run_command": run_command,
+            "setup_script_url": (
+                f"http://{workstation_host}:{api_port}/api/setup-edge-device.sh"
+            ),
+            "topics": {
+                "subscribe": "/camera/image_raw (sensor_msgs/msg/Image)",
+                "publish": "/detections (vision_msgs/msg/Detection2DArray)",
+                "diagnostics": "/yolo_inference/diagnostics (std_msgs/msg/String, JSON)",
+            },
+            "notes": (
+                "First boot converts model to TensorRT (~2 min). "
+                "Engine cached in yolo-cache volume for instant subsequent starts. "
+                "WARNING: -v yolo-cache:/model/cache is required. "
+                "Without it, TensorRT reconverts on every restart (~2 min cold start)."
+            ),
+        })
+    )
+
+
+@router.get("/setup-edge-device.sh", include_in_schema=False)
+async def serve_setup_script():
+    """Serve the edge device setup script for download."""
+    script_path = Path(__file__).parent.parent.parent / "serve" / "setup_edge_device.sh"
+    if not script_path.exists():
+        raise HTTPException(status_code=404, detail="setup_edge_device.sh not found")
+    return FileResponse(
+        path=str(script_path),
+        filename="setup_edge_device.sh",
+        media_type="text/x-sh",
     )
