@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from ml_engine.jobs.handlers.base import JobHandler, TrainingCancelledError
+from ml_engine.jobs.models import JobOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,7 @@ class StudentDistillationHandler(JobHandler):
             output_dir=str(out),
         )
 
-        best_pt = trainer.train(
+        best_pt, train_metrics = trainer.train(
             progress_callback=training_progress,
             cancel_check=_cancel_check,
         )
@@ -170,5 +171,16 @@ class StudentDistillationHandler(JobHandler):
         import shutil
         shutil.copy2(best_pt, str(final_weights))
         logger.info("Student model saved to %s", final_weights)
+
+        # Write outcome.json so EvaluatorWorker can gate on the metrics.
+        # Metrics already use gate-compatible keys: mIoU (seg) or mAP50 (det).
+        outcome = JobOutcome(
+            metrics=train_metrics,
+            artifacts={'checkpoint': str(final_weights)},
+        )
+        outcome_path = out / 'outcome.json'
+        with open(outcome_path, 'w', encoding='utf-8') as f:
+            json.dump(outcome.to_dict(), f)
+        logger.info("Outcome written: %s", outcome)
 
         _report("Student distillation complete!", best_pt=str(final_weights))
