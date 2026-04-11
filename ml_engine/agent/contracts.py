@@ -110,7 +110,7 @@ class StageSummary:
     stage: str
     status: str                             # "pass" | "retry" | "escalate" | "pending_approval"
     metrics: Dict[str, float] = field(default_factory=dict)
-    artifacts: List[str] = field(default_factory=list)
+    artifacts: Dict[str, str] = field(default_factory=dict)
     key_decisions: List[str] = field(default_factory=list)
     duration_seconds: float = 0.0
     trial_count: Optional[int] = None

@@ -376,7 +376,7 @@ class EvaluatorWorker:
         outcome = _json.loads(outcome_path.read_text(encoding="utf-8"))
         metrics = outcome.get("metrics", {})
         wall_time = outcome.get("wall_time_seconds", 0.0)
-        artifacts = outcome.get("artifacts", [])
+        artifacts = outcome.get("artifacts", {})
 
         # Gate evaluation (deterministic)
         criteria = self._contract.acceptance_criteria if self._contract else None

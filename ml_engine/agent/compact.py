@@ -93,7 +93,8 @@ def _format_summary(s: StageSummary) -> str:
     if s.trial_count is not None:
         lines.append(f"Trials: {s.trial_count}")
     if s.artifacts:
-        lines.append(f"Artifacts: {', '.join(s.artifacts[:3])}")
+        items = list(s.artifacts.items())[:3]
+        lines.append("Artifacts: " + ", ".join(f"{k}: {v}" for k, v in items))
     if s.key_decisions:
         lines.append("Key decisions:")
         for d in s.key_decisions[:5]:
