@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from ml_engine.jobs.handlers.base import JobHandler, TrainingCancelledError
+from ml_engine.jobs.models import JobOutcome
 
 
 class TeacherTrainingHandler(JobHandler):
@@ -97,20 +98,27 @@ class TeacherTrainingHandler(JobHandler):
 
         wall_time = time.monotonic() - started_at
 
-        # Collect artifact paths produced by this job
+        # Collect artifact paths produced by this job, keyed by role
         out = Path(output_dir)
-        artifacts = []
-        for pattern in ("evaluation/*.json", "**/*.pth", "export/**/*"):
-            artifacts.extend(str(p) for p in out.glob(pattern) if p.is_file())
+        artifacts: dict = {}
+        if (out / "bundle.manifest.json").exists():
+            artifacts["bundle_manifest"] = str(out / "bundle.manifest.json")
+        combined = out / "evaluation" / "combined_report.json"
+        if combined.exists():
+            artifacts["eval_report"] = str(combined)
+        else:
+            for p in sorted(out.glob("evaluation/*_report.json")):
+                artifacts[f"eval_{p.stem.replace('_report', '')}"] = str(p)
+        checkpoints = sorted(out.glob("**/*.pth"))
+        if checkpoints:
+            artifacts["checkpoint"] = str(checkpoints[0])
 
         # Write outcome.json -- read by worker and included in job_completed event
-        outcome = {
-            "status": "completed",
-            "metrics": val_metrics,
-            "artifacts": artifacts,
-            "wall_time_seconds": wall_time,
-            "error_message": None,
-        }
+        outcome = JobOutcome(
+            metrics=val_metrics,
+            artifacts=artifacts,
+            wall_time_seconds=wall_time,
+        )
         outcome_path = out / "outcome.json"
         outcome_path.parent.mkdir(parents=True, exist_ok=True)
-        outcome_path.write_text(json.dumps(outcome, indent=2), encoding="utf-8")
+        outcome_path.write_text(json.dumps(outcome.to_dict(), indent=2), encoding="utf-8")
