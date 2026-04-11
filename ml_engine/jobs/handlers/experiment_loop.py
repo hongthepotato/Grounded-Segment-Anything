@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ml_engine.jobs.handlers.base import JobHandler, TrainingCancelledError
+from ml_engine.jobs.models import JobOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -149,31 +150,32 @@ class ExperimentLoopHandler(JobHandler):
         # Write outcome.json so worker can publish it in job_completed event
         # Only include best_config.yaml in artifacts if it was actually written
         # (mark_best is only called when a trial improves — all-crash runs produce no file)
-        artifacts = [
-            str(Path(output_dir) / "experiment_log.json"),
-            str(Path(output_dir) / "feedback.json"),
-        ]
+        artifacts: dict = {
+            "experiment_log": str(Path(output_dir) / "experiment_log.json"),
+            "feedback": str(Path(output_dir) / "feedback.json"),
+        }
         best_cfg = Path(output_dir) / "best_config.yaml"
         if best_cfg.exists():
-            artifacts.insert(0, str(best_cfg))
+            artifacts["best_config"] = str(best_cfg)
 
-        outcome = {
-            "status": "cancelled" if result.cancelled else "completed",
-            "metrics": {
+        outcome = JobOutcome(
+            status="cancelled" if result.cancelled else "completed",
+            metrics={
                 "best_metric": result.best_metric or 0.0,
                 "trials_completed": float(result.trials_completed),
             },
-            "artifacts": artifacts,
-            "wall_time_seconds": result.wall_time_seconds,
-            "error_message": None,
-            "experiment_result": {
-                "run_id": result.run_id,
-                "best_trial_id": result.best_trial_id,
-                "best_metric": result.best_metric,
-                "trials_completed": result.trials_completed,
-                "cancelled": result.cancelled,
+            artifacts=artifacts,
+            wall_time_seconds=result.wall_time_seconds,
+            extra={
+                "experiment_result": {
+                    "run_id": result.run_id,
+                    "best_trial_id": result.best_trial_id,
+                    "best_metric": result.best_metric,
+                    "trials_completed": result.trials_completed,
+                    "cancelled": result.cancelled,
+                }
             },
-        }
+        )
         (Path(output_dir) / "outcome.json").write_text(
-            json.dumps(outcome, indent=2), encoding="utf-8"
+            json.dumps(outcome.to_dict(), indent=2), encoding="utf-8"
         )

@@ -8,10 +8,11 @@ This module defines:
 - JobType: Supported job types
 """
 
-from dataclasses import dataclass, field, asdict
+from __future__ import annotations
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional, List
+from typing import ClassVar, Dict, Any, Optional, List
 import json
 import uuid
 
@@ -105,41 +106,55 @@ class JobOutcome:
     Structured result of a completed job.
 
     Written to {output_dir}/outcome.json at job completion.
-    Included in the job_completed event so the Coordinator (Stage 1+)
+    Included in the job_completed event so the Coordinator
     can read metrics and artifact paths without touching the filesystem.
 
     Attributes:
         status: Terminal status ("completed", "failed", "cancelled")
         metrics: Final validation metrics from training (e.g. val_mAP50)
-        artifacts: Paths to produced files (checkpoints, evaluation reports)
+        artifacts: Paths to produced files, keyed by role (e.g. "checkpoint", "eval_report")
         wall_time_seconds: Elapsed time from job start to finish
         error_message: Set only when status is "failed"
+        extra: Handler-specific extension data serialized inline. Use sparingly —
+               only for fields a specific job type needs to forward to the coordinator
+               (e.g. experiment_result for experiment_loop jobs).
     """
     status: str = "completed"
     metrics: Dict[str, float] = field(default_factory=dict)
-    artifacts: List[str] = field(default_factory=list)
+    artifacts: Dict[str, str] = field(default_factory=dict)
     wall_time_seconds: float = 0.0
     error_message: Optional[str] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    _KNOWN_KEYS: ClassVar[frozenset] = frozenset(
+        {"status", "metrics", "artifacts", "wall_time_seconds", "error_message"}
+    )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        """Convert to dictionary for JSON serialization. Extra fields are merged inline."""
+        d = {
             "status": self.status,
             "metrics": self.metrics,
             "artifacts": self.artifacts,
             "wall_time_seconds": self.wall_time_seconds,
             "error_message": self.error_message,
         }
+        d.update(self.extra)
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "JobOutcome":
+        """Create from dictionary. Unknown keys are captured into extra."""
         if not data:
             return cls()
+        extra = {k: v for k, v in data.items() if k not in cls._KNOWN_KEYS}
         return cls(
             status=data.get("status", "completed"),
             metrics=data.get("metrics", {}),
-            artifacts=data.get("artifacts", []),
+            artifacts=data.get("artifacts", {}),
             wall_time_seconds=float(data.get("wall_time_seconds", 0.0)),
             error_message=data.get("error_message"),
+            extra=extra,
         )
 
 
