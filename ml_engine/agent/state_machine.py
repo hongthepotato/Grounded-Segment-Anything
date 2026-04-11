@@ -58,6 +58,11 @@ STATES = {
 
 TERMINAL_STATES = {"done", "failed_unrecoverable", "escalated", "cancelled"}
 
+# Gate groups: which stages each gate function applies to.
+# gate.py imports these so stage membership is a single source of truth.
+TEACHER_GATE_STAGES = frozenset({"teacher_training", "training_eval_gate", "experiment_loop"})
+DISTILLATION_GATE_STAGES = frozenset({"student_distillation", "distill_eval_gate"})
+
 # Valid transitions: state -> set of reachable states
 TRANSITIONS: Dict[str, List[str]] = {
     "created":                      ["planning"],

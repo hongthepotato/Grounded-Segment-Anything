@@ -8,9 +8,14 @@ coordinator.py and workers.py.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Dict
 
 from ml_engine.agent.contracts import AcceptanceCriteria, GateDecision
+from ml_engine.agent.state_machine import DISTILLATION_GATE_STAGES, TEACHER_GATE_STAGES
+
+
+def _retries_left_str(remaining: int) -> str:
+    return f"{remaining} {'retry' if remaining == 1 else 'retries'} left"
 
 
 def evaluate_gate(
@@ -26,11 +31,13 @@ def evaluate_gate(
     Returns GateDecision with verdict in: "pass", "retry", "escalate".
     LLM is optional only for anomaly interpretation after the verdict is known.
     """
-    mAP50 = metrics.get("mAP50") or metrics.get("best_metric") or metrics.get("val_mAP50")
-    mIoU = metrics.get("mIoU") or metrics.get("val_mIoU")
+    mAP50 = next((metrics[k] for k in ("mAP50", "best_metric", "val_mAP50") if k in metrics), None)
+    mIoU = next((metrics[k] for k in ("mIoU", "val_mIoU") if k in metrics), None)
 
-    # Detection gate
-    if stage in ("teacher_training", "training_eval_gate", "experiment_loop"):
+    # Teacher model gate: mAP50 is the upstream signal for all teacher stages,
+    # even when SAM is also being fine-tuned. GroundingDINO box quality gates the
+    # whole pipeline -- bad proposals mean SAM gets bad prompts regardless.
+    if stage in TEACHER_GATE_STAGES:
         if mAP50 is None:
             return GateDecision(
                 verdict="escalate",
@@ -41,7 +48,7 @@ def evaluate_gate(
         if mAP50 >= criteria.min_mAP50:
             return GateDecision(
                 verdict="pass",
-                reason=f"mAP50 {mAP50:.3f} >= threshold {criteria.min_mAP50}",
+                reason=f"mAP50 {mAP50:.3f} >= threshold {criteria.min_mAP50:.3f}",
                 metrics=metrics,
                 retry_count=retry_count,
             )
@@ -49,38 +56,51 @@ def evaluate_gate(
             return GateDecision(
                 verdict="retry",
                 reason=(
-                    f"mAP50 {mAP50:.3f} below threshold {criteria.min_mAP50}, "
-                    f"{max_retries - retry_count} retries left"
+                    f"mAP50 {mAP50:.3f} below threshold {criteria.min_mAP50:.3f}, "
+                    f"{_retries_left_str(max_retries - retry_count)}"
                 ),
                 metrics=metrics,
                 retry_count=retry_count,
             )
         return GateDecision(
             verdict="escalate",
-            reason=f"mAP50 {mAP50:.3f} below threshold after {retry_count} retries",
+            reason=f"mAP50 {mAP50:.3f} below threshold {criteria.min_mAP50:.3f} after {retry_count} retries",
             metrics=metrics,
             retry_count=retry_count,
         )
 
-    # Segmentation gate
-    if stage in ("student_distillation", "distill_eval_gate") and mIoU is not None:
-        if mIoU >= criteria.min_mIoU:
+    # Student distillation gate: either SAM (mIoU) or GroundingDINO (mAP50)
+    # depending on which component is being compressed.
+    # Pick whichever metric is present; escalate if neither is.
+    if stage in DISTILLATION_GATE_STAGES:
+        if mIoU is not None:
+            primary, threshold, name = mIoU, criteria.min_mIoU, "mIoU"
+        elif mAP50 is not None:
+            primary, threshold, name = mAP50, criteria.min_mAP50, "mAP50"
+        else:
+            return GateDecision(
+                verdict="escalate",
+                reason="neither mIoU nor mAP50 found in distillation outcome metrics",
+                metrics=metrics,
+                retry_count=retry_count,
+            )
+        if primary >= threshold:
             return GateDecision(
                 verdict="pass",
-                reason=f"mIoU {mIoU:.3f} >= {criteria.min_mIoU}",
+                reason=f"{name} {primary:.3f} >= threshold {threshold:.3f}",
                 metrics=metrics,
                 retry_count=retry_count,
             )
         if retry_count < max_retries:
             return GateDecision(
                 verdict="retry",
-                reason=f"mIoU {mIoU:.3f} below {criteria.min_mIoU}",
+                reason=f"{name} {primary:.3f} below {threshold:.3f}, {_retries_left_str(max_retries - retry_count)}",
                 metrics=metrics,
                 retry_count=retry_count,
             )
         return GateDecision(
             verdict="escalate",
-            reason="mIoU budget exhausted",
+            reason=f"{name} {primary:.3f} below threshold {threshold:.3f} after {retry_count} retries",
             metrics=metrics,
             retry_count=retry_count,
         )
@@ -88,7 +108,7 @@ def evaluate_gate(
     # Default: pass (e.g. auto_labeling uses a different quality bar)
     return GateDecision(
         verdict="pass",
-        reason="no metric threshold defined for this stage",
+        reason=f"no metric threshold defined for stage '{stage}' — passing by default",
         metrics=metrics,
         retry_count=retry_count,
     )
