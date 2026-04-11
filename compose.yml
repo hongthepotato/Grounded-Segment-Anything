@@ -80,6 +80,32 @@ services:
       - registry-data:/var/lib/registry
     restart: unless-stopped
 
+  # Low-code robotics composition platform.
+  # Supervisors access via browser: http://<workstation>:8000
+  # Engineers use the same URL with their engineer PIN for block install features.
+  # First run: navigate to /api/auth/first-run — the UI shows a setup wizard.
+  platform:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    container_name: ros2-platform
+    ports:
+      - "8000:8000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      # Bind-mount graphs and auth so they survive container restarts
+      - ./graphs:/app/graphs
+      - ./data/platform:/data
+      # Docker socket: platform generates and runs docker-compose stacks for pipelines.
+      # Same security note as training-app above.
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      - registry
+    restart: unless-stopped
+
 volumes:
   redis-data:
   registry-data:
