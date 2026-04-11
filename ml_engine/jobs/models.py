@@ -204,7 +204,7 @@ class Job:
         if self.created_at is None:
             self.created_at = datetime.now()
         # Standalone jobs are their own pipeline.
-        # The Coordinator (Stage 1+) overrides run_id when submitting pipeline jobs.
+        # The Coordinator overrides run_id when submitting pipeline jobs.
         if self.run_id is None:
             self.run_id = self.id
         # Note: output_dir is intentionally left as-is (None or user-provided base path)
@@ -238,7 +238,7 @@ class Job:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Job":
+    def from_dict(cls, data: Dict[str, Any]) -> Job:
         """
         Create Job from dictionary (Redis hash).
         
@@ -314,11 +314,6 @@ class Job:
     def is_terminal(self) -> bool:
         """Check if job is in a terminal state (won't change)."""
         return self.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]
-
-    @property
-    def is_active(self) -> bool:
-        """Check if job is currently active (running or cancelling)."""
-        return self.status in [JobStatus.RUNNING, JobStatus.CANCELLING]
 
     @property
     def duration_seconds(self) -> Optional[float]:
