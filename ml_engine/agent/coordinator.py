@@ -430,6 +430,7 @@ class Coordinator:
             sm.append_stage_summary(summary.to_dict())
             state.stage_just_completed = None
             state.stage_dispatch_overrides = {}
+            state.stage_start_idx = None
 
         response = None
         # LLM-driven turns
@@ -483,9 +484,13 @@ class Coordinator:
                 })
                 logger.debug("Tool %s -> success=%s", tool_name, result.success)
 
-                # Track which stage was dispatched so compaction fires on job_completed
+                # Track which stage was dispatched so compaction fires on job_completed.
+                # Record the exact message index now — len(messages)-1 is the assistant
+                # message containing this dispatch_stage call.
                 if tool_name == "dispatch_stage" and result.success:
                     state.stage_just_completed = tool_input.get("stage")
+                    state.stage_dispatch_overrides = tool_input.get("overrides", {})
+                    state.stage_start_idx = len(state.messages) - 1
 
             state.messages.append({"role": "user", "content": tool_results})
 
