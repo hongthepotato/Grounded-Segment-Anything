@@ -45,6 +45,8 @@ class LoopState:
     messages: List[Dict[str, Any]] = field(default_factory=list)
     last_event_id: str = "0-0"
     stage_just_completed: Optional[str] = None
+    stage_dispatch_overrides: Dict[str, Any] = field(default_factory=dict)
+    stage_start_idx: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -52,17 +54,22 @@ class LoopState:
             "messages": json.dumps(self.messages),
             "last_event_id": self.last_event_id,
             "stage_just_completed": self.stage_just_completed or "",
+            "stage_dispatch_overrides": json.dumps(self.stage_dispatch_overrides),
+            "stage_start_idx": "" if self.stage_start_idx is None else str(self.stage_start_idx),
         }
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "LoopState":
         messages_raw = d.get("messages", "[]")
         messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
+        raw_idx = d.get("stage_start_idx", "")
         return cls(
             run_id=d.get("run_id", ""),
             messages=messages,
             last_event_id=d.get("last_event_id", "0-0"),
             stage_just_completed=d.get("stage_just_completed") or None,
+            stage_dispatch_overrides=json.loads(d.get("stage_dispatch_overrides") or "{}"),
+            stage_start_idx=int(raw_idx) if raw_idx else None,
         )
 
 
