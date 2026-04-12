@@ -75,10 +75,12 @@ class PipelineContract:
     lineage: LineageSpec = field(default_factory=LineageSpec)
 
     def to_dict(self) -> Dict[str, Any]:
+        r"""Convert the PipelineContract to a dictionary for JSON serialization."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> PipelineContract:
+        r"""Create a PipelineContract from a dictionary, handling nested dataclasses."""
         return cls(
             id=d.get("id", str(uuid.uuid4())),
             target=TargetSpec(**d.get("target", {})) if isinstance(d.get("target"), dict) else d.get("target", TargetSpec(class_names=[])),
@@ -116,8 +118,10 @@ class StageSummary:
     trial_count: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        r"""Convert the StageSummary to a dictionary for JSON serialization."""
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "StageSummary":
+    def from_dict(cls, d: Dict[str, Any]) -> StageSummary:
+        r"""Create a StageSummary from a dictionary."""
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
