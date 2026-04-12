@@ -11,45 +11,46 @@ StageSummary that preserves only what the next stage needs.
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ml_engine.agent.contracts import StageSummary
 
 logger = logging.getLogger(__name__)
 
-# Token budget per stage summary (approximate)
-_MAX_SUMMARY_CHARS = 1500
-
 
 def compact_stage(
     messages: List[Dict[str, Any]],
     stage_summary: StageSummary,
+    stage_start_idx: Optional[int],
 ) -> List[Dict[str, Any]]:
     """
     Replace stage execution history with a compact StageSummary.
 
     Keeps:
-    - System-level messages (role != "user"/"assistant")
-    - Messages before the stage started (prior context)
+    - Messages before stage_start_idx (prior context)
     - The compact summary as a new user message
-    - Drops: all tool calls, tool results, and progress events from this stage
+    Drops: the dispatch_stage call, all tool results, and events from this stage.
 
     Args:
         messages: Current conversation history (role/content dicts).
         stage_summary: Structured summary of the completed stage.
+        stage_start_idx: Index of the assistant message that called dispatch_stage.
+            Recorded at dispatch time so compaction uses the exact boundary.
+            If None (e.g. state loaded from before this field existed), keeps all messages.
 
     Returns:
         Compacted message list.
     """
-    # Find where this stage started (look for the dispatch event)
-    stage_start_idx = _find_stage_start(messages, stage_summary.stage)
+    if stage_start_idx is None:
+        logger.warning(
+            "compact_stage called without stage_start_idx for stage %s — skipping compaction",
+            stage_summary.stage,
+        )
+        return messages
 
-    # Keep everything before the stage started
     pre_stage = messages[:stage_start_idx]
 
-    # Append the compact summary
     summary_text = _format_summary(stage_summary)
     compact_message = {
         "role": "user",
@@ -65,22 +66,6 @@ def compact_stage(
     return result
 
 
-def _find_stage_start(messages: List[Dict[str, Any]], stage: str) -> int:
-    """Return the index of the first message that belongs to this stage."""
-    stage_markers = {
-        f'"type": "job_started"',
-        f'"stage": "{stage}"',
-        f'dispatch_stage',
-        stage,
-    }
-    for i in range(len(messages) - 1, -1, -1):
-        content = str(messages[i].get("content", ""))
-        if any(marker in content for marker in stage_markers):
-            return i
-    # Fallback: keep last 3 messages as pre-stage context
-    return max(0, len(messages) - 3)
-
-
 def _format_summary(s: StageSummary) -> str:
     lines = [
         f"Stage: {s.stage}",
@@ -93,10 +78,9 @@ def _format_summary(s: StageSummary) -> str:
     if s.trial_count is not None:
         lines.append(f"Trials: {s.trial_count}")
     if s.artifacts:
-        items = list(s.artifacts.items())[:3]
-        lines.append("Artifacts: " + ", ".join(f"{k}: {v}" for k, v in items))
+        lines.append("Artifacts: " + ", ".join(f"{k}: {v}" for k, v in s.artifacts.items()))
     if s.key_decisions:
         lines.append("Key decisions:")
-        for d in s.key_decisions[:5]:
+        for d in s.key_decisions:
             lines.append(f"  - {d}")
     return "\n".join(lines)
