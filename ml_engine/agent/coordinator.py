@@ -413,16 +413,23 @@ class Coordinator:
 
         # Stage-boundary compaction on job_completed
         if event_type == "job_completed" and state.stage_just_completed:
+            outcome_metrics = event.get("outcome", {}).get("metrics", {})
+            key_decisions = [
+                f"{k}={v}" for k, v in state.stage_dispatch_overrides.items()
+            ] if state.stage_dispatch_overrides else []
             summary = StageSummary(
                 stage=state.stage_just_completed,
                 status="pass",
-                metrics=event.get("outcome", {}).get("metrics", {}),
-                artifacts=event.get("outcome", {}).get("artifacts", []),
+                metrics=outcome_metrics,
+                artifacts=event.get("outcome", {}).get("artifacts", {}),
                 duration_seconds=event.get("outcome", {}).get("wall_time_seconds", 0.0),
+                trial_count=int(outcome_metrics.get("trials_completed", 0)) or None,
+                key_decisions=key_decisions,
             )
-            state.messages = compact_stage(state.messages, summary)
+            state.messages = compact_stage(state.messages, summary, state.stage_start_idx)
             sm.append_stage_summary(summary.to_dict())
             state.stage_just_completed = None
+            state.stage_dispatch_overrides = {}
 
         response = None
         # LLM-driven turns
