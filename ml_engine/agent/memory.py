@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import redis as _redis
@@ -50,7 +50,7 @@ class MemoryStore:
             "type": type_,
             "key": key,
             "content": json.dumps(content),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         self._r.hset(redis_key, mapping=record)
         self._r.sadd(f"mem:{type_}:_index", key)
@@ -85,29 +85,6 @@ class MemoryStore:
             if raw:
                 results.append(self._parse_record(raw))
         return results
-
-    def query(self, type_: str, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Query records by field values inside content (Python-side filtering).
-
-        Args:
-            type_: Memory type.
-            filters: {content_key: expected_value} pairs. All must match.
-        """
-        records = self.read(type_)
-        results = []
-        for record in records:
-            content = record.get("content", {})
-            if all(content.get(k) == v for k, v in filters.items()):
-                results.append(record)
-        return results
-
-    def delete(self, type_: str, key: str) -> bool:
-        redis_key = f"mem:{type_}:{key}"
-        deleted = self._r.delete(redis_key) > 0
-        if deleted:
-            self._r.srem(f"mem:{type_}:_index", key)
-        return deleted
 
     def to_llm_context(self, types: Optional[List[str]] = None) -> str:
         """
