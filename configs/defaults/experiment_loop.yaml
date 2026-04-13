@@ -14,6 +14,8 @@ experiment:
   llm_provider: anthropic    # "anthropic" | "openai"
   llm_model: null            # null = use ANTHROPIC_MODEL / OPENAI_MODEL env var
   llm_timeout: 30.0          # seconds before falling back to SimpleMutator
+  llm_base_url: null         # OpenAI-compatible endpoint (e.g., https://api.deepseek.com)
+  llm_api_key_env: null      # env var name for API key (e.g., DEEPSEEK_API_KEY)
 
 # Keys the experiment loop is allowed to mutate.
 # Paths must match the merged config produced by build_teacher_training_config():
