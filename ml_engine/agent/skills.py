@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -53,7 +53,7 @@ class SkillLoader:
         logger.debug("Loaded skill: %s", stage)
         return skill
 
-    def available(self) -> list[str]:
+    def available(self) -> List[str]:
         return [p.stem for p in self._dir.glob("*.md")]
 
 
