@@ -16,9 +16,8 @@ Redis Data Structures:
 
 import json
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional, List, Iterator, Callable
-import threading
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional, List
 
 import redis
 from redis.exceptions import RedisError
@@ -124,7 +123,7 @@ class RedisJobStore:
                 "type": "job_enqueued",
                 "job_id": job.id,
                 "status": job.status.value,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
 
         except RedisError as e:
@@ -198,7 +197,7 @@ class RedisJobStore:
             self.publish_event(job_id, {
                 "type": "job_enqueued",
                 "job_id": job_id,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             return True
         except RedisError as e:
@@ -233,7 +232,8 @@ class RedisJobStore:
         """Get number of jobs in queue."""
         try:
             return self.redis.llen(self.JOB_QUEUE_KEY)
-        except RedisError:
+        except RedisError as e:
+            logger.warning("Failed to get queue length: %s", e)
             return 0
 
     # =========================================================================
@@ -298,7 +298,7 @@ class RedisJobStore:
                     "type": "job_updated",
                     "job_id": job_id,
                     "updates": {k: str(v) for k, v in updates.items()},
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 })
 
                 logger.debug("Updated job %s: %s", job_id[:8], list(updates.keys()))
@@ -389,14 +389,6 @@ class RedisJobStore:
             logger.error("Failed to delete job %s: %s", job_id[:8], e)
             return False
 
-    def job_exists(self, job_id: str) -> bool:
-        """Check if job exists."""
-        job_key = f"{self.JOB_PREFIX}{job_id}"
-        try:
-            return self.redis.exists(job_key) > 0
-        except RedisError:
-            return False
-
     # =========================================================================
     # Pub/Sub Operations
     # =========================================================================
@@ -419,88 +411,6 @@ class RedisJobStore:
         except RedisError as e:
             logger.error("Failed to publish event for job %s: %s", job_id[:8], e)
             return 0
-
-    def _parse_pubsub_message(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Parse a pub/sub message, returning None if invalid or non-message type."""
-        if message["type"] != "message":
-            return None
-
-        data = message["data"]
-        if isinstance(data, bytes):
-            data = data.decode()
-
-        try:
-            return json.loads(data)
-        except json.JSONDecodeError:
-            logger.warning("Invalid JSON in event: %s", message["data"])
-            return None
-
-    def subscribe_to_job(self, job_id: str) -> Iterator[Dict[str, Any]]:
-        """
-        Subscribe to job events (blocking iterator).
-        
-        Yields events until the connection is closed or unsubscribed.
-        
-        Args:
-            job_id: Job ID to subscribe to
-            
-        Yields:
-            Event dictionaries
-        """
-        channel = f"{self.JOB_PREFIX}{job_id}:events"
-        pubsub = self.redis.pubsub()
-
-        try:
-            pubsub.subscribe(channel)
-            logger.debug("Subscribed to job %s events", job_id[:8])
-
-            for message in pubsub.listen():
-                event = self._parse_pubsub_message(message)
-                if event:
-                    yield event
-        except RedisError as e:
-            logger.error("Pub/sub error for job %s: %s", job_id[:8], e)
-        finally:
-            pubsub.unsubscribe(channel)
-            pubsub.close()
-
-    def subscribe_to_job_async(
-        self,
-        job_id: str,
-        callback: Callable[[Dict[str, Any]], None],
-        stop_event: Optional[threading.Event] = None
-    ) -> threading.Thread:
-        """
-        Subscribe to job events in a background thread.
-        
-        Args:
-            job_id: Job ID to subscribe to
-            callback: Function to call with each event
-            stop_event: Event to signal stop (optional)
-            
-        Returns:
-            Thread object (already started)
-        """
-        def subscriber():
-            channel = f"{self.JOB_PREFIX}{job_id}:events"
-            pubsub = self.redis.pubsub()
-            try:
-                pubsub.subscribe(channel)
-                while stop_event is None or not stop_event.is_set():
-                    message = pubsub.get_message(timeout=1.0)
-                    if message:
-                        event = self._parse_pubsub_message(message)
-                        if event:
-                            callback(event)
-            except RedisError as e:
-                logger.error("Async pub/sub error: %s", e)
-            finally:
-                pubsub.unsubscribe(channel)
-                pubsub.close()
-
-        thread = threading.Thread(target=subscriber, daemon=True)
-        thread.start()
-        return thread
 
     # =========================================================================
     # Worker Registry Operations
@@ -562,7 +472,7 @@ class RedisJobStore:
         """
         worker_key = f"{self.WORKER_PREFIX}{worker_id}"
         try:
-            self.redis.hset(worker_key, "last_heartbeat", datetime.now().isoformat())
+            self.redis.hset(worker_key, "last_heartbeat", datetime.now(timezone.utc).isoformat())
             return True
         except RedisError:
             return False
@@ -589,7 +499,7 @@ class RedisJobStore:
             updates = {
                 "status": status,
                 "current_job_id": current_job_id or "",
-                "last_heartbeat": datetime.now().isoformat()
+                "last_heartbeat": datetime.now(timezone.utc).isoformat()
             }
             self.redis.hset(worker_key, mapping=updates)
             return True
@@ -653,7 +563,7 @@ class RedisJobStore:
             Number of workers removed
         """
         workers = self.list_workers()
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         removed = 0
 
         for worker in workers:
