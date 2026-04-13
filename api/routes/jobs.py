@@ -258,6 +258,7 @@ def job_to_response(job: Job) -> JobResponse:
             total_steps=job.progress.total_steps,
             metrics=job.progress.metrics,
             message=job.progress.message,
+            overall_progress=job.progress.overall_progress,
         )
 
     # Get accuracy from evaluation report (only for completed jobs)
@@ -277,6 +278,7 @@ def job_to_response(job: Job) -> JobResponse:
         error_message=job.error_message,
         output_dir=job.output_dir,
         accuracy=accuracy,
+        duration_seconds=job.duration_seconds,
         # Commented out - not needed by frontend for now
         # priority=job.priority,
         # tags=job.tags,
