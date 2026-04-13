@@ -85,7 +85,6 @@ class SimpleMutator:
             lo, hi = schema.get("min", 0.0), schema.get("max", 1.0)
             # Log-uniform sampling for learning rates and similar
             if schema.get("log_scale", False) and lo > 0 and hi > 0:
-                import math
                 log_lo, log_hi = math.log(lo), math.log(hi)
                 return math.exp(self._rng.uniform(log_lo, log_hi))
             return self._rng.uniform(lo, hi)
@@ -98,7 +97,12 @@ class SimpleMutator:
 
         elif vtype == "list":
             items = schema.get("items", [])
-            k = self._rng.randint(1, max(1, len(items)))
+            if not items:
+                return []
+            k = self._rng.randint(1, len(items))
             return self._rng.sample(items, k)
 
-        return None
+        raise ValueError(
+            f"SimpleMutator: unsupported type {vtype!r} for key {key!r}. "
+            f"Supported: int, float, bool, choice, list."
+        )
