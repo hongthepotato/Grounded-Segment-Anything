@@ -15,6 +15,7 @@ from ml_engine.agent.coordinator import Coordinator
 from ml_engine.agent.llm_client import LLMClient
 from ml_engine.agent.loop import AgentLoop, publish_event
 from ml_engine.agent.memory import MemoryStore
+from ml_engine.agent.skills import Skill, SkillLoader
 from ml_engine.agent.state_machine import StateMachine
 from ml_engine.agent.workers import ExecutorWorker, EvaluatorWorker
 from ml_engine.agent.contracts import (
@@ -36,6 +37,8 @@ __all__ = [
     "AgentLoop",
     "publish_event",
     "MemoryStore",
+    "Skill",
+    "SkillLoader",
     "StateMachine",
     "PipelineContract",
     "TargetSpec",
