@@ -49,6 +49,7 @@ def job_to_response(job: Job) -> JobResponse:
             total_steps=job.progress.total_steps,
             metrics=job.progress.metrics,
             message=job.progress.message,
+            overall_progress=job.progress.overall_progress,
         )
 
     return JobResponse(
@@ -63,6 +64,7 @@ def job_to_response(job: Job) -> JobResponse:
         finished_at=job.finished_at,
         error_message=job.error_message,
         output_dir=job.output_dir,
+        duration_seconds=job.duration_seconds,
         priority=job.priority,
         tags=job.tags,
     )
