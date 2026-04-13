@@ -9,14 +9,18 @@ The loop itself is policy-free: it runs trials, tracks results, and respects
 the budget. All "what to try next" intelligence lives in propose_fn.
 """
 
+import copy
+import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+import yaml
+
 from ml_engine.experiment.config_guard import ConfigGuard
-from ml_engine.experiment.config_snapshot import ConfigSnapshot
 from ml_engine.experiment.trial_log import TrialLog, TrialRecord
 from ml_engine.experiment.trial_runner import TrialResult, TrialRunner
 
@@ -87,12 +91,12 @@ class ExperimentLoop:
            a. Call propose_fn(trial_log) -> overrides
            b. Validate via ConfigGuard (skip if invalid, still counts)
            c. TrialRunner.run(overrides)
-           d. Update TrialLog and ConfigSnapshot
+           d. Update TrialLog and best_config
         3. Return ExperimentResult with best config.
         """
         run_id = f"exp_{uuid.uuid4().hex[:12]}"
         runner = TrialRunner()
-        snapshot = ConfigSnapshot(output_dir)
+        best_config = None
 
         trial_log = TrialLog(
             run_id=run_id,
@@ -194,22 +198,20 @@ class ExperimentLoop:
                 error_message=result.error_message,
             ))
 
-            if result.status == "completed":
-                snap_id = snapshot.capture(result.config)
-                if is_best:
-                    snapshot.mark_best(snap_id, result.primary_metric)
-                    logger.info(
-                        "Trial %s is new best: %s=%.4f",
-                        trial_id, budget.metric_name, result.primary_metric,
-                    )
+            if result.status == "completed" and is_best:
+                best_config = copy.deepcopy(result.config)
+                best_path = Path(output_dir) / "best_config.yaml"
+                with open(best_path, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(best_config, f)
+                logger.info(
+                    "Trial %s is new best: %s=%.4f -> %s",
+                    trial_id, budget.metric_name, result.primary_metric, best_path,
+                )
 
         wall_time = time.monotonic() - t_start
-        best_config = snapshot.get_best()
         best_trial = trial_log.get_best()
 
         # Write feedback.json for MemoryStore at Stage 4
-        import json
-        from pathlib import Path
         feedback_path = Path(output_dir) / "feedback.json"
         feedback_path.write_text(
             json.dumps(trial_log.to_feedback_record(), indent=2), encoding="utf-8"
