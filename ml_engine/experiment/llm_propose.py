@@ -17,10 +17,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 from typing import Any, Dict, Optional
 
+from ml_engine.agent.llm_client import LLMClient
+from ml_engine.agent.skills import SkillLoader
 from ml_engine.experiment.trial_log import TrialLog
 from ml_engine.experiment.mutators import SimpleMutator
 
@@ -57,13 +58,11 @@ class LLMProposeFn:
 
     Usage::
 
-        from ml_engine.agent.llm_client import LLMClient
-        from ml_engine.experiment import ConfigGuard, SimpleMutator
+        from ml_engine.experiment import SimpleMutator
         from ml_engine.experiment.llm_propose import LLMProposeFn
 
-        llm = LLMClient(provider="anthropic")
         fallback = SimpleMutator(mutable_keys=mutable_keys)
-        propose_fn = LLMProposeFn(llm_client=llm, mutable_keys=mutable_keys, fallback=fallback)
+        propose_fn = LLMProposeFn(mutable_keys=mutable_keys, fallback=fallback)
 
         result = loop.run(..., propose_fn=propose_fn.propose)
     """
@@ -75,14 +74,33 @@ class LLMProposeFn:
         provider: str = "anthropic",
         model: Optional[str] = None,
         timeout: float = 30.0,
+        base_url: Optional[str] = None,
+        api_key_env: Optional[str] = None,
+        skill_name: str = "hpo_propose",
     ):
         self._mutable_keys = mutable_keys
         self._fallback = fallback or SimpleMutator(mutable_keys=mutable_keys)
-        self._provider = provider
-        self._model = model
-        self._timeout = timeout
+        self._llm = LLMClient(
+            provider=provider,
+            model=model,
+            timeout=timeout,
+            base_url=base_url,
+            api_key_env=api_key_env,
+        )
+        self._system_prompt = self._load_system_prompt(skill_name)
         self._consecutive_failures = 0
         self._MAX_CONSECUTIVE_FAILURES = 3
+
+    @staticmethod
+    def _load_system_prompt(skill_name: str) -> str:
+        """Load system prompt from skill file, fall back to hardcoded default."""
+        try:
+            loader = SkillLoader()
+            skill = loader.load(skill_name)
+            return skill.to_system_prompt()
+        except FileNotFoundError:
+            logger.debug("Skill %r not found, using default _SYSTEM_PROMPT", skill_name)
+            return _SYSTEM_PROMPT
 
     def propose(self, trial_log: TrialLog) -> Dict[str, Any]:
         """
@@ -115,17 +133,9 @@ class LLMProposeFn:
 
     async def _propose_async(self, trial_log: TrialLog) -> Dict[str, Any]:
         """Async LLM call with timeout. Raises on failure."""
-        from ml_engine.agent.llm_client import LLMClient
-
-        llm = LLMClient(
-            provider=self._provider,
-            model=self._model,
-            timeout=self._timeout,
-        )
-
         user_content = self._build_user_message(trial_log)
-        response = await llm.call(
-            system=_SYSTEM_PROMPT,
+        response = await self._llm.call(
+            system=self._system_prompt,
             messages=[{"role": "user", "content": user_content}],
             tools=None,
             max_tokens=256,
@@ -173,8 +183,9 @@ class LLMProposeFn:
         - Key exists in mutable_keys
         - Value type matches schema
 
-        Returns {} (baseline) on any parse/validation failure, letting
-        SimpleMutator handle it on the next call via consecutive_failures.
+        Raises ValueError on parse or validation failure. The caller
+        catches exceptions and increments consecutive_failures, falling
+        back to SimpleMutator.
         """
         text = text.strip()
 
