@@ -33,10 +33,14 @@ class LLMClient:
         provider: str = "anthropic",   # "anthropic" | "openai"
         model: Optional[str] = None,
         timeout: float = LLM_TIMEOUT_SECONDS,
+        base_url: Optional[str] = None,
+        api_key_env: Optional[str] = None,
     ):
         self.provider = provider
         self.model = model or self._default_model(provider)
         self.timeout = timeout
+        self.base_url = base_url
+        self.api_key_env = api_key_env
 
     @staticmethod
     def _default_model(provider: str) -> str:
@@ -115,12 +119,16 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]],
         max_tokens: int,
     ) -> Dict[str, Any]:
-        api_key = os.environ.get("OPENAI_API_KEY")
+        env_var = self.api_key_env or "OPENAI_API_KEY"
+        api_key = os.environ.get(env_var)
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY not set")
+            raise RuntimeError(f"{env_var} not set")
 
         from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=api_key)
+        client_kwargs: Dict[str, Any] = {"api_key": api_key}
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
+        client = AsyncOpenAI(**client_kwargs)
 
         oai_messages = [{"role": "system", "content": system}] + messages
         kwargs: Dict[str, Any] = {
