@@ -100,6 +100,7 @@ class JobProgressSchema(BaseModel):
     total_steps: int = 0
     metrics: Dict[str, float] = Field(default_factory=dict)
     message: str = ""
+    overall_progress: float = Field(default=0.0, description="Overall training progress (0.0 to 1.0)")
 
     class Config:
         from_attributes = True
@@ -171,6 +172,7 @@ class JobResponse(BaseModel):
     finished_at: Optional[datetime] = Field(default=None, description="Completion timestamp")
     error_message: Optional[str] = Field(default=None, description="Error message if failed")
     output_dir: Optional[str] = Field(default=None, description="Output directory")
+    duration_seconds: Optional[float] = Field(default=None, description="Elapsed seconds (started_at to finished_at)")
     accuracy: Optional[float] = Field(default=None, description="Model accuracy score (0-100) from evaluation")
     # Commented out - not needed by frontend for now
     # priority: int = Field(default=0, description="Job priority")
