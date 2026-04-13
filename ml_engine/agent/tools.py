@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Type, TypeVar, Generic
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
@@ -52,7 +52,7 @@ class Tool(ABC, Generic[T]):
     description: str
     input_schema: Type[T]
 
-    def validate(self, args: T) -> list[str]:
+    def validate(self, args: T) -> List[str]:
         """Return a list of validation error strings. Empty = valid."""
         return []
 
@@ -87,6 +87,6 @@ class ToolRegistry:
             raise KeyError(f"Unknown tool: {name!r}. Available: {list(self._tools)}")
         return self._tools[name]
 
-    def all_schemas(self) -> list[Dict[str, Any]]:
+    def all_schemas(self) -> List[Dict[str, Any]]:
         r"""Return a list of all registered tools in LLM schema format (for prompting)."""
         return [t.to_llm_schema() for t in self._tools.values()]
