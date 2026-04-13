@@ -39,6 +39,7 @@ from ml_engine.agent.contracts import (
     TargetSpec,
 )
 from ml_engine.agent.loop import AgentLoop, LoopState, publish_event
+from ml_engine.agent.skills import SkillLoader
 from ml_engine.agent.llm_client import LLMClient
 from ml_engine.agent.memory import MemoryStore
 from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
@@ -55,6 +56,27 @@ _AUTO_TRANSITIONS = {
     "gate_approved": None,      # needs Coordinator to decide next stage
     "job_failed": "failed_retrying",
     "llm_unavailable": None,    # publish escalation event
+}
+
+# Map pipeline state -> skill file name for per-stage LLM prompts.
+# SkillLoader reads configs/agent/skills/{name}.md.
+_STATE_TO_SKILL = {
+    "auto_labeling":        "auto_label",
+    "label_review_gate":    "auto_label",
+    "teacher_training":     "teacher_training",
+    "training_eval_gate":   "teacher_training",
+    "student_distillation": "student_distillation",
+    "distill_eval_gate":    "student_distillation",
+    "pending_approval":     "student_distillation",
+}
+
+# Normalize stage names from events to skill file names.
+_STAGE_TO_SKILL = {
+    "auto_labeling":        "auto_label",
+    "auto_label":           "auto_label",
+    "teacher_training":     "teacher_training",
+    "student_distillation": "student_distillation",
+    "experiment_loop":      "teacher_training",
 }
 
 _SYSTEM_PROMPT = """\
@@ -369,6 +391,7 @@ class Coordinator:
         self._llm = llm_client or LLMClient()
         self._contract = contract
         self._memory = MemoryStore(redis_client)
+        self._skills = SkillLoader()
         self._tools = self._build_registry()
 
     async def on_event(self, event: Dict[str, Any], state: LoopState) -> None:
@@ -432,12 +455,14 @@ class Coordinator:
             state.stage_dispatch_overrides = {}
             state.stage_start_idx = None
 
+        system_prompt = self._build_system_prompt(event, current)
+
         response = None
         # LLM-driven turns
         for turn in range(MAX_TURNS_PER_EVENT):
             try:
                 response = await self._llm.call(
-                    system=_SYSTEM_PROMPT,
+                    system=system_prompt,
                     messages=state.messages,
                     tools=self._tools.all_schemas(),
                 )
@@ -542,6 +567,26 @@ class Coordinator:
             executor.run(cancel_check=cancel_check),
             evaluator.run(cancel_check=cancel_check),
         )
+
+    def _build_system_prompt(self, event: Dict[str, Any], current_state: str) -> str:
+        """Build system prompt with per-stage skill injected."""
+        # Resolve skill name: prefer explicit stage from event, fall back to state mapping
+        skill_name = None
+        stage = event.get("stage")
+        if stage:
+            skill_name = _STAGE_TO_SKILL.get(stage)
+        if skill_name is None:
+            skill_name = _STATE_TO_SKILL.get(current_state)
+
+        if skill_name is None:
+            return _SYSTEM_PROMPT
+
+        try:
+            skill = self._skills.load(skill_name)
+            return _SYSTEM_PROMPT + "\n\n" + skill.to_system_prompt()
+        except FileNotFoundError:
+            logger.debug("No skill file for %s, using base prompt", skill_name)
+            return _SYSTEM_PROMPT
 
     def _build_registry(self) -> ToolRegistry:
         reg = ToolRegistry()
