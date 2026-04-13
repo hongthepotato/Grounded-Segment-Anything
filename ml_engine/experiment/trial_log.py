@@ -86,7 +86,7 @@ class TrialLog:
 
     def to_llm_context(self) -> str:
         """
-        Compact summary readable by an LLM at Stage 4.
+        Compact summary readable by an LLM.
 
         Returns a string with trial history, best result, and trends.
         """
@@ -108,13 +108,14 @@ class TrialLog:
 
     def to_feedback_record(self) -> Dict[str, Any]:
         """Export for MemoryStore at Stage 4."""
+        best = self.get_best()
         return {
             "run_id": self.run_id,
             "baseline_metric": self._baseline_metric,
             "best_metric": self._best_metric,
             "best_trial_id": self._best_trial_id,
             "trial_count": len(self._trials),
-            "best_overrides": self.get_best().overrides if self.get_best() else {},
+            "best_overrides": best.overrides if best else {},
         }
 
     def _flush(self) -> None:
