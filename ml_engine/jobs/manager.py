@@ -9,8 +9,6 @@ Features:
 - Cancel running/pending jobs
 - Query job status and progress
 - List jobs with filtering
-- Subscribe to job events
-
 Usage:
     from ml_engine.jobs import JobManager
     
@@ -31,8 +29,8 @@ Usage:
 """
 
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional, List, Iterator, Callable
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional, List
 
 from ml_engine.jobs.models import Job, JobStatus, JobType, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
@@ -66,14 +64,6 @@ class JobManager:
         ...     }
         ... )
         >>> print(f"Submitted job {job.id}")
-        >>> 
-        >>> # Wait for completion
-        >>> for event in manager.subscribe_to_job(job.id):
-        ...     if event["type"] == "progress":
-        ...         print(f"Progress: {event['progress']}")
-        ...     elif event["type"] == "job_completed":
-        ...         print("Done!")
-        ...         break
     """
 
     def __init__(self, redis_url: str = "redis://localhost:6379"):
@@ -188,7 +178,7 @@ class JobManager:
             self.store.update_job(
                 job_id,
                 status=JobStatus.CANCELLED,
-                finished_at=datetime.now()
+                finished_at=datetime.now(timezone.utc)
             )
             # Note: Job will be skipped when worker tries to execute it
             logger.info("Cancelled pending job %s", job_id[:8])
@@ -206,7 +196,7 @@ class JobManager:
         self.store.publish_event(job_id, {
             "type": "cancel_requested",
             "job_id": job_id,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
 
         return True
@@ -323,48 +313,6 @@ class JobManager:
                 "cancelled": self.get_job_count("cancelled"),
             }
         }
-
-    # =========================================================================
-    # Event Subscription
-    # =========================================================================
-
-    def subscribe_to_job(self, job_id: str) -> Iterator[Dict[str, Any]]:
-        """
-        Subscribe to job events (blocking iterator).
-        
-        Yields events until the job reaches a terminal state.
-        
-        Args:
-            job_id: Job ID to subscribe to
-            
-        Yields:
-            Event dictionaries with type, job_id, timestamp, and event-specific data
-            
-        Example:
-            >>> for event in manager.subscribe_to_job(job_id):
-            ...     if event["type"] == "progress":
-            ...         print(f"Epoch {event['progress']['current_epoch']}")
-            ...     elif event["type"] == "job_completed":
-            ...         break
-        """
-        return self.store.subscribe_to_job(job_id)
-
-    def subscribe_to_job_async(
-        self,
-        job_id: str,
-        callback: Callable[[Dict[str, Any]], None]
-    ):
-        """
-        Subscribe to job events in background thread.
-        
-        Args:
-            job_id: Job ID to subscribe to
-            callback: Function called with each event
-            
-        Returns:
-            Thread object (already started)
-        """
-        return self.store.subscribe_to_job_async(job_id, callback)
 
     # =========================================================================
     # Worker Management
