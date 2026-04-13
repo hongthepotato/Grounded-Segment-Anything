@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import pytest
 import fakeredis
+import time
 
 from ml_engine.agent.state_machine import (
     StateMachine,
@@ -124,8 +125,12 @@ class TestTransition:
             sm.transition(dst)
             assert sm.current_state == dst
         else:
-            with pytest.raises(ValueError, match="Invalid transition"):
-                sm.transition(dst)
+            if src in TERMINAL_STATES:
+                with pytest.raises(ValueError, match="terminal state"):
+                    sm.transition(dst)
+            else:
+                with pytest.raises(ValueError, match="Invalid transition"):
+                    sm.transition(dst)
 
     def test_unknown_state_raises_value_error(self, sm):
         r"""Transitioning to a state not in STATES should raise ValueError."""
@@ -134,7 +139,7 @@ class TestTransition:
 
     ALL_STATES = list(STATES)
     @pytest.mark.parametrize("terminal_state", ALL_STATES)
-    def test_terminal_state_blocks_further_transitions(self, sm, state):
+    def test_terminal_state_blocks_further_transitions(self, sm, terminal_state):
         r"""Once in a terminal state, any further transition should raise ValueError."""
         # Walk to done via a valid path
         sm.transition("planning")
@@ -144,7 +149,7 @@ class TestTransition:
         sm.transition("pending_approval")
         sm.transition("done")
         with pytest.raises(ValueError, match="terminal state"):
-            sm.transition(state)
+            sm.transition(terminal_state)
 
     def test_failed_retrying_increments_retry_count(self, sm):
         r"""Every time we transition into failed_retrying, retry_count should increment by 1."""
@@ -210,6 +215,7 @@ class TestFullPipelineWalk:
         ]
         for state in path:
             old_time = sm._r.hget(sm._key, "updated_at")
+            time.sleep(0.01)
             sm.transition(state)
             assert sm.current_state == state
             assert sm._r.hget(sm._key, "updated_at") != old_time  # updated_at should change on each transition
@@ -233,6 +239,7 @@ class TestFullPipelineWalk:
         ]
         for state in path:
             old_time = sm._r.hget(sm._key, "updated_at")
+            time.sleep(0.01)
             sm.transition(state)
             assert sm.current_state == state
             assert sm._r.hget(sm._key, "updated_at") != old_time
