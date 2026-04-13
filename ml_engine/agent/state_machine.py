@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import redis as _redis
@@ -112,8 +112,8 @@ class StateMachine:
             "contract_id": contract.get("id", "") if contract else "",
             "proposed_contract": json.dumps(contract or {}),
             "retry_count": "0",
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
             "error_message": "",
             "stage_summaries": "[]",
         })
@@ -183,7 +183,7 @@ class StateMachine:
 
         updates: Dict[str, str] = {
             "state": new_state,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         if error_message is not None:
             updates["error_message"] = error_message

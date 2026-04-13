@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -54,7 +54,7 @@ class LineageSpec:
     r"""Lineage and metadata for traceability, versioning, and reproducibility."""
     version_hash: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     parent_contract_id: Optional[str] = None
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass
