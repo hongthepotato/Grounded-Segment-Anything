@@ -9,6 +9,7 @@ a pipeline -- callers fall back to SimpleMutator or human escalation.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -41,6 +42,8 @@ class LLMClient:
         self.timeout = timeout
         self.base_url = base_url
         self.api_key_env = api_key_env
+        self._anthropic_client: Any = None
+        self._openai_client: Any = None
 
     @staticmethod
     def _default_model(provider: str) -> str:
@@ -74,10 +77,19 @@ class LLMClient:
     ) -> Dict[str, Any]:
         if self.provider == "anthropic":
             return await self._call_anthropic(system, messages, tools, max_tokens)
-        elif self.provider == "openai":
+        if self.provider == "openai":
             return await self._call_openai(system, messages, tools, max_tokens)
-        else:
-            raise ValueError(f"Unknown LLM provider: {self.provider!r}")
+        raise ValueError(f"Unknown LLM provider: {self.provider!r}")
+
+    def _get_anthropic_client(self) -> Any:
+        """Return cached AsyncAnthropic client, creating on first call."""
+        if self._anthropic_client is None:
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise RuntimeError("ANTHROPIC_API_KEY not set")
+            import anthropic
+            self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
+        return self._anthropic_client
 
     async def _call_anthropic(
         self,
@@ -86,12 +98,7 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]],
         max_tokens: int,
     ) -> Dict[str, Any]:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set")
-
-        import anthropic
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        client = self._get_anthropic_client()
 
         kwargs: Dict[str, Any] = {
             "model": self.model,
@@ -112,6 +119,20 @@ class LLMClient:
             "model": response.model,
         }
 
+    def _get_openai_client(self) -> Any:
+        """Return cached AsyncOpenAI client, creating on first call."""
+        if self._openai_client is None:
+            env_var = self.api_key_env or "OPENAI_API_KEY"
+            api_key = os.environ.get(env_var)
+            if not api_key:
+                raise RuntimeError(f"{env_var} not set")
+            from openai import AsyncOpenAI
+            client_kwargs: Dict[str, Any] = {"api_key": api_key}
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
+            self._openai_client = AsyncOpenAI(**client_kwargs)
+        return self._openai_client
+
     async def _call_openai(
         self,
         system: str,
@@ -119,16 +140,7 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]],
         max_tokens: int,
     ) -> Dict[str, Any]:
-        env_var = self.api_key_env or "OPENAI_API_KEY"
-        api_key = os.environ.get(env_var)
-        if not api_key:
-            raise RuntimeError(f"{env_var} not set")
-
-        from openai import AsyncOpenAI
-        client_kwargs: Dict[str, Any] = {"api_key": api_key}
-        if self.base_url:
-            client_kwargs["base_url"] = self.base_url
-        client = AsyncOpenAI(**client_kwargs)
+        client = self._get_openai_client()
 
         oai_messages = [{"role": "system", "content": system}] + messages
         kwargs: Dict[str, Any] = {
@@ -145,16 +157,35 @@ class LLMClient:
 
         response = await client.chat.completions.create(**kwargs)
         choice = response.choices[0]
+
+        # Normalize response to match Anthropic content block format
+        content_blocks: List[Dict[str, Any]] = []
+        if choice.message.content:
+            content_blocks.append({"type": "text", "text": choice.message.content})
+        if choice.message.tool_calls:
+            for tc in choice.message.tool_calls:
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "input": json.loads(tc.function.arguments),
+                })
+        # Always include at least one text block for callers that expect it
+        if not content_blocks:
+            content_blocks.append({"type": "text", "text": ""})
+
         return {
-            "content": [{"type": "text", "text": choice.message.content or ""}],
+            "content": content_blocks,
             "stop_reason": choice.finish_reason,
             "model": response.model,
         }
 
     @staticmethod
     def _block_to_dict(block: Any) -> Dict[str, Any]:
+        """Extract payload from an Anthropic content block (text or tool_use)."""
         if block.type == "text":
             return {"text": block.text}
         if block.type == "tool_use":
             return {"id": block.id, "name": block.name, "input": block.input}
-        return {}
+        logger.warning("Unknown Anthropic content block type: %s", block.type)
+        return {"raw": str(block)}
