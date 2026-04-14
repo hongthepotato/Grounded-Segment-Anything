@@ -78,7 +78,7 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
     from ml_engine.agent.coordinator import Coordinator
     from ml_engine.agent.contracts import PipelineContract
 
-    r = _get_redis()
+    r = _get_async_redis()
     contract = PipelineContract.from_dict(contract_dict)
     coordinator = Coordinator(redis_client=r, run_id=run_id, contract=contract)
 
@@ -104,10 +104,10 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
 # Dependency: redis client
 # ---------------------------------------------------------------------------
 
-def _get_redis():
-    import redis as _redis
+def _get_async_redis():
+    from ml_engine.agent.redis_clients import get_async_redis_client
     url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    return _redis.from_url(url, decode_responses=False)
+    return get_async_redis_client(url)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ async def propose_plan(body: PlanRequest):
         TargetSpec,
     )
     from ml_engine.agent.state_machine import StateMachine
-    from ml_engine.agent.loop import publish_event
+    from ml_engine.agent.loop import apublish_event
 
     run_id = str(uuid.uuid4())
     contract = PipelineContract(
@@ -150,13 +150,13 @@ async def propose_plan(body: PlanRequest):
         lineage=LineageSpec(),
     )
 
-    r = _get_redis()
-    sm = StateMachine(r, run_id)
+    r = _get_async_redis()
+    sm = StateMachine(run_id=run_id, redis_async=r)
     # Persist the contract so GET /status can return it without relying on
     # the client caching the HTTP response from this endpoint.
-    sm.initialize(contract=contract.to_dict())
+    await sm.initialize(contract=contract.to_dict())
 
-    publish_event(r, run_id, {
+    await apublish_event(r, run_id, {
         "type": "plan_proposed",
         "run_id": run_id,
         "contract": contract.to_dict(),
@@ -183,17 +183,17 @@ async def approve_plan(body: ApproveRequest):
     approving.
     """
     from ml_engine.agent.state_machine import StateMachine
-    from ml_engine.agent.loop import publish_event
+    from ml_engine.agent.loop import apublish_event
 
-    r = _get_redis()
-    sm = StateMachine(r, body.run_id)
+    r = _get_async_redis()
+    sm = StateMachine(run_id=body.run_id, redis_async=r)
 
     try:
-        sm.transition("planning")
+        await sm.transition("planning")
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    publish_event(r, body.run_id, {
+    await apublish_event(r, body.run_id, {
         "type": "contract_approved",
         "run_id": body.run_id,
         "contract": body.contract,
@@ -216,21 +216,22 @@ async def get_status(run_id: str):
     """
     from ml_engine.agent.state_machine import StateMachine
 
-    r = _get_redis()
-    sm = StateMachine(r, run_id)
+    r = _get_async_redis()
+    sm = StateMachine(run_id=run_id, redis_async=r)
 
     try:
-        state = sm.current_state
+        state = await sm.current_state()
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    summaries = sm.get_stage_summaries()
-    proposed_contract = sm.get_proposed_contract()
+    summaries = await sm.get_stage_summaries()
+    proposed_contract = await sm.get_proposed_contract()
+    retry_count = await sm.retry_count()
 
     return {
         "run_id": run_id,
         "state": state,
-        "retry_count": sm.retry_count,
+        "retry_count": retry_count,
         "stage_summaries": summaries,
         "proposed_contract": proposed_contract,  # present when state == "created"
         "coordinator_active": run_id in _coordinator_tasks and not _coordinator_tasks[run_id].done(),
@@ -248,16 +249,16 @@ async def human_gate(run_id: str, action: str, body: GateActionRequest):
     reject  -> transitions to "escalated" with reason
     """
     from ml_engine.agent.state_machine import StateMachine
-    from ml_engine.agent.loop import publish_event
+    from ml_engine.agent.loop import apublish_event
 
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
 
-    r = _get_redis()
-    sm = StateMachine(r, run_id)
+    r = _get_async_redis()
+    sm = StateMachine(run_id=run_id, redis_async=r)
 
     try:
-        current = sm.current_state
+        current = await sm.current_state()
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
@@ -269,11 +270,11 @@ async def human_gate(run_id: str, action: str, body: GateActionRequest):
 
     target_state = "done" if action == "approve" else "escalated"
     try:
-        sm.transition(target_state)
+        await sm.transition(target_state)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    publish_event(r, run_id, {
+    await apublish_event(r, run_id, {
         "type": "gate_approved" if action == "approve" else "gate_rejected",
         "run_id": run_id,
         "action": action,
@@ -297,12 +298,11 @@ async def agent_websocket(websocket: WebSocket, run_id: str):
     Client receives JSON-encoded events from the Redis Stream.
     Connection closes when pipeline reaches a terminal state.
     """
-    import redis as _redis
+    import redis
 
     await websocket.accept()
 
-    r_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    r = _redis.from_url(r_url, decode_responses=False)
+    r = _get_async_redis()
 
     from ml_engine.agent.loop import stream_key
     from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
@@ -312,10 +312,9 @@ async def agent_websocket(websocket: WebSocket, run_id: str):
 
     try:
         while True:
-            # Non-blocking XREAD with 1s timeout (run in thread to avoid blocking event loop)
             try:
-                entries = await asyncio.to_thread(r.xread, {key: last_id}, count=10, block=1000)
-            except _redis.RedisError as e:
+                entries = await r.xread({key: last_id}, count=10, block=1000)
+            except redis.RedisError as e:
                 await websocket.send_json({"type": "error", "message": str(e)})
                 break
 
@@ -331,8 +330,8 @@ async def agent_websocket(websocket: WebSocket, run_id: str):
 
             # Check for terminal state
             try:
-                sm = StateMachine(r, run_id)
-                if sm.current_state in TERMINAL_STATES:
+                sm = StateMachine(run_id=run_id, redis_async=r)
+                if await sm.current_state() in TERMINAL_STATES:
                     await websocket.send_json({"type": "pipeline_done", "run_id": run_id})
                     break
             except KeyError:
@@ -343,4 +342,4 @@ async def agent_websocket(websocket: WebSocket, run_id: str):
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected for run %s", run_id)
     finally:
-        r.close()
+        await r.aclose()
