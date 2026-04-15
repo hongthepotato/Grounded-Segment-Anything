@@ -26,7 +26,7 @@ import os
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
-import redis as _redis
+import redis.asyncio as _aredis
 from pydantic import BaseModel
 
 from ml_engine.agent.contracts import (
@@ -38,7 +38,7 @@ from ml_engine.agent.contracts import (
     StageSummary,
     TargetSpec,
 )
-from ml_engine.agent.loop import AgentLoop, LoopState, publish_event
+from ml_engine.agent.loop import AgentLoop, LoopState, apublish_event
 from ml_engine.agent.skills import SkillLoader
 from ml_engine.agent.llm_client import LLMClient
 from ml_engine.agent.memory import MemoryStore
@@ -49,14 +49,6 @@ logger = logging.getLogger(__name__)
 
 # Stages that need a human gate before proceeding
 HUMAN_GATE_STAGES = {"pending_contract_approval", "pending_approval"}
-
-# Map: event type -> next state (deterministic, no LLM needed)
-_AUTO_TRANSITIONS = {
-    "job_completed": None,      # needs Evaluator to decide
-    "gate_approved": None,      # needs Coordinator to decide next stage
-    "job_failed": "failed_retrying",
-    "llm_unavailable": None,    # publish escalation event
-}
 
 # Map pipeline state -> skill file name for per-stage LLM prompts.
 # SkillLoader reads configs/agent/skills/{name}.md.
@@ -174,7 +166,7 @@ class ProposePlanTool(Tool[ProposePlanArgs]):
 
     async def execute(self, args: ProposePlanArgs, context: RunContext) -> ToolResult:
         _ = context  # not used, but could be for more advanced memory retrieval in the future
-        memory_ctx = self._memory.to_llm_context(["project", "feedback"])
+        memory_ctx = await self._memory.to_llm_context(["project", "feedback"])
         contract = PipelineContract(
             id=str(uuid.uuid4()),
             target=TargetSpec(
@@ -203,17 +195,17 @@ class InspectStatusTool(Tool[InspectStatusArgs]):
     description = "Read pipeline state, job status, and latest metrics."
     input_schema = InspectStatusArgs
 
-    def __init__(self, redis_client: _redis.Redis):
+    def __init__(self, redis_client: _aredis.Redis):
         self._r = redis_client
 
     async def execute(self, args: InspectStatusArgs, context: RunContext) -> ToolResult:
         _ = context  # not used, but could be for more advanced status retrieval in the future
-        sm = StateMachine(self._r, args.run_id)
+        sm = StateMachine(run_id=args.run_id, redis_async=self._r)
         try:
-            state = sm.load()
-            summaries = sm.get_stage_summaries()
+            data = await sm.load()
+            summaries = json.loads(data.get("stage_summaries", "[]"))
             return ToolResult(success=True, output={
-                "state": state,
+                "state": data,
                 "stage_summaries": summaries,
             })
         except KeyError:
@@ -233,7 +225,7 @@ class ReadMemoryTool(Tool[ReadMemoryArgs]):
         _ = context  # not used, but could be for more advanced memory retrieval in the future
         records: Dict[str, Any] = {}
         for t in args.types:
-            records[t] = self._memory.read(t)
+            records[t] = await self._memory.read(t)
         return ToolResult(success=True, output={"memory": records})
 
 
@@ -243,12 +235,11 @@ class DispatchStageTool(Tool[DispatchStageArgs]):
     description = "Submit a job for the next pipeline stage via JobManager."
     input_schema = DispatchStageArgs
 
-    def __init__(self, redis_client: _redis.Redis, contract: Optional[PipelineContract]):
+    def __init__(self, redis_client: _aredis.Redis):
         self._r = redis_client
-        self._contract = contract
 
     async def execute(self, args: DispatchStageArgs, context: RunContext) -> ToolResult:
-        from ml_engine.jobs import get_job_manager
+        from ml_engine.jobs import get_async_job_manager
         from ml_engine.jobs.models import Job
 
         stage_to_job_type = {
@@ -261,17 +252,18 @@ class DispatchStageTool(Tool[DispatchStageArgs]):
         if not job_type:
             return ToolResult(success=False, error=f"Unknown stage: {args.stage!r}")
 
-        if self._contract is None:
+        if context.contract is None:
             return ToolResult(success=False, error="No contract -- cannot dispatch without an approved contract")
 
+        contract_data = context.contract.get("data", {})
         job_config: Dict[str, Any] = {
-            "data_path": self._contract.data.data_path,
-            "image_paths": self._contract.data.image_paths,
-            "split_config": self._contract.data.split_config,
+            "data_path": contract_data.get("data_path", ""),
+            "image_paths": contract_data.get("image_paths", []),
+            "split_config": contract_data.get("split_config", {}),
         }
         job_config.update(args.overrides)
 
-        manager = get_job_manager(os.environ.get("REDIS_URL", "redis://localhost:6379"))
+        manager = get_async_job_manager(context.redis_url)
         job = Job(
             type=job_type,
             run_id=context.run_id,
@@ -281,9 +273,9 @@ class DispatchStageTool(Tool[DispatchStageArgs]):
         # Stage 2: store the job WITHOUT queuing it.
         # ExecutorWorker (consumer group "executor") validates contract constraints
         # then calls store.enqueue_by_id(job_id) to move it into the work queue.
-        manager.store.store_job(job)
+        await manager.store.store_job(job)
 
-        publish_event(self._r, context.run_id, {
+        await apublish_event(self._r, context.run_id, {
             "type": "dispatch_requested",
             "stage": args.stage,
             "job_id": job.id,
@@ -313,9 +305,8 @@ class RequestEvaluationTool(Tool[RequestEvaluationArgs]):
     )
     input_schema = RequestEvaluationArgs
 
-    def __init__(self, redis_client: _redis.Redis, contract: Optional[PipelineContract]):
+    def __init__(self, redis_client: _aredis.Redis):
         self._r = redis_client
-        self._contract = contract
 
     async def execute(self, args: RequestEvaluationArgs, context: RunContext) -> ToolResult:
         """
@@ -325,7 +316,7 @@ class RequestEvaluationTool(Tool[RequestEvaluationArgs]):
         publishes gate_decision back to the Stream. The Coordinator then
         picks up gate_decision on its next event turn.
         """
-        publish_event(self._r, context.run_id, {
+        await apublish_event(self._r, context.run_id, {
             "type": "evaluation_requested",
             "stage": args.stage,
             "job_id": args.job_id,
@@ -350,14 +341,14 @@ class AdvanceGateTool(Tool[AdvanceGateArgs]):
     description = "Advance the pipeline state machine to the next state."
     input_schema = AdvanceGateArgs
 
-    def __init__(self, redis_client: _redis.Redis):
+    def __init__(self, redis_client: _aredis.Redis):
         self._r = redis_client
 
     async def execute(self, args: AdvanceGateArgs, context: RunContext) -> ToolResult:
-        sm = StateMachine(self._r, context.run_id)
+        sm = StateMachine(run_id=context.run_id, redis_async=self._r)
         try:
-            sm.transition(args.target_state)
-            publish_event(self._r, context.run_id, {
+            await sm.transition(args.target_state)
+            await apublish_event(self._r, context.run_id, {
                 "type": "state_changed",
                 "new_state": args.target_state,
                 "reason": args.reason,
@@ -381,7 +372,7 @@ class Coordinator:
 
     def __init__(
         self,
-        redis_client: _redis.Redis,
+        redis_client: _aredis.Redis,
         run_id: str,
         llm_client: Optional[LLMClient] = None,
         contract: Optional[PipelineContract] = None,
@@ -390,7 +381,7 @@ class Coordinator:
         self.run_id = run_id
         self._llm = llm_client or LLMClient()
         self._contract = contract
-        self._memory = MemoryStore(redis_client)
+        self._memory = MemoryStore(redis_async=redis_client)
         self._skills = SkillLoader()
         self._tools = self._build_registry()
 
@@ -405,11 +396,11 @@ class Coordinator:
         from ml_engine.agent.compact import compact_stage
 
         event_type = event.get("type", "unknown")
-        sm = StateMachine(self._r, self.run_id)
+        sm = StateMachine(run_id=self.run_id, redis_async=self._r)
 
         # Check for terminal state -- nothing to do
         try:
-            current = sm.current_state
+            current = await sm.current_state()
         except KeyError:
             logger.warning("No state found for run %s, skipping event", self.run_id)
             return
@@ -418,14 +409,18 @@ class Coordinator:
             logger.info("Run %s is in terminal state %s, ignoring event", self.run_id, current)
             return
 
+        if current in HUMAN_GATE_STAGES:
+            logger.info("Run %s waiting for human input (%s), ignoring event", self.run_id, current)
+            return
+
         # Handle job_failed deterministically
         if event_type == "job_failed":
-            retry_count = sm.retry_count
+            retry_count = await sm.retry_count()
             max_retries = self._contract.budget.max_retries if self._contract else 2
             if retry_count < max_retries:
-                sm.transition("failed_retrying", error_message=event.get("error"))
+                await sm.transition("failed_retrying", error_message=event.get("error"))
             else:
-                sm.transition("failed_unrecoverable", error_message="max retries exhausted")
+                await sm.transition("failed_unrecoverable", error_message="max retries exhausted")
             return
 
         context = RunContext(
@@ -450,7 +445,7 @@ class Coordinator:
                 key_decisions=key_decisions,
             )
             state.messages = compact_stage(state.messages, summary, state.stage_start_idx)
-            sm.append_stage_summary(summary.to_dict())
+            await sm.append_stage_summary(summary.to_dict())
             state.stage_just_completed = None
             state.stage_dispatch_overrides = {}
             state.stage_start_idx = None
@@ -468,7 +463,7 @@ class Coordinator:
                 )
             except asyncio.TimeoutError:
                 logger.warning("LLM timeout on run %s (turn %d), publishing llm_unavailable", self.run_id, turn)
-                publish_event(self._r, self.run_id, {
+                await apublish_event(self._r, self.run_id, {
                     "type": "llm_unavailable",
                     "run_id": self.run_id,
                     "event_type": event_type,
@@ -522,7 +517,7 @@ class Coordinator:
         # Check stop reason
         if not response:
             logger.warning("No response from LLM for run %s on event %s", self.run_id, event_type)
-        if response.get("stop_reason") == "end_turn":
+        elif response.get("stop_reason") == "end_turn":
             logger.info("Coordinator done for event %s (run %s)", event_type, self.run_id)
 
     async def run(
@@ -539,10 +534,12 @@ class Coordinator:
 
         Blocks until the pipeline reaches a terminal state or cancel_check() returns True.
         """
-        from ml_engine.jobs import get_job_manager
+        from ml_engine.jobs import get_async_job_manager
         from ml_engine.agent.workers import EvaluatorWorker, ExecutorWorker
 
-        store = get_job_manager(os.environ.get("REDIS_URL", "redis://localhost:6379")).store
+        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+
+        store = get_async_job_manager(redis_url).store
         executor = ExecutorWorker(
             redis_client=self._r,
             run_id=self.run_id,
@@ -593,7 +590,7 @@ class Coordinator:
         reg.register(ProposePlanTool(self._memory))
         reg.register(InspectStatusTool(self._r))
         reg.register(ReadMemoryTool(self._memory))
-        reg.register(DispatchStageTool(self._r, self._contract))
-        reg.register(RequestEvaluationTool(self._r, self._contract))
+        reg.register(DispatchStageTool(self._r))
+        reg.register(RequestEvaluationTool(self._r))
         reg.register(AdvanceGateTool(self._r))
         return reg
