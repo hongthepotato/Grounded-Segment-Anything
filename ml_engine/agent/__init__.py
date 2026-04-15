@@ -7,13 +7,12 @@ Public API:
   MemoryStore       -- Redis HASH-backed memory
   StateMachine      -- pipeline state transitions
   AgentLoop         -- Redis Streams event loop
-  publish_event     -- publish event to pipeline stream
   contracts.*       -- PipelineContract, StageSummary, GateDecision, ...
 """
 
 from ml_engine.agent.coordinator import Coordinator
 from ml_engine.agent.llm_client import LLMClient
-from ml_engine.agent.loop import AgentLoop, publish_event
+from ml_engine.agent.loop import AgentLoop
 from ml_engine.agent.memory import MemoryStore
 from ml_engine.agent.skills import Skill, SkillLoader
 from ml_engine.agent.state_machine import StateMachine
@@ -35,7 +34,6 @@ __all__ = [
     "EvaluatorWorker",
     "LLMClient",
     "AgentLoop",
-    "publish_event",
     "MemoryStore",
     "Skill",
     "SkillLoader",
