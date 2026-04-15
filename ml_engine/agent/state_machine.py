@@ -31,7 +31,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import redis as _redis
+import redis.asyncio as _aredis
 
 logger = logging.getLogger(__name__)
 
@@ -80,25 +80,80 @@ TRANSITIONS: Dict[str, List[str]] = {
 }
 
 
+def _decode(raw: Any) -> str:
+    """Return bytes-or-str raw value as str."""
+    return raw.decode() if isinstance(raw, bytes) else raw
+
+
+def _decode_mapping(data: Dict[Any, Any]) -> Dict[str, str]:
+    return {_decode(k): _decode(v) for k, v in data.items()}
+
+
+def _validate_transition(current: str, new_state: str, run_id: str) -> None:
+    """Validate that current -> new_state is permitted."""
+    if new_state not in STATES:
+        raise ValueError(f"Unknown state: {new_state}")
+    if current in TERMINAL_STATES:
+        raise ValueError(f"Run {run_id} is in terminal state {current!r}")
+    allowed = TRANSITIONS.get(current, [])
+    if new_state not in allowed:
+        raise ValueError(
+            f"Invalid transition {current!r} -> {new_state!r}. "
+            f"Allowed: {allowed}"
+        )
+
+
+def _initial_state_mapping(run_id: str, contract: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Build the initial HASH mapping for a freshly created run."""
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "run_id": run_id,
+        "state": "created",
+        "contract_id": contract.get("id", "") if contract else "",
+        "proposed_contract": json.dumps(contract or {}),
+        "retry_count": "0",
+        "created_at": now,
+        "updated_at": now,
+        "error_message": "",
+        "stage_summaries": "[]",
+    }
+
+
+def _build_transition_updates(
+    new_state: str,
+    retry_count: int,
+    error_message: Optional[str],
+    metadata: Optional[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Build the update-dict written to Redis on a transition."""
+    updates: Dict[str, str] = {
+        "state": new_state,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if error_message is not None:
+        updates["error_message"] = error_message
+    if new_state == "failed_retrying":
+        updates["retry_count"] = str(retry_count + 1)
+    if metadata:
+        updates["metadata"] = json.dumps(metadata)
+    return updates
+
+
 class StateMachine:
     """
     Persistent lifecycle state machine for one pipeline run.
 
-    Redis key: `run:{run_id}:state` (HASH with state, stage, metadata)
+    Redis key: `run:{run_id}:state` (HASH with state, stage, metadata).
     """
 
     _PREFIX = "run:"
 
-    def __init__(self, redis_client: _redis.Redis, run_id: str):
-        self._r = redis_client
+    def __init__(self, run_id: str, redis_async: _aredis.Redis):
+        self._r = redis_async
         self.run_id = run_id
         self._key = f"{self._PREFIX}{run_id}:state"
 
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def initialize(self, contract: Optional[Dict[str, Any]] = None) -> None:
+    async def initialize(self, contract: Optional[Dict[str, Any]] = None) -> None:
         """
         Create the state record in Redis. Call once at pipeline start.
 
@@ -106,108 +161,68 @@ class StateMachine:
         GET /api/agent/status/{run_id} without relying on the HTTP response
         from POST /api/agent/plan.
         """
-        self._r.hset(self._key, mapping={
-            "run_id": self.run_id,
-            "state": "created",
-            "contract_id": contract.get("id", "") if contract else "",
-            "proposed_contract": json.dumps(contract or {}),
-            "retry_count": "0",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "error_message": "",
-            "stage_summaries": "[]",
-        })
+        await self._r.hset(
+            self._key, mapping=_initial_state_mapping(self.run_id, contract),
+        )
         logger.info("Run %s initialized (state=created)", self.run_id)
 
-    def get_proposed_contract(self) -> Optional[Dict[str, Any]]:
+    async def get_proposed_contract(self) -> Optional[Dict[str, Any]]:
         """Return the contract proposed at plan time, or None if not stored."""
-        raw = self._r.hget(self._key, "proposed_contract")
+        raw = await self._r.hget(self._key, "proposed_contract")
         if not raw:
             return None
-        decoded = raw.decode() if isinstance(raw, bytes) else raw
         try:
-            result = json.loads(decoded)
+            result = json.loads(_decode(raw))
             return result if result else None
         except json.JSONDecodeError:
             return None
 
-    def load(self) -> Dict[str, Any]:
+    async def load(self) -> Dict[str, Any]:
         """Load raw state dict from Redis."""
-        data = self._r.hgetall(self._key)
+        data = await self._r.hgetall(self._key)
         if not data:
             raise KeyError(f"No state found for run {self.run_id}")
-        return {
-            k.decode() if isinstance(k, bytes) else k:
-            v.decode() if isinstance(v, bytes) else v
-            for k, v in data.items()
-        }
+        return _decode_mapping(data)
 
-    @property
-    def current_state(self) -> str:
-        r"""Return the current lifecycle state. Raises KeyError if state not found."""
-        raw = self._r.hget(self._key, "state")
+    async def current_state(self) -> str:
+        """Return the current lifecycle state. Raises KeyError if not found."""
+        raw = await self._r.hget(self._key, "state")
         if raw is None:
             raise KeyError(f"No state for run {self.run_id}")
-        return raw.decode() if isinstance(raw, bytes) else raw
+        return _decode(raw)
 
-    @property
-    def retry_count(self) -> int:
-        r"""Return the current retry count (number of times we've entered failed_retrying)."""
-        raw = self._r.hget(self._key, "retry_count") or b"0"
-        return int(raw.decode() if isinstance(raw, bytes) else raw)
+    async def retry_count(self) -> int:
+        """Return the current retry count (times we've entered failed_retrying)."""
+        raw = await self._r.hget(self._key, "retry_count") or b"0"
+        return int(_decode(raw))
 
-    # ------------------------------------------------------------------
-    # Transitions
-    # ------------------------------------------------------------------
-
-    def transition(
+    async def transition(
         self,
         new_state: str,
         error_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """
-        Move to new_state. Raises ValueError if the transition is not allowed.
-        """
-        current = self.current_state
-        if new_state not in STATES:
-            raise ValueError(f"Unknown state: {new_state}")
-        if current in TERMINAL_STATES:
-            raise ValueError(f"Run {self.run_id} is in terminal state {current!r}")
-        allowed = TRANSITIONS.get(current, [])
-        if new_state not in allowed:
-            raise ValueError(
-                f"Invalid transition {current!r} -> {new_state!r}. "
-                f"Allowed: {allowed}"
-            )
-
-        updates: Dict[str, str] = {
-            "state": new_state,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if error_message is not None:
-            updates["error_message"] = error_message
-        if new_state == "failed_retrying":
-            updates["retry_count"] = str(self.retry_count + 1)
-        if metadata:
-            updates["metadata"] = json.dumps(metadata)
-
-        self._r.hset(self._key, mapping=updates)
+        """Move to new_state. Raises ValueError if the transition is not allowed."""
+        current = await self.current_state()
+        _validate_transition(current, new_state, self.run_id)
+        retry_count = await self.retry_count() if new_state == "failed_retrying" else 0
+        updates = _build_transition_updates(new_state, retry_count, error_message, metadata)
+        await self._r.hset(self._key, mapping=updates)
         logger.info("Run %s: %s -> %s", self.run_id, current, new_state)
 
-    def append_stage_summary(self, summary_dict: Dict[str, Any]) -> None:
+    async def append_stage_summary(self, summary_dict: Dict[str, Any]) -> None:
         """Append a StageSummary dict to the stage_summaries list."""
-        raw = self._r.hget(self._key, "stage_summaries") or b"[]"
-        summaries = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        raw = await self._r.hget(self._key, "stage_summaries") or b"[]"
+        summaries = json.loads(_decode(raw))
         summaries.append(summary_dict)
-        self._r.hset(self._key, "stage_summaries", json.dumps(summaries))
+        await self._r.hset(self._key, "stage_summaries", json.dumps(summaries))
 
-    def get_stage_summaries(self) -> List[Dict[str, Any]]:
-        r"""Return the list of stage summaries, or empty list if none."""
-        raw = self._r.hget(self._key, "stage_summaries") or b"[]"
-        return json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+    async def get_stage_summaries(self) -> List[Dict[str, Any]]:
+        """Return the list of stage summaries, or empty list if none."""
+        raw = await self._r.hget(self._key, "stage_summaries") or b"[]"
+        return json.loads(_decode(raw))
 
     @classmethod
-    def exists(cls, redis_client: _redis.Redis, run_id: str) -> bool:
-        r"""Check if state exists for given run_id."""
-        return redis_client.exists(f"{cls._PREFIX}{run_id}:state") > 0
+    async def exists(cls, redis_async: _aredis.Redis, run_id: str) -> bool:
+        """Check if state exists for given run_id."""
+        return (await redis_async.exists(f"{cls._PREFIX}{run_id}:state")) > 0
