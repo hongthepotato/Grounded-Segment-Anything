@@ -147,6 +147,44 @@ class TestOnStartHook:
         assert consumer._started
         assert consumer.received
 
+    @pytest.mark.asyncio
+    async def test_on_start_runs_before_pel_events(self, redis_async, run_id):
+        """
+        on_start must complete before _drain_pel re-dispatches PEL messages.
+
+        Critical for AgentLoop: it loads LoopState in on_start(). If PEL
+        events were dispatched before on_start(), handle_event would see
+        self._state=None and crash with an AssertionError.
+        """
+        run = run_id + "-onstart-pel"
+
+        # Create a PEL entry: deliver but don't ACK.
+        await ensure_consumer_group(redis_async, run, group_name="test-group")
+        await apublish_event(redis_async, run, {"type": "pel_event"})
+        key = stream_key(run)
+        await redis_async.xreadgroup(
+            groupname="test-group", consumername="test-0",
+            streams={key: ">"}, count=1,
+        )
+        # PEL has 1 entry; do not ACK.
+
+        call_order: list = []
+
+        class OrderTrackingConsumer(RecordingConsumer):
+            async def on_start(self) -> None:
+                call_order.append("on_start")
+                await super().on_start()
+
+            async def handle_event(self, event, entry_id_str):
+                call_order.append("handle_event")
+                await super().handle_event(event, entry_id_str)
+
+        consumer = OrderTrackingConsumer(redis_async, run)
+        await consumer.run(max_events=1)
+
+        assert call_order[0] == "on_start", "on_start must fire before any handle_event call"
+        assert "handle_event" in call_order
+
 
 # ---------------------------------------------------------------------------
 # should_stop
@@ -185,20 +223,18 @@ class TestShouldStop:
 
 
 # ---------------------------------------------------------------------------
-# RECLAIM_PEL_ON_START
+# _drain_pel bypass (via mock, not ClassVar)
 # ---------------------------------------------------------------------------
 
 
-class TestNoPELOnStart:
+class TestDrainPELBypass:
     @pytest.mark.asyncio
-    async def test_reclaim_false_skips_pel_drain(self, redis_async, run_id):
+    async def test_mocked_drain_pel_skips_pel_processing(self, redis_async, run_id):
         """
-        With RECLAIM_PEL_ON_START=False, a message stuck in the PEL is NOT
-        re-delivered on restart -- the consumer skips straight to new (">") messages.
+        When _drain_pel is mocked to a no-op, PEL messages are NOT re-delivered.
+        This tests that the main loop's ">" path is independent of PEL recovery,
+        not via a ClassVar escape hatch.
         """
-        class NoPELConsumer(RecordingConsumer):
-            RECLAIM_PEL_ON_START = False
-
         run = run_id + "-nopel"
 
         # Publish and consume-without-ACK to put a message in the PEL.
@@ -213,12 +249,15 @@ class TestNoPELOnStart:
         )
         # Do NOT ack -- message now in PEL.
 
-        consumer = NoPELConsumer(redis_async, run)
-        # max_events=0 with no new messages: loop exits immediately after
-        # cancel_check or should_stop; nothing is re-delivered.
-        await consumer.run(max_events=0)
+        consumer = RecordingConsumer(redis_async, run)
 
-        assert consumer.received == [], "PEL message must NOT be replayed when RECLAIM_PEL_ON_START=False"
+        async def noop_drain(k, ep, cc, me):
+            return ep
+
+        with patch.object(consumer, "_drain_pel", side_effect=noop_drain):
+            await consumer.run(max_events=0)
+
+        assert consumer.received == [], "PEL message must NOT be replayed when _drain_pel is bypassed"
 
 
 # ---------------------------------------------------------------------------
