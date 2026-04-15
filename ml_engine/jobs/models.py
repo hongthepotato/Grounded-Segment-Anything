@@ -10,7 +10,7 @@ This module defines:
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import ClassVar, Dict, Any, Optional, List
 import json
@@ -198,6 +198,7 @@ class Job:
     priority: int = 0
     tags: List[str] = field(default_factory=list)
     outcome: Optional[JobOutcome] = None
+    dispatch_event_id: Optional[str] = None  # Stream entry-id that enqueued this job; guards against duplicate dispatch on PEL recovery
 
     def __post_init__(self):
         """Set defaults after initialization."""
@@ -235,6 +236,7 @@ class Job:
             "priority": str(self.priority),
             "tags": json.dumps(self.tags),
             "outcome": json.dumps(self.outcome.to_dict() if self.outcome else None),
+            "dispatch_event_id": self.dispatch_event_id or "",
         }
 
     @classmethod
@@ -308,6 +310,7 @@ class Job:
             priority=priority,
             tags=tags,
             outcome=outcome,
+            dispatch_event_id=data.get("dispatch_event_id") or None,
         )
 
     @property
@@ -351,9 +354,9 @@ class WorkerInfo:
 
     def __post_init__(self):
         if self.last_heartbeat is None:
-            self.last_heartbeat = datetime.now()
+            self.last_heartbeat = datetime.now(timezone.utc)
         if self.started_at is None:
-            self.started_at = datetime.now()
+            self.started_at = datetime.now(timezone.utc)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for Redis storage."""
