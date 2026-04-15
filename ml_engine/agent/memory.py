@@ -15,11 +15,43 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import redis as _redis
+import redis.asyncio as _aredis
 
 logger = logging.getLogger(__name__)
 
 MEMORY_TYPES = {"user", "project", "feedback", "reference"}
+
+
+def _validate_type(type_: str) -> None:
+    if type_ not in MEMORY_TYPES:
+        raise ValueError(
+            f"Unknown memory type: {type_!r}. Must be one of {MEMORY_TYPES}"
+        )
+
+
+def _build_record(type_: str, key: str, content: Dict[str, Any]) -> Dict[str, str]:
+    """Build the Redis HASH payload for a memory record."""
+    return {
+        "type": type_,
+        "key": key,
+        "content": json.dumps(content),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _parse_record(raw: Dict) -> Dict[str, Any]:
+    """Decode a raw Redis HASH into a typed record dict."""
+    record = {
+        k.decode() if isinstance(k, bytes) else k:
+        v.decode() if isinstance(v, bytes) else v
+        for k, v in raw.items()
+    }
+    content_str = record.get("content", "{}")
+    try:
+        record["content"] = json.loads(content_str)
+    except json.JSONDecodeError:
+        record["content"] = {"raw": content_str}
+    return record
 
 
 class MemoryStore:
@@ -30,10 +62,10 @@ class MemoryStore:
     An index at `mem:{type}:_index` is a Redis SET of keys for that type.
     """
 
-    def __init__(self, redis_client: _redis.Redis):
-        self._r = redis_client
+    def __init__(self, redis_async: _aredis.Redis):
+        self._r = redis_async
 
-    def write(self, type_: str, key: str, content: Dict[str, Any]) -> None:
+    async def write(self, type_: str, key: str, content: Dict[str, Any]) -> None:
         """
         Write a memory record.
 
@@ -42,21 +74,17 @@ class MemoryStore:
             key: Unique key within this type (e.g. "teacher_training_lora_r_insight").
             content: Arbitrary dict of memory content.
         """
-        if type_ not in MEMORY_TYPES:
-            raise ValueError(f"Unknown memory type: {type_!r}. Must be one of {MEMORY_TYPES}")
-
+        _validate_type(type_)
         redis_key = f"mem:{type_}:{key}"
-        record = {
-            "type": type_,
-            "key": key,
-            "content": json.dumps(content),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._r.hset(redis_key, mapping=record)
-        self._r.sadd(f"mem:{type_}:_index", key)
+        async with self._r.pipeline() as pipe:
+            pipe.hset(redis_key, mapping=_build_record(type_, key, content))
+            pipe.sadd(f"mem:{type_}:_index", key)
+            await pipe.execute()
         logger.debug("Memory written: %s/%s", type_, key)
 
-    def read(self, type_: str, key: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def read(
+        self, type_: str, key: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Read memory records.
 
@@ -67,26 +95,24 @@ class MemoryStore:
         Returns:
             List of parsed record dicts.
         """
-        if type_ not in MEMORY_TYPES:
-            raise ValueError(f"Unknown memory type: {type_!r}")
+        _validate_type(type_)
 
         if key is not None:
-            raw = self._r.hgetall(f"mem:{type_}:{key}")
+            raw = await self._r.hgetall(f"mem:{type_}:{key}")
             if not raw:
                 return []
-            return [self._parse_record(raw)]
+            return [_parse_record(raw)]
 
-        # All records of this type
-        keys_raw = self._r.smembers(f"mem:{type_}:_index")
+        keys_raw = await self._r.smembers(f"mem:{type_}:_index")
         results = []
         for k_raw in keys_raw:
             k = k_raw.decode() if isinstance(k_raw, bytes) else k_raw
-            raw = self._r.hgetall(f"mem:{type_}:{k}")
+            raw = await self._r.hgetall(f"mem:{type_}:{k}")
             if raw:
-                results.append(self._parse_record(raw))
+                results.append(_parse_record(raw))
         return results
 
-    def to_llm_context(self, types: Optional[List[str]] = None) -> str:
+    async def to_llm_context(self, types: Optional[List[str]] = None) -> str:
         """
         Format selected memory types as a readable string for LLM injection.
 
@@ -96,7 +122,7 @@ class MemoryStore:
         types = types or list(MEMORY_TYPES)
         lines = []
         for t in types:
-            records = self.read(t)
+            records = await self.read(t)
             if not records:
                 continue
             lines.append(f"## Memory: {t}")
@@ -104,17 +130,3 @@ class MemoryStore:
                 content = rec.get("content", {})
                 lines.append(f"  [{rec['key']}] {json.dumps(content)}")
         return "\n".join(lines) if lines else "(no memory)"
-
-    @staticmethod
-    def _parse_record(raw: Dict) -> Dict[str, Any]:
-        record = {
-            k.decode() if isinstance(k, bytes) else k:
-            v.decode() if isinstance(v, bytes) else v
-            for k, v in raw.items()
-        }
-        content_str = record.get("content", "{}")
-        try:
-            record["content"] = json.loads(content_str)
-        except json.JSONDecodeError:
-            record["content"] = {"raw": content_str}
-        return record
