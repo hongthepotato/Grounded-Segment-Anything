@@ -1,31 +1,36 @@
 """
-Event-driven agent loop backed by Redis Streams.
+Async event-driven agent loop backed by Redis Streams.
 
-Uses XADD/XREADGROUP (NOT pub/sub) so events survive subscriber downtime.
+Uses XADD/XREADGROUP so events survive subscriber downtime.
 On restart, the loop resumes from the last acknowledged Stream position.
 
 Key decisions:
 - max_turns_per_event: caps LLM calls per event (prevents runaway spend)
 - State persisted to Redis after every event turn
 - Between events: nothing runs, zero cost
+
+Stream-level machinery (XREADGROUP loop, PEL recovery, RedisError retry, always-ACK
+poison safety) lives in ``stream_consumer.StreamConsumer``. This module owns the
+agent-loop specialization: LoopState persistence and the user-provided ``on_event``
+handler wiring.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-import redis as _redis
+import redis.asyncio as _aredis
+
+from ml_engine.agent.stream_consumer import (
+    StreamConsumer,
+    ensure_consumer_group as _ensure_consumer_group_shared,
+    stream_key,
+)
 
 logger = logging.getLogger(__name__)
-
-# Stream key for pipeline-level events: agent:{run_id}:events
-_STREAM_PREFIX = "agent:"
-_STREAM_SUFFIX = ":events"
 
 # Agent loop state key: agent:{run_id}:loop_state
 _STATE_PREFIX = "agent:"
@@ -35,7 +40,15 @@ _STATE_SUFFIX = ":loop_state"
 _GROUP_NAME = "coordinator"
 
 MAX_TURNS_PER_EVENT = 5
-STREAM_BLOCK_MS = 5000   # 5s block timeout on XREADGROUP
+
+__all__ = [
+    "AgentLoop",
+    "LoopState",
+    "MAX_TURNS_PER_EVENT",
+    "apublish_event",
+    "ensure_consumer_group",
+    "state_key",
+]
 
 
 @dataclass
@@ -49,6 +62,7 @@ class LoopState:
     stage_start_idx: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
+        r"""Returns a dict of string keys and values suitable for Redis HSET."""
         return {
             "run_id": self.run_id,
             "messages": json.dumps(self.messages),
@@ -59,7 +73,8 @@ class LoopState:
         }
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any]) -> "LoopState":
+    def from_dict(cls, d: Dict[str, Any]) -> LoopState:
+        r"""Create a LoopState instance from a dictionary of string keys and values."""
         messages_raw = d.get("messages", "[]")
         messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
         raw_idx = d.get("stage_start_idx", "")
@@ -73,145 +88,96 @@ class LoopState:
         )
 
 
-def stream_key(run_id: str) -> str:
-    return f"{_STREAM_PREFIX}{run_id}{_STREAM_SUFFIX}"
-
-
 def state_key(run_id: str) -> str:
+    r"""Returns the Redis key for the LoopState hash for a given run_id."""
     return f"{_STATE_PREFIX}{run_id}{_STATE_SUFFIX}"
 
 
-def publish_event(redis_client: _redis.Redis, run_id: str, event: Dict[str, Any]) -> str:
-    """
-    Publish an event to the pipeline's Redis Stream.
-
-    Returns the Stream entry ID (e.g. "1234567890123-0").
-    """
+async def apublish_event(
+    redis_client: _aredis.Redis, run_id: str, event: Dict[str, Any]
+) -> str:
+    """Publish an event to the pipeline's Redis Stream."""
     key = stream_key(run_id)
-    entry_id = redis_client.xadd(key, {"data": json.dumps(event)})
+    entry_id = await redis_client.xadd(key, {"data": json.dumps(event)})
     logger.debug("Published event to %s: %s", key, event.get("type"))
     return entry_id.decode() if isinstance(entry_id, bytes) else entry_id
 
 
-def ensure_consumer_group(redis_client: _redis.Redis, run_id: str) -> None:
-    """Create the consumer group if it doesn't exist. Idempotent."""
-    key = stream_key(run_id)
-    try:
-        redis_client.xgroup_create(key, _GROUP_NAME, id="0", mkstream=True)
-        logger.debug("Created consumer group %s on %s", _GROUP_NAME, key)
-    except _redis.ResponseError as e:
-        if "BUSYGROUP" not in str(e):
-            raise
+async def ensure_consumer_group(redis_client: _aredis.Redis, run_id: str) -> None:
+    """
+    Create the "coordinator" consumer group for a pipeline run.
+
+    This is the correct entry point for AgentLoop callers. Other workers
+    (ExecutorWorker, EvaluatorWorker) use their own CONSUMER_GROUP names and
+    call ``stream_consumer.ensure_consumer_group`` directly.
+    """
+    await _ensure_consumer_group_shared(redis_client, run_id, _GROUP_NAME)
 
 
-class AgentLoop:
+class AgentLoop(StreamConsumer):
     """
     Event-driven loop for one pipeline run.
 
-    Call run() once; it blocks reading from the Redis Stream until:
-    - A terminal state is reached (done, failed_unrecoverable, escalated)
-    - cancel_check() returns True
-    - A fatal exception occurs
+    Reads events from the per-run Redis Stream, appends each as a user message
+    into ``LoopState.messages``, persists BEFORE dispatching so the event trace
+    survives handler crashes, then calls the user-provided ``on_event``
+    coroutine. State is persisted again after the handler returns to capture
+    any mutations.
 
-    Each event triggers at most MAX_TURNS_PER_EVENT LLM calls. State is
-    persisted after every turn. The loop auto-resumes from the last ACKed
-    position on restart.
+    Each event triggers at most MAX_TURNS_PER_EVENT LLM calls (enforced by the
+    handler, not this loop). Stream-level guarantees (PEL recovery on restart,
+    always-ACK on handler exception, RedisError backoff) are inherited from
+    :class:`StreamConsumer`.
     """
+
+    CONSUMER_GROUP = _GROUP_NAME
+    BATCH_SIZE = 1  # Coordinator processes one event at a time (serial LLM turns)
 
     def __init__(
         self,
-        redis_client: _redis.Redis,
+        redis_client: _aredis.Redis,
         run_id: str,
-        on_event: Callable[[Dict[str, Any], LoopState], asyncio.Coroutine],
+        on_event: Callable[[Dict[str, Any], LoopState], Awaitable[None]],
         consumer_name: str = "coordinator-0",
     ):
-        self._r = redis_client
-        self.run_id = run_id
+        super().__init__(redis_client, run_id, consumer_name)
         self._on_event = on_event
-        self._consumer_name = consumer_name
+        # Populated in on_start(); this worker is the sole writer, so the
+        # in-memory copy is authoritative across iterations.
+        self._state: Optional[LoopState] = None
 
-    async def run(
-        self,
-        cancel_check: Optional[Callable[[], bool]] = None,
-        max_events: Optional[int] = None,
+    async def on_start(self) -> None:
+        self._state = await self._load_state()
+
+    async def handle_event(
+        self, event: Dict[str, Any], entry_id_str: str
     ) -> None:
-        """Block on the Stream and dispatch each event to on_event."""
-        ensure_consumer_group(self._r, self.run_id)
-        key = stream_key(self.run_id)
-        events_processed = 0
+        assert self._state is not None, "on_start must run before handle_event"
+        state = self._state
+        logger.info(
+            "Run %s received event: %s (id=%s)",
+            self.run_id, event.get("type"), entry_id_str,
+        )
 
-        logger.info("AgentLoop started for run %s", self.run_id)
+        # Inject event into loop state and persist BEFORE handler runs,
+        # so the event trace survives handler crashes. Costs one extra
+        # HSET per event; worth it for debuggability.
+        state.messages.append({
+            "role": "user",
+            "content": f"[EVENT] {json.dumps(event)}",
+        })
+        state.last_event_id = entry_id_str
+        await self._save_state(state)
 
-        while True:
-            if cancel_check and cancel_check():
-                logger.info("AgentLoop cancelled for run %s", self.run_id)
-                break
+        # Dispatch to handler (Coordinator.on_event)
+        await self._on_event(event, state)
 
-            if max_events is not None and events_processed >= max_events:
-                break
+        # Persist again to capture handler mutations
+        await self._save_state(state)
 
-            # Load or initialize loop state
-            state = self._load_state()
-
-            # XREADGROUP: blocks up to STREAM_BLOCK_MS, then retries
-            try:
-                entries = self._r.xreadgroup(
-                    groupname=_GROUP_NAME,
-                    consumername=self._consumer_name,
-                    streams={key: ">"}, # '>' means: give me only new messages I haven't ACKed yet
-                    count=1,
-                    block=STREAM_BLOCK_MS, # block for STREAM_BLOCK_MS milliseconds if no messages, then return empty to loop again
-                )
-            except _redis.RedisError as e:
-                logger.error("Redis error reading stream: %s", e)
-                await asyncio.sleep(1)
-                continue
-
-            if not entries:
-                continue  # timeout, loop again
-
-            for _stream_key, messages in entries:
-                for entry_id, entry_data in messages:
-                    entry_id_str = entry_id.decode() if isinstance(entry_id, bytes) else entry_id
-                    data_raw = entry_data.get(b"data", entry_data.get("data", "{}"))
-                    if isinstance(data_raw, bytes):
-                        data_raw = data_raw.decode()
-                    event = json.loads(data_raw)
-
-                    logger.info(
-                        "Run %s received event: %s (id=%s)",
-                        self.run_id, event.get("type"), entry_id_str,
-                    )
-
-                    try:
-                        # Inject event into loop state
-                        state.messages.append({
-                            "role": "user",
-                            "content": f"[EVENT] {json.dumps(event)}",
-                        })
-                        state.last_event_id = entry_id_str
-
-                        # Dispatch to handler (Coordinator.on_event)
-                        await self._on_event(event, state)
-
-                        # Persist state
-                        self._save_state(state)
-
-                        # ACK the message
-                        self._r.xack(key, _GROUP_NAME, entry_id_str)
-                        events_processed += 1
-
-                    except Exception as e:
-                        logger.error(
-                            "Error handling event %s for run %s: %s",
-                            entry_id_str, self.run_id, e, exc_info=True,
-                        )
-                        # Still ACK to avoid infinite retry loop on poison messages
-                        self._r.xack(key, _GROUP_NAME, entry_id_str)
-
-    def _load_state(self) -> LoopState:
+    async def _load_state(self) -> LoopState:
         key = state_key(self.run_id)
-        raw = self._r.hgetall(key)
+        raw = await self._r.hgetall(key)
         if not raw:
             return LoopState(run_id=self.run_id)
         decoded = {
@@ -221,6 +187,6 @@ class AgentLoop:
         }
         return LoopState.from_dict(decoded)
 
-    def _save_state(self, state: LoopState) -> None:
+    async def _save_state(self, state: LoopState) -> None:
         key = state_key(self.run_id)
-        self._r.hset(key, mapping=state.to_dict())
+        await self._r.hset(key, mapping=state.to_dict())
