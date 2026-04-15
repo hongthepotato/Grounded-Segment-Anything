@@ -11,7 +11,6 @@ fakeredis via self._r.
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -40,8 +39,8 @@ from ml_engine.agent.contracts import (
 )
 from ml_engine.agent.memory import MemoryStore
 from ml_engine.agent.state_machine import StateMachine
-from ml_engine.agent.stream_consumer import stream_key
 from ml_engine.agent.tools import RunContext
+from tests.unit.ml_engine.conftest import read_stream_events
 
 
 # ---------------------------------------------------------------------------
@@ -82,19 +81,6 @@ def context_no_contract(run_id):
         contract=None,
     )
 
-
-def read_stream_events(redis_sync, run_id: str, event_type: str) -> list:
-    key = stream_key(run_id)
-    entries = redis_sync.xrange(key)
-    result = []
-    for _, data in entries:
-        raw = data.get(b"data", data.get("data", "{}"))
-        if isinstance(raw, bytes):
-            raw = raw.decode()
-        event = json.loads(raw)
-        if event.get("type") == event_type:
-            result.append(event)
-    return result
 
 
 def _mock_job_manager():
