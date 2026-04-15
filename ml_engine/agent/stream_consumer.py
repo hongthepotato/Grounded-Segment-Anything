@@ -99,7 +99,6 @@ class StreamConsumer(ABC):
 
     CONSUMER_GROUP: ClassVar[str] = ""
     BATCH_SIZE: ClassVar[int] = 5
-    RECLAIM_PEL_ON_START: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -133,10 +132,9 @@ class StreamConsumer(ABC):
             type(self).__name__, self.run_id, self._consumer_name,
         )
 
-        if self.RECLAIM_PEL_ON_START:
-            events_processed = await self._drain_pel(
-                key, events_processed, cancel_check, max_events
-            )
+        events_processed = await self._drain_pel(
+            key, events_processed, cancel_check, max_events
+        )
 
         while True:
             if cancel_check and cancel_check():
@@ -185,9 +183,11 @@ class StreamConsumer(ABC):
         """
         Reclaim messages delivered to this consumer but never ACKed.
 
-        Uses XPENDING + XCLAIM rather than. XCLAIM with min_idle_time=0 is safe here
-        because this method runs only at startup, before any other workers
-        under the same consumer_name can be active.
+        Uses XPENDING + XCLAIM rather than ``XREADGROUP streams={key: "0"}``
+        because the latter has inconsistent PEL-replay behavior across Redis
+        implementations (notably fakeredis 2.x). XCLAIM with min_idle_time=0
+        is safe here because this method runs only at startup, before any
+        other workers under the same consumer_name can be active.
         """
         while True:
             if cancel_check and cancel_check():
