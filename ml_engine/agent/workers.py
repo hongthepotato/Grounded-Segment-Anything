@@ -1,6 +1,4 @@
 """
-Stage 2: Executor worker.
-Stage 3: Evaluator worker.
 
 The Executor is a fire-and-forget job submitter that sits between the
 Coordinator and the job queue. It:
@@ -23,12 +21,17 @@ Failure modes handled:
   - job_id not found in store: publishes dispatch_rejected
   - retry budget exhausted: publishes dispatch_rejected
   - contract missing: allows dispatch (pre-approval planning phase)
-  - Redis failure: logs and continues (retried on next loop iteration)
+  - Redis failure: handled by StreamConsumer base (log + 1s backoff + retry)
 
 Usage:
     # Typically launched by Coordinator.run() as a concurrent asyncio task.
-    executor = ExecutorWorker(redis_client, run_id, store, contract)
+    executor = ExecutorWorker(redis_async, run_id, store, contract)
     await executor.run()
+
+Stream-level skeleton (XREADGROUP loop, PEL recovery on restart, always-ACK
+poison safety) is inherited from :class:`StreamConsumer`. Each worker below
+provides only the event-type filter, the domain handler, and a terminal-state
+stop check.
 """
 
 from __future__ import annotations
@@ -36,25 +39,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
-import redis as _redis
+import redis.asyncio as _aredis
 
 from ml_engine.agent.contracts import PipelineContract, StageSummary
+from ml_engine.agent.memory import MemoryStore
 from ml_engine.agent.gate import evaluate_gate
-from ml_engine.agent.loop import (
-    STREAM_BLOCK_MS,
-    ensure_consumer_group,
-    publish_event,
-    stream_key,
-)
+from ml_engine.agent.loop import apublish_event
 from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
+from ml_engine.agent.stream_consumer import StreamConsumer
 
 logger = logging.getLogger(__name__)
 
 
-class ExecutorWorker:
+class ExecutorWorker(StreamConsumer):
     """
     Async fire-and-forget job executor -- Stage 2.
 
@@ -70,88 +71,56 @@ class ExecutorWorker:
 
     def __init__(
         self,
-        redis_client: _redis.Redis,
+        redis_client: _aredis.Redis,
         run_id: str,
-        store,               # RedisJobStore -- typed loosely to avoid circular import
+        store,               # AsyncRedisJobStore -- typed loosely to avoid circular import
         contract: Optional[PipelineContract] = None,
     ):
-        self._r = redis_client
-        self.run_id = run_id
+        super().__init__(redis_client, run_id, self.CONSUMER_NAME)
         self._store = store
         self._contract = contract
 
     # ------------------------------------------------------------------
-    # Main loop
+    # StreamConsumer hooks
     # ------------------------------------------------------------------
 
-    async def run(self, cancel_check=None) -> None:
-        """
-        Block on the agent Stream and process dispatch_requested events.
-
-        Exits when the pipeline reaches a terminal state or cancel_check() returns True.
-        """
-        ensure_consumer_group(self._r, self.run_id)
-        key = stream_key(self.run_id)
-
-        logger.info("ExecutorWorker started for run %s", self.run_id)
-
-        while True:
-            if cancel_check and cancel_check():
-                logger.info("ExecutorWorker cancelled for run %s", self.run_id)
-                break
-
-            # Stop when pipeline reaches terminal state
-            sm = StateMachine(self._r, self.run_id)
-            try:
-                if sm.current_state in TERMINAL_STATES:
-                    logger.info("Run %s reached terminal state, ExecutorWorker stopping", self.run_id)
-                    break
-            except KeyError:
-                pass  # State not initialized yet -- keep running
-
-            try:
-                entries = self._r.xreadgroup(
-                    groupname=self.CONSUMER_GROUP,
-                    consumername=self.CONSUMER_NAME,
-                    streams={key: ">"},
-                    count=5,
-                    block=STREAM_BLOCK_MS,
+    async def should_stop(self) -> bool:
+        """Stop when the pipeline run reaches a terminal state."""
+        sm = StateMachine(run_id=self.run_id, redis_async=self._r)
+        try:
+            if await sm.current_state() in TERMINAL_STATES:
+                logger.info(
+                    "Run %s reached terminal state, ExecutorWorker stopping",
+                    self.run_id,
                 )
-            except _redis.RedisError as e:
-                logger.error("ExecutorWorker Redis error: %s", e)
-                await asyncio.sleep(1)
-                continue
+                return True
+        except KeyError:
+            pass  # State not initialized yet -- keep running
+        return False
 
-            if not entries:
-                continue
-
-            for _stream_key, messages in entries:
-                for entry_id, entry_data in messages:
-                    entry_id_str = entry_id.decode() if isinstance(entry_id, bytes) else entry_id
-                    raw = entry_data.get(b"data", entry_data.get("data", "{}"))
-                    if isinstance(raw, bytes):
-                        raw = raw.decode()
-                    event = json.loads(raw)
-
-                    if event.get("type") == "dispatch_requested":
-                        try:
-                            await self._handle_dispatch(event)
-                        except Exception as e:
-                            logger.error("ExecutorWorker dispatch error: %s", e, exc_info=True)
-
-                    # Always ACK -- poison messages must not stall the queue
-                    self._r.xack(key, self.CONSUMER_GROUP, entry_id_str)
+    async def handle_event(
+        self, event: Dict[str, Any], entry_id_str: str
+    ) -> None:
+        if event.get("type") != "dispatch_requested":
+            return
+        await self._handle_dispatch(event, entry_id_str)
 
     # ------------------------------------------------------------------
     # Dispatch handler
     # ------------------------------------------------------------------
 
-    async def _handle_dispatch(self, event: Dict[str, Any]) -> None:
+    async def _handle_dispatch(self, event: Dict[str, Any], entry_id_str: str) -> None:
         """
         Validate and enqueue a single dispatch_requested event.
 
         On success: publishes stage_dispatched to agent Stream.
         On failure: publishes dispatch_rejected with reason.
+
+        Idempotency: stores ``entry_id_str`` as ``job.dispatch_event_id`` before
+        enqueuing. On PEL re-delivery (same entry_id_str seen again), skips the
+        enqueue and re-publishes stage_dispatched so the Coordinator is unblocked.
+        This prevents double-execution of the same ML job when the process crashes
+        after enqueue but before the stream message is ACKed.
         """
         job_id = event.get("job_id")
         stage = event.get("stage", "unknown")
@@ -162,14 +131,30 @@ class ExecutorWorker:
 
         logger.info("ExecutorWorker handling dispatch: stage=%s job=%s", stage, job_id[:8])
 
+        # Idempotency check: if this exact stream entry was already processed,
+        # re-publish stage_dispatched (in case the Coordinator missed it) and return.
+        job = await self._store.get_job(job_id)
+        if job is not None and job.dispatch_event_id == entry_id_str:
+            logger.info(
+                "ExecutorWorker: idempotency hit for job %s (event=%s) -- skipping re-enqueue",
+                job_id[:8], entry_id_str,
+            )
+            await apublish_event(self._r, self.run_id, {
+                "type": "stage_dispatched",
+                "job_id": job_id,
+                "stage": stage,
+                "run_id": self.run_id,
+            })
+            return
+
         # Validate contract constraints
-        errors = self._validate(stage)
+        errors = await self._validate(stage)
         if errors:
             logger.warning(
                 "Dispatch rejected for job %s (stage=%s): %s",
                 job_id[:8], stage, "; ".join(errors),
             )
-            publish_event(self._r, self.run_id, {
+            await apublish_event(self._r, self.run_id, {
                 "type": "dispatch_rejected",
                 "job_id": job_id,
                 "stage": stage,
@@ -178,11 +163,16 @@ class ExecutorWorker:
             })
             return
 
-        # Enqueue the pre-stored job
-        success = self._store.enqueue_by_id(job_id)
+        # Stamp the dispatch event-id BEFORE enqueuing so that a crash between
+        # this write and the LPUSH is detectable on restart (job has event-id
+        # but is not in the queue; the Coordinator will eventually time out and
+        # retry via its retry/escalation logic).
+        await self._store.update_job(job_id, dispatch_event_id=entry_id_str)
+
+        success = await self._store.enqueue_by_id(job_id)
         if not success:
             logger.error("ExecutorWorker: enqueue_by_id failed for job %s", job_id[:8])
-            publish_event(self._r, self.run_id, {
+            await apublish_event(self._r, self.run_id, {
                 "type": "dispatch_rejected",
                 "job_id": job_id,
                 "stage": stage,
@@ -191,7 +181,7 @@ class ExecutorWorker:
             })
             return
 
-        publish_event(self._r, self.run_id, {
+        await apublish_event(self._r, self.run_id, {
             "type": "stage_dispatched",
             "job_id": job_id,
             "stage": stage,
@@ -203,7 +193,7 @@ class ExecutorWorker:
     # Contract validation
     # ------------------------------------------------------------------
 
-    def _validate(self, stage: str) -> list[str]:
+    async def _validate(self, stage: str) -> list[str]:
         """
         Return a list of constraint violations. Empty list = dispatch allowed.
 
@@ -216,9 +206,9 @@ class ExecutorWorker:
 
         errors: list[str] = []
 
-        sm = StateMachine(self._r, self.run_id)
+        sm = StateMachine(run_id=self.run_id, redis_async=self._r)
         try:
-            retry_count = sm.retry_count
+            retry_count = await sm.retry_count()
             max_retries = self._contract.budget.max_retries
             if retry_count >= max_retries:
                 errors.append(
@@ -235,7 +225,13 @@ class ExecutorWorker:
     # ------------------------------------------------------------------
 
     def set_contract(self, contract: PipelineContract) -> None:
-        """Update the contract used for validation. Called when user approves."""
+        """
+        Update the contract used for dispatch validation.
+
+        Called by Coordinator when a human approves a contract mid-pipeline
+        (pending_contract_approval flow, see TODO-10). Without this call, the
+        worker would validate against a stale or None contract.
+        """
         self._contract = contract
         logger.info("ExecutorWorker: contract updated for run %s", self.run_id)
 
@@ -244,7 +240,7 @@ class ExecutorWorker:
 # Stage 3: EvaluatorWorker
 # ---------------------------------------------------------------------------
 
-class EvaluatorWorker:
+class EvaluatorWorker(StreamConsumer):
     """
     Metric-based evaluation worker -- Stage 3.
 
@@ -266,79 +262,58 @@ class EvaluatorWorker:
 
     def __init__(
         self,
-        redis_client: _redis.Redis,
+        redis_client: _aredis.Redis,
         run_id: str,
         contract: Optional[PipelineContract] = None,
     ):
-        self._r = redis_client
-        self.run_id = run_id
+        super().__init__(redis_client, run_id, self.CONSUMER_NAME)
         self._contract = contract
+        self._memory = MemoryStore(redis_async=redis_client)
 
-    async def run(self, cancel_check=None) -> None:
-        """
-        Block on the agent Stream and process evaluation_requested events.
+    # ------------------------------------------------------------------
+    # StreamConsumer hooks
+    # ------------------------------------------------------------------
 
-        Exits when the pipeline reaches a terminal state or cancel_check() returns True.
-        """
-        ensure_consumer_group(self._r, self.run_id)
-        key = stream_key(self.run_id)
-
-        logger.info("EvaluatorWorker started for run %s", self.run_id)
-
-        while True:
-            if cancel_check and cancel_check():
-                logger.info("EvaluatorWorker cancelled for run %s", self.run_id)
-                break
-
-            sm = StateMachine(self._r, self.run_id)
-            try:
-                if sm.current_state in TERMINAL_STATES:
-                    logger.info("Run %s reached terminal state, EvaluatorWorker stopping", self.run_id)
-                    break
-            except KeyError:
-                pass
-
-            try:
-                entries = self._r.xreadgroup(
-                    groupname=self.CONSUMER_GROUP,
-                    consumername=self.CONSUMER_NAME,
-                    streams={key: ">"},
-                    count=5,
-                    block=STREAM_BLOCK_MS,
+    async def should_stop(self) -> bool:
+        """Stop when the pipeline run reaches a terminal state."""
+        sm = StateMachine(run_id=self.run_id, redis_async=self._r)
+        try:
+            if await sm.current_state() in TERMINAL_STATES:
+                logger.info(
+                    "Run %s reached terminal state, EvaluatorWorker stopping",
+                    self.run_id,
                 )
-            except _redis.RedisError as e:
-                logger.error("EvaluatorWorker Redis error: %s", e)
-                await asyncio.sleep(1)
-                continue
+                return True
+        except KeyError:
+            pass
+        return False
 
-            if not entries:
-                continue
+    async def handle_event(
+        self, event: Dict[str, Any], entry_id_str: str
+    ) -> None:
+        if event.get("type") != "evaluation_requested":
+            return
+        await self._handle_evaluation(event)
 
-            for _stream_key, messages in entries:
-                for entry_id, entry_data in messages:
-                    entry_id_str = entry_id.decode() if isinstance(entry_id, bytes) else entry_id
-                    raw = entry_data.get(b"data", entry_data.get("data", "{}"))
-                    if isinstance(raw, bytes):
-                        raw = raw.decode()
-                    event = json.loads(raw)
+    async def on_event_error(
+        self, event: Dict[str, Any], entry_id_str: str, exc: BaseException
+    ) -> None:
+        """
+        Publish an escalation gate_decision so the pipeline doesn't silently stall.
 
-                    if event.get("type") == "evaluation_requested":
-                        try:
-                            await self._handle_evaluation(event)
-                        except Exception as e:
-                            logger.error("EvaluatorWorker evaluation error: %s", e, exc_info=True)
-                            # Publish escalation so the pipeline doesn't silently stall
-                            publish_event(self._r, self.run_id, {
-                                "type": "gate_decision",
-                                "stage": event.get("stage", "unknown"),
-                                "verdict": "escalate",
-                                "reason": f"Evaluator error: {e}",
-                                "metrics": {},
-                                "run_id": self.run_id,
-                            })
-
-                    # Always ACK -- poison messages must not stall the queue
-                    self._r.xack(key, self.CONSUMER_GROUP, entry_id_str)
+        Only fires when handle_event raised (i.e. a real evaluation failed); the
+        base class has already logged the traceback before calling this hook.
+        """
+        if event.get("type") != "evaluation_requested":
+            return
+        await apublish_event(self._r, self.run_id, {
+            "type": "gate_decision",
+            "stage": event.get("stage", "unknown"),
+            "verdict": "escalate",
+            "reason": f"Evaluator error: {exc}",
+            "metrics": {},
+            "run_id": self.run_id,
+        })
 
     async def _handle_evaluation(self, event: Dict[str, Any]) -> None:
         """
@@ -350,9 +325,6 @@ class EvaluatorWorker:
         3. Write feedback memory record
         4. Publish gate_decision event for Coordinator
         """
-        import json as _json
-        from pathlib import Path
-
         stage = event.get("stage", "unknown")
         output_dir = event.get("output_dir", "")
         job_id = event.get("job_id", "")
@@ -363,7 +335,7 @@ class EvaluatorWorker:
         outcome_path = Path(output_dir) / "outcome.json"
         if not outcome_path.exists():
             logger.error("EvaluatorWorker: outcome.json not found at %s", output_dir)
-            publish_event(self._r, self.run_id, {
+            await apublish_event(self._r, self.run_id, {
                 "type": "gate_decision",
                 "stage": stage,
                 "verdict": "escalate",
@@ -373,15 +345,18 @@ class EvaluatorWorker:
             })
             return
 
-        outcome = _json.loads(outcome_path.read_text(encoding="utf-8"))
+        # asyncio.to_thread: outcome.json may live on a Docker volume or NFS mount;
+        # blocking read_text() would stall the event loop shared by all three workers.
+        raw_text = await asyncio.to_thread(outcome_path.read_text, encoding="utf-8")
+        outcome = json.loads(raw_text)
         metrics = outcome.get("metrics", {})
         wall_time = outcome.get("wall_time_seconds", 0.0)
         artifacts = outcome.get("artifacts", {})
 
         # Gate evaluation (deterministic)
         criteria = self._contract.acceptance_criteria if self._contract else None
-        sm = StateMachine(self._r, self.run_id)
-        retry_count = sm.retry_count
+        sm = StateMachine(run_id=self.run_id, redis_async=self._r)
+        retry_count = await sm.retry_count()
         max_retries = self._contract.budget.max_retries if self._contract else 2
 
         if criteria is None:
@@ -398,17 +373,24 @@ class EvaluatorWorker:
             stage, decision_verdict, decision_reason,
         )
 
-        # Write feedback memory -- future pipelines learn from this
-        self._write_feedback_memory(
+        # Build structured summary with the real verdict (Coordinator's copy is
+        # always "pass" since it fires at job_completed before evaluation)
+        exp_result = outcome.get("experiment_result", {})
+        summary = StageSummary(
             stage=stage,
-            verdict=decision_verdict,
+            status=decision_verdict,
             metrics=metrics,
-            outcome=outcome,
-            wall_time=wall_time,
+            artifacts=artifacts,
+            duration_seconds=wall_time,
+            trial_count=int(exp_result.get("trials_completed", 0)) or None,
         )
 
-        # Publish gate_decision for Coordinator to act on
-        publish_event(self._r, self.run_id, {
+        # Write feedback memory -- future pipelines learn from this
+        await self._write_feedback_memory(summary, exp_result)
+
+        # Publish gate_decision for Coordinator to act on; attach summary so
+        # any consumer gets structured stage outcome without re-reading outcome.json
+        await apublish_event(self._r, self.run_id, {
             "type": "gate_decision",
             "stage": stage,
             "verdict": decision_verdict,
@@ -417,15 +399,13 @@ class EvaluatorWorker:
             "artifacts": artifacts,
             "wall_time_seconds": wall_time,
             "run_id": self.run_id,
+            "stage_summary": summary.to_dict(),
         })
 
-    def _write_feedback_memory(
+    async def _write_feedback_memory(
         self,
-        stage: str,
-        verdict: str,
-        metrics: Dict[str, Any],
-        outcome: Dict[str, Any],
-        wall_time: float,
+        summary: StageSummary,
+        exp_result: Dict[str, Any],
     ) -> None:
         """
         Write structured feedback to MemoryStore.
@@ -433,22 +413,12 @@ class EvaluatorWorker:
         Future Coordinators can query this to avoid known bad configs
         and repeat known good ones.
         """
-        from ml_engine.agent.memory import MemoryStore
-        from datetime import datetime
+        key = f"{summary.stage}_{self.run_id[:8]}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
-        memory = MemoryStore(self._r)
-        key = f"{stage}_{self.run_id[:8]}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-
-        content: Dict[str, Any] = {
-            "stage": stage,
-            "verdict": verdict,
-            "metrics": metrics,
-            "wall_time_seconds": wall_time,
-            "run_id": self.run_id,
-        }
+        content = summary.to_dict()
+        content["run_id"] = self.run_id
 
         # Include experiment result detail if this was an AutoResearch stage
-        exp_result = outcome.get("experiment_result")
         if exp_result:
             content["experiment_result"] = exp_result
             content["note"] = (
@@ -457,12 +427,18 @@ class EvaluatorWorker:
             )
 
         try:
-            memory.write("feedback", key, content)
+            await self._memory.write("feedback", key, content)
             logger.debug("EvaluatorWorker wrote feedback memory: feedback/%s", key)
         except Exception as e:
             logger.warning("EvaluatorWorker: failed to write feedback memory: %s", e)
 
     def set_contract(self, contract: PipelineContract) -> None:
-        """Update the contract. Called when user approves."""
+        """
+        Update the contract used for gate evaluation and dispatch validation.
+
+        Called by Coordinator when a human approves a contract mid-pipeline
+        (pending_contract_approval flow, see TODO-10). Also updates self._memory
+        is not needed here since MemoryStore is stateless w.r.t. the contract.
+        """
         self._contract = contract
         logger.info("EvaluatorWorker: contract updated for run %s", self.run_id)
