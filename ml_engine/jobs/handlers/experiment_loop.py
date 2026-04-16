@@ -40,8 +40,14 @@ class ExperimentLoopHandler(JobHandler):
                 "metric_name": "val_mAP50",
                 "metric_mode": "max",
                 "max_wall_time_seconds": null,
+                "use_llm_propose": false,    # true = LLM-guided HPO
             }
         }
+
+    Note: ``mutable_keys`` and ``immutable_keys`` are system-level constraints
+    read from ``configs/defaults/experiment_loop.yaml``. They cannot be
+    overridden via ``job_config["experiment"]`` -- values placed there are
+    silently ignored.
     """
 
     def run(
@@ -88,7 +94,11 @@ class ExperimentLoopHandler(JobHandler):
         budget = ExperimentBudget(
             max_trials=int(exp_cfg.get("max_trials", 20)),
             epochs_per_trial=int(exp_cfg.get("epochs_per_trial", 5)),
-            max_wall_time_seconds=exp_cfg.get("max_wall_time_seconds"),
+            max_wall_time_seconds=(
+                int(exp_cfg["max_wall_time_seconds"])
+                if exp_cfg.get("max_wall_time_seconds") is not None
+                else None
+            ),
             metric_name=exp_cfg.get("metric_name", "val_mAP50"),
             metric_mode=exp_cfg.get("metric_mode", "max"),
         )
@@ -112,6 +122,8 @@ class ExperimentLoopHandler(JobHandler):
                 provider=exp_cfg.get("llm_provider", "anthropic"),
                 model=exp_cfg.get("llm_model") or None,
                 timeout=float(exp_cfg.get("llm_timeout", 30.0)),
+                base_url=exp_cfg.get("llm_base_url") or None,
+                api_key_env=exp_cfg.get("llm_api_key_env") or None,
             )
             propose_fn = proposer.propose
             logger.info("ExperimentLoopHandler: using LLM-guided propose_fn (Stage 4)")
@@ -123,8 +135,8 @@ class ExperimentLoopHandler(JobHandler):
         def _progress_cb(info: Dict) -> None:
             try:
                 progress_queue.put_nowait(info)
-            except Exception:
-                pass
+            except queue.Full:
+                pass  # Progress is best-effort; drop silently if queue is full
 
         def _cancel_check() -> bool:
             return cancel_event.is_set()
