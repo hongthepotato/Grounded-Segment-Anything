@@ -36,6 +36,8 @@ env/
 .DS_Store
 .claude
 *.md
+!README.md
+!**/README.md
 !configs/agent/skills/*.md
 
 # Jupyter Notebook
