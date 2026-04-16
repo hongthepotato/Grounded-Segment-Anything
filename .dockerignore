@@ -17,6 +17,9 @@ experiments/
 notebooks/
 *.ipynb
 
+# GroundingDINO assets not needed for build
+GroundingDINO/demo/
+
 # Legacy / unused subprojects
 VISAM/
 grounded-sam-osx/

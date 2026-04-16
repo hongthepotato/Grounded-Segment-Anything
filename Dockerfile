@@ -32,7 +32,8 @@ COPY GroundingDINO/ GroundingDINO/
 RUN uv sync --frozen --no-editable --no-install-project
 
 COPY . .
-RUN uv sync --frozen --no-editable
+RUN uv sync --frozen --no-editable && \
+    find /opt/venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 # ============================================================
 # Stage 2: runtime — lean image with only what's needed
@@ -57,7 +58,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /app /app
+
+# Copy only the runtime source — skip deps/ and GroundingDINO/ source trees
+# (both are installed --no-editable into the venv and don't need to ship as source)
+COPY --from=builder /app/api /app/api
+COPY --from=builder /app/core /app/core
+COPY --from=builder /app/ml_engine /app/ml_engine
+COPY --from=builder /app/augmentation /app/augmentation
+COPY --from=builder /app/configs /app/configs
+COPY --from=builder /app/scripts /app/scripts
+COPY --from=builder /app/startup.bash /app/startup.bash
 
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH=/app
