@@ -62,7 +62,7 @@ class StudentTrainer:
             'workers': training.get('num_workers', 4),
 
             'warmup_epochs': scheduler.get('warmup_epochs', 3),
-            'lrf': scheduler.get('min_lr', 1e-5) / max(training.get('learning_rate', 1e-3), 1e-8),
+            'lrf': min(1.0, scheduler.get('min_lr', 1e-5) / max(training.get('learning_rate', 1e-3), 1e-8)),
 
             'val': True,
             'save': True,
@@ -87,7 +87,7 @@ class StudentTrainer:
         self,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
-    ) -> str:
+    ) -> tuple[str, Dict[str, float]]:
         """
         Train the student model.
 
@@ -96,7 +96,9 @@ class StudentTrainer:
             cancel_check: Optional function returning True to request cancellation
 
         Returns:
-            Absolute path to the best.pt weights file
+            Tuple of (absolute path to best.pt, final validation metrics dict).
+            Metrics use the gate-compatible keys: mIoU (from mask mAP50),
+            mAP50 (from box mAP50), plus raw ultralytics keys.
         """
         from ultralytics import YOLO
         from core.constants import PRETRAINED_MODELS_DIR
@@ -145,6 +147,32 @@ class StudentTrainer:
         if not best_pt.exists():
             save_dir = Path(results.save_dir) if hasattr(results, 'save_dir') else self.output_dir
             best_pt = save_dir / 'weights' / 'best.pt'
+        if not best_pt.exists():
+            raise FileNotFoundError(
+                f"No best.pt produced at {best_pt}. "
+                "Training may have been cancelled before the first saved checkpoint, "
+                "or all epochs scored below the pre-trained baseline."
+            )
 
-        logger.info("Student training complete. Best weights: %s", best_pt)
-        return str(best_pt.resolve())
+        # Extract gate-compatible metrics from the final results dict.
+        # Ultralytics key mapping:
+        #   metrics/mAP50(M) — mask mAP50 from YOLOv8-seg → gate key "mIoU"
+        #   metrics/mAP50(B) — box  mAP50 from YOLOv8     → gate key "mAP50"
+        metrics: Dict[str, float] = {}
+        if hasattr(results, 'results_dict') and results.results_dict:
+            raw = {k: float(v) for k, v in results.results_dict.items()
+                   if isinstance(v, (int, float))}
+            metrics.update(raw)
+            if 'metrics/mAP50(M)' in raw:
+                metrics['mIoU'] = raw['metrics/mAP50(M)']
+            if 'metrics/mAP50(B)' in raw:
+                metrics['mAP50'] = raw['metrics/mAP50(B)']
+        else:
+            logger.warning(
+                "results.results_dict absent or empty — gate will escalate "
+                "(neither mIoU nor mAP50 extractable). "
+                "results type: %s", type(results)
+            )
+
+        logger.info("Student training complete. Best weights: %s, metrics: %s", best_pt, metrics)
+        return str(best_pt.resolve()), metrics
