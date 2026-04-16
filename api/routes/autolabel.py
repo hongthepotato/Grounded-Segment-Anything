@@ -24,7 +24,7 @@ from api.schemas import (
     JobResponse,
     JobProgressSchema,
 )
-from ml_engine.jobs import JobManager, get_job_manager, Job
+from ml_engine.jobs import AsyncJobManager, get_async_job_manager, Job
 from core.config import load_json, save_json
 
 logger = logging.getLogger(__name__)
@@ -32,10 +32,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/autolabel", tags=["autolabel"])
 
 
-def get_manager() -> JobManager:
-    """Dependency to get JobManager instance."""
+def get_manager() -> AsyncJobManager:
+    """Dependency to get AsyncJobManager instance."""
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    return get_job_manager(redis_url)
+    return get_async_job_manager(redis_url)
 
 
 def job_to_response(job: Job) -> JobResponse:
@@ -73,7 +73,7 @@ def job_to_response(job: Job) -> JobResponse:
 @router.post("", response_model=JobResponse, status_code=201)
 async def submit_autolabel(
     request: AutoLabelRequest,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Submit an auto-labeling job.
@@ -110,7 +110,7 @@ async def submit_autolabel(
             # Will be set by Job.__post_init__ but we can override for auto_label
             output_dir = None  # Let the worker handle it
 
-        job = manager.submit_job(
+        job = await manager.submit_job(
             job_type="auto_label",
             config=config,
             priority=request.priority,
@@ -131,7 +131,7 @@ async def submit_autolabel(
 @router.get("/{job_id}/results", response_model=AutoLabelResultResponse)
 async def get_results(
     job_id: str,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Get COCO-format annotations for a completed auto-label job.
@@ -142,7 +142,7 @@ async def get_results(
     Returns:
         COCO JSON with images, annotations, and categories
     """
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
@@ -177,7 +177,7 @@ async def get_results(
 @router.get("/{job_id}/visualizations", response_model=VisualizationListResponse)
 async def list_visualizations(
     job_id: str,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     List visualization images for an auto-label job.
@@ -188,7 +188,7 @@ async def list_visualizations(
     Returns:
         List of visualization image info
     """
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
@@ -265,7 +265,7 @@ async def list_visualizations(
 async def get_visualization(
     job_id: str,
     filename: str,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Get a visualization image file.
@@ -276,7 +276,7 @@ async def get_visualization(
     Returns:
         JPEG image file
     """
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
@@ -309,7 +309,7 @@ async def get_visualization(
 async def save_annotations(
     job_id: str,
     annotations: dict,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Save edited annotations for an auto-label job.
@@ -328,7 +328,7 @@ async def save_annotations(
     Returns:
         Save confirmation with path and counts
     """
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 

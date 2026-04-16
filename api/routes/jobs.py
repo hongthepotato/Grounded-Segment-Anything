@@ -28,7 +28,7 @@ from api.schemas import (
     WorkerResponse,
     success_response,
 )
-from ml_engine.jobs import JobManager, get_job_manager, Job
+from ml_engine.jobs import AsyncJobManager, get_async_job_manager, Job
 
 logger = logging.getLogger(__name__)
 
@@ -241,10 +241,10 @@ def validate_job_config(job_type: str, config: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def get_manager() -> JobManager:
-    """Dependency to get JobManager instance."""
+def get_manager() -> AsyncJobManager:
+    """Dependency to get AsyncJobManager instance."""
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    return get_job_manager(redis_url)
+    return get_async_job_manager(redis_url)
 
 
 def job_to_response(job: Job) -> JobResponse:
@@ -288,7 +288,7 @@ def job_to_response(job: Job) -> JobResponse:
 @router.post("", status_code=200)
 async def submit_job(
     request: JobCreate,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Submit a new training job.
@@ -319,7 +319,7 @@ async def submit_job(
         )
 
     try:
-        job = manager.submit_job(
+        job = await manager.submit_job(
             job_type=request.job_type,
             config=request.config,
             priority=request.priority,
@@ -348,15 +348,15 @@ async def list_jobs(
     job_type: Optional[str] = Query(None, description="Filter by job type"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum jobs to return"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     List jobs with optional filtering.
-    
+
     Example:
         GET /api/jobs?status=running&limit=10
     """
-    jobs = manager.list_jobs(
+    jobs = await manager.list_jobs(
         status=status,
         job_type=job_type,
         limit=limit,
@@ -364,7 +364,7 @@ async def list_jobs(
     )
 
     # Get total count for pagination
-    total = manager.get_job_count(status=status)
+    total = await manager.get_job_count(status=status)
 
     response_data = JobListResponse(
         jobs=[job_to_response(job) for job in jobs],
@@ -406,15 +406,15 @@ async def list_job_types():
 @router.get("/{job_id}")
 async def get_job(
     job_id: str,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Get job details by ID.
-    
+
     Example:
         GET /api/jobs/a1b2c3d4-...
     """
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
@@ -429,19 +429,19 @@ async def get_job(
 @router.delete("/{job_id}", status_code=200)
 async def cancel_job(
     job_id: str,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Cancel a job.
-    
+
     - If PENDING: Removes from queue and marks CANCELLED
     - If RUNNING: Sets status to CANCELLING, worker will stop gracefully
     - If already terminal: Returns 400
-    
+
     Example:
         DELETE /api/jobs/a1b2c3d4-...
     """
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
@@ -451,12 +451,12 @@ async def cancel_job(
             detail=f"Cannot cancel job in terminal state: {job.status.value}"
         )
 
-    success = manager.cancel_job(job_id)
+    success = await manager.cancel_job(job_id)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to cancel job")
 
     # Get updated job
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     return JSONResponse(
         status_code=200,
         content=success_response(
@@ -471,15 +471,15 @@ queue_router = APIRouter(prefix="/api/queue", tags=["queue"])
 
 @queue_router.get("/status")
 async def get_queue_status(
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Get queue status including pending jobs and active workers.
-    
+
     Example:
         GET /api/queue/status
     """
-    status = manager.get_queue_status()
+    status = await manager.get_queue_status()
 
     workers = [
         WorkerResponse(

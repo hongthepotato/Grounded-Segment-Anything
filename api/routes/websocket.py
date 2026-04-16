@@ -20,7 +20,7 @@ import threading
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ml_engine.jobs import get_job_manager
+from ml_engine.jobs import get_async_job_manager
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,10 @@ async def job_stream(websocket: WebSocket, job_id: str):
 
     # Get manager
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    manager = get_job_manager(redis_url)
+    manager = get_async_job_manager(redis_url)
 
     # Check if job exists
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
         await websocket.send_json({
             "type": "error",
@@ -117,7 +117,7 @@ async def job_stream(websocket: WebSocket, job_id: str):
 
             except asyncio.TimeoutError:
                 # Periodic check: is job still active?
-                job = manager.get_job(job_id)
+                job = await manager.get_job(job_id)
                 if job and job.is_terminal:
                     # Job finished but we missed the event
                     await websocket.send_json({

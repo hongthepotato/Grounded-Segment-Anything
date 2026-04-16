@@ -18,17 +18,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 
 from api.schemas import success_response
-from ml_engine.jobs import JobManager, get_job_manager
+from ml_engine.jobs import AsyncJobManager, get_async_job_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jobs", tags=["exports"])
 
 
-def get_manager() -> JobManager:
-    """Dependency to get JobManager instance."""
+def get_manager() -> AsyncJobManager:
+    """Dependency to get AsyncJobManager instance."""
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    return get_job_manager(redis_url)
+    return get_async_job_manager(redis_url)
 
 
 def _find_model_packages(output_dir: Path) -> Dict[str, Path]:
@@ -60,9 +60,9 @@ def _find_lora_adapters(output_dir: Path) -> Dict[str, Path]:
     return adapters
 
 
-def _validate_completed_job(job_id: str, manager: JobManager):
+async def _validate_completed_job(job_id: str, manager: AsyncJobManager):
     """Return job after validating it exists and is completed."""
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     if job.status.value != "completed":
@@ -76,7 +76,7 @@ def _validate_completed_job(job_id: str, manager: JobManager):
 @router.get("/{job_id}/exports")
 async def list_exports(
     job_id: str,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     List available export formats for a completed job.
@@ -102,7 +102,7 @@ async def list_exports(
             }
         }
     """
-    job = _validate_completed_job(job_id, manager)
+    job = await _validate_completed_job(job_id, manager)
     output_dir = Path(job.output_dir)
 
     packages = _find_model_packages(output_dir)
@@ -139,7 +139,7 @@ async def download_model(
         default=None,
         description="Model name (grounding_dino, sam). Auto-detected if omitted."
     ),
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Download trained model package.
@@ -151,7 +151,7 @@ async def download_model(
     Returns:
         ZIP file containing model weights
     """
-    job = _validate_completed_job(job_id, manager)
+    job = await _validate_completed_job(job_id, manager)
     output_dir = Path(job.output_dir)
 
     if format == "merged_pth":

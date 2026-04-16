@@ -32,7 +32,7 @@ from api.schemas import success_response, error_response
 from api.routes.autolabel import router as autolabel_router
 from api.routes.distillation import router as distillation_router
 from api.routes.agent import router as agent_router, ws_router as agent_ws_router
-from ml_engine.jobs import get_job_manager
+from ml_engine.jobs import get_async_job_manager, close_async_job_managers
 from core.logging_config import configure_logging, get_logger
 
 # Configure logging at module load time (before FastAPI starts)
@@ -57,11 +57,11 @@ async def lifespan(app: FastAPI):
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
     try:
-        manager = get_job_manager(redis_url)
+        manager = get_async_job_manager(redis_url)
         logger.info("Connected to Redis at %s", redis_url)
 
         # Cleanup stale workers on startup
-        removed = manager.cleanup_stale_workers(timeout_seconds=120)
+        removed = await manager.cleanup_stale_workers(timeout_seconds=120)
         if removed > 0:
             logger.info("Removed %d stale workers", removed)
 
@@ -73,8 +73,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down Training Job Manager API...")
-    manager = get_job_manager(redis_url)
-    manager.close()
+    await close_async_job_managers()
     logger.info("Shutdown complete")
 
 
@@ -212,9 +211,9 @@ async def health_check():
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
     try:
-        manager = get_job_manager(redis_url)
+        manager = get_async_job_manager(redis_url)
         # Quick Redis check
-        manager.get_queue_length()
+        await manager.get_queue_length()
         return JSONResponse(
             status_code=200,
             content=success_response(

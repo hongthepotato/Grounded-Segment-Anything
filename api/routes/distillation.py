@@ -14,23 +14,23 @@ from fastapi.responses import JSONResponse
 
 from api.schemas import DistillationRequest, success_response
 from api.routes.jobs import validate_job_config, job_to_response
-from ml_engine.jobs import JobManager, get_job_manager
+from ml_engine.jobs import AsyncJobManager, get_async_job_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/distillation", tags=["distillation"])
 
 
-def get_manager() -> JobManager:
-    """Dependency to get JobManager instance."""
+def get_manager() -> AsyncJobManager:
+    """Dependency to get AsyncJobManager instance."""
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    return get_job_manager(redis_url)
+    return get_async_job_manager(redis_url)
 
 
 @router.post("", status_code=200)
 async def submit_distillation(
     request: DistillationRequest,
-    manager: JobManager = Depends(get_manager)
+    manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Submit a student distillation job.
@@ -63,7 +63,7 @@ async def submit_distillation(
         )
 
     try:
-        job = manager.submit_job(
+        job = await manager.submit_job(
             job_type="student_distillation",
             config=config,
             priority=request.priority,
