@@ -12,6 +12,7 @@ import json
 import logging
 import multiprocessing as mp
 import queue
+import shutil
 from pathlib import Path
 from typing import Dict, Any
 
@@ -168,7 +169,6 @@ class StudentDistillationHandler(JobHandler):
         final_dir.mkdir(parents=True, exist_ok=True)
         final_weights = final_dir / 'best.pt'
 
-        import shutil
         shutil.copy2(best_pt, str(final_weights))
         logger.info("Student model saved to %s", final_weights)
 
