@@ -35,7 +35,8 @@ env/
 *~
 .DS_Store
 .claude
-# *.md
+*.md
+!configs/agent/skills/*.md
 
 # Jupyter Notebook
 .ipynb_checkpoints
