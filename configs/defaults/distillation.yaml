@@ -40,7 +40,6 @@ distillation:
     optimizer: "SGD"
     momentum: 0.937
     weight_decay: 0.0005
-    grad_clip: 10.0
     num_workers: 4
   
   # Learning rate schedule
