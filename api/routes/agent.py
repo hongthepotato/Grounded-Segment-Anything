@@ -220,13 +220,16 @@ async def get_status(run_id: str):
     sm = StateMachine(run_id=run_id, redis_async=r)
 
     try:
-        state = await sm.current_state()
+        data = await sm.load()
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    summaries = await sm.get_stage_summaries()
-    proposed_contract = await sm.get_proposed_contract()
-    retry_count = await sm.retry_count()
+    state = data["state"]
+    summaries = json.loads(data.get("stage_summaries", "[]"))
+    proposed_raw = data.get("proposed_contract", "")
+    proposed_contract = json.loads(proposed_raw) if proposed_raw else None
+    proposed_contract = proposed_contract if proposed_contract else None
+    retry_count = int(data.get("retry_count", "0"))
 
     return {
         "run_id": run_id,
@@ -304,7 +307,7 @@ async def agent_websocket(websocket: WebSocket, run_id: str):
 
     r = _get_async_redis()
 
-    from ml_engine.agent.loop import stream_key
+    from ml_engine.agent.stream_consumer import stream_key
     from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
 
     key = stream_key(run_id)
@@ -341,5 +344,3 @@ async def agent_websocket(websocket: WebSocket, run_id: str):
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected for run %s", run_id)
-    finally:
-        await r.aclose()
