@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from api.schemas import (
     AutoLabelRequest,
@@ -23,6 +23,7 @@ from api.schemas import (
     VisualizationInfo,
     JobResponse,
     JobProgressSchema,
+    success_response,
 )
 from ml_engine.jobs import AsyncJobManager, get_async_job_manager, Job
 from core.config import load_json, save_json
@@ -70,7 +71,7 @@ def job_to_response(job: Job) -> JobResponse:
     )
 
 
-@router.post("", response_model=JobResponse, status_code=201)
+@router.post("")
 async def submit_autolabel(
     request: AutoLabelRequest,
     manager: AsyncJobManager = Depends(get_manager)
@@ -119,7 +120,10 @@ async def submit_autolabel(
         )
 
         logger.info("Submitted auto-label job %s for %s", job.id[:8], request.image_paths)
-        return job_to_response(job)
+        return JSONResponse(
+            status_code=200,
+            content=success_response(data=job_to_response(job).model_dump(mode="json")),
+        )
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
