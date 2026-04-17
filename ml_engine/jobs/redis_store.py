@@ -53,6 +53,7 @@ class RedisJobStore:
     JOB_PREFIX = "job:"
     WORKERS_KEY = "workers"
     WORKER_PREFIX = "worker:"
+    STATUS_INDEX_PREFIX = "jobs:by_status:"
 
     def __init__(self, redis_url: str = "redis://localhost:6379", db: int = 0):
         """
@@ -86,6 +87,10 @@ class RedisJobStore:
         """Close Redis connections."""
         self.pool.disconnect()
         logger.info("Redis connections closed")
+
+    def _status_key(self, status) -> str:
+        value = status.value if isinstance(status, JobStatus) else status
+        return f"{self.STATUS_INDEX_PREFIX}{value}"
 
     # =========================================================================
     # Queue Operations
@@ -273,6 +278,15 @@ class RedisJobStore:
         """
         job_key = f"{self.JOB_PREFIX}{job_id}"
 
+        old_status: Optional[str] = None
+        new_status: Optional[str] = None
+        if "status" in updates:
+            raw = self.redis.hget(job_key, "status")
+            if raw is not None:
+                old_status = raw.decode() if isinstance(raw, bytes) else raw
+            v = updates["status"]
+            new_status = v.value if isinstance(v, JobStatus) else str(v)
+
         try:
             # Convert updates to Redis-compatible format
             redis_updates = {}
@@ -291,7 +305,13 @@ class RedisJobStore:
                     redis_updates[key] = str(value)
 
             if redis_updates:
-                self.redis.hset(job_key, mapping=redis_updates)
+                pipe = self.redis.pipeline()
+                pipe.hset(job_key, mapping=redis_updates)
+                if new_status is not None and new_status != old_status:
+                    if old_status:
+                        pipe.srem(self._status_key(old_status), job_id)
+                    pipe.sadd(self._status_key(new_status), job_id)
+                pipe.execute()
 
                 # Publish update event
                 self.publish_event(job_id, {
