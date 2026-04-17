@@ -330,7 +330,7 @@ async def submit_job(
         return JSONResponse(
             status_code=200,
             content=success_response(
-                data={"jobs": [job_to_response(job).model_dump(mode='json')]},
+                data=job_to_response(job).model_dump(mode='json'),
                 code=200
             )
         )
@@ -340,6 +340,9 @@ async def submit_job(
     except Exception as e:
         logger.error("Failed to submit job: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to submit job: {str(e)}") from e
+
+
+_VALID_JOB_STATUSES = {"pending", "running", "completed", "failed", "cancelled", "cancelling"}
 
 
 @router.get("")
@@ -356,6 +359,12 @@ async def list_jobs(
     Example:
         GET /api/jobs?status=running&limit=10
     """
+    if status is not None and status not in _VALID_JOB_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Valid values: {sorted(_VALID_JOB_STATUSES)}"
+        )
+
     jobs = await manager.list_jobs(
         status=status,
         job_type=job_type,
@@ -421,7 +430,7 @@ async def get_job(
     return JSONResponse(
         status_code=200,
         content=success_response(
-            data={"jobs": [job_to_response(job).model_dump(mode='json')]}
+            data=job_to_response(job).model_dump(mode='json')
         )
     )
 
@@ -460,7 +469,7 @@ async def cancel_job(
     return JSONResponse(
         status_code=200,
         content=success_response(
-            data={"jobs": [job_to_response(job).model_dump(mode='json')]}
+            data=job_to_response(job).model_dump(mode='json')
         )
     )
 

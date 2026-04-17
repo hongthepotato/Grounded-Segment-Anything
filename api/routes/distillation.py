@@ -74,7 +74,7 @@ async def submit_distillation(
         return JSONResponse(
             status_code=200,
             content=success_response(
-                data={"jobs": [job_to_response(job).model_dump(mode='json')]},
+                data=job_to_response(job).model_dump(mode='json'),
                 code=200
             )
         )
