@@ -14,4 +14,4 @@ services:
       - ./experiments:/app/experiments
       - /srv/shared:/srv/shared
     command: >
-      bash -c "uv pip install debugpy>=1.8.0 && bash startup.bash"
+      bash -c "uv pip install 'debugpy>=1.8.0' && bash startup.bash"
