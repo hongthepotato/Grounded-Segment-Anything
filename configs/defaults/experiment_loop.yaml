@@ -52,10 +52,11 @@ mutable_keys:
   # --- Training dynamics (config['training_dynamics']) ---
   # These reach TrainingManager via Trainer._init_trainers injecting
   # 'training_dynamics' into model_config. See trainer.py._init_trainers.
-  "training_dynamics.gradient_clipping.max_norm":      {type: float, min: 0.01, max: 10.0}
-  "training_dynamics.gradient_clipping.enabled":       {type: bool}
-  "training_dynamics.mixed_precision.enabled":         {type: bool}
-  "training_dynamics.normalization.freeze_bn_teacher": {type: bool}
+  "training_dynamics.gradient_clipping.max_norm":           {type: float, min: 0.01, max: 10.0}
+  "training_dynamics.gradient_clipping.enabled":            {type: bool}
+  "training_dynamics.mixed_precision.enabled":              {type: bool}
+  "training_dynamics.normalization.freeze_bn_teacher":      {type: bool}
+  "training_dynamics.gradient_accumulation.steps":          {type: int, min: 1, max: 32}
 
 # Keys the experiment loop must NEVER mutate.
 # Changing these would alter model identity or break dataset compatibility.
