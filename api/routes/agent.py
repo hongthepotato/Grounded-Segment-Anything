@@ -18,7 +18,10 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from api.schemas import success_response
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +166,12 @@ async def propose_plan(body: PlanRequest):
     })
 
     logger.info("Plan proposed: run_id=%s intent=%r", run_id, body.intent[:60])
-    return PlanResponse(
-        run_id=run_id,
-        contract=contract.to_dict(),
+    return JSONResponse(
+        status_code=200,
+        content=success_response(data=PlanResponse(
+            run_id=run_id,
+            contract=contract.to_dict(),
+        ).model_dump()),
     )
 
 
@@ -203,7 +209,10 @@ async def approve_plan(body: ApproveRequest):
     _start_coordinator(body.run_id, body.contract)
 
     logger.info("Plan approved and Coordinator started: run_id=%s", body.run_id)
-    return {"run_id": body.run_id, "status": "planning"}
+    return JSONResponse(
+        status_code=200,
+        content=success_response(data={"run_id": body.run_id, "status": "planning"}),
+    )
 
 
 @router.get("/status/{run_id}")
@@ -231,14 +240,17 @@ async def get_status(run_id: str):
     proposed_contract = proposed_contract if proposed_contract else None
     retry_count = int(data.get("retry_count", "0"))
 
-    return {
-        "run_id": run_id,
-        "state": state,
-        "retry_count": retry_count,
-        "stage_summaries": summaries,
-        "proposed_contract": proposed_contract,  # present when state == "created"
-        "coordinator_active": run_id in _coordinator_tasks and not _coordinator_tasks[run_id].done(),
-    }
+    return JSONResponse(
+        status_code=200,
+        content=success_response(data={
+            "run_id": run_id,
+            "state": state,
+            "retry_count": retry_count,
+            "stage_summaries": summaries,
+            "proposed_contract": proposed_contract,
+            "coordinator_active": run_id in _coordinator_tasks and not _coordinator_tasks[run_id].done(),
+        }),
+    )
 
 
 @router.post("/gate/{run_id}/{action}")
@@ -286,7 +298,10 @@ async def human_gate(run_id: str, action: str, body: GateActionRequest):
     })
 
     logger.info("Human gate %s for run %s -> %s", action, run_id, target_state)
-    return {"run_id": run_id, "action": action, "new_state": target_state}
+    return JSONResponse(
+        status_code=200,
+        content=success_response(data={"run_id": run_id, "action": action, "new_state": target_state}),
+    )
 
 
 # ---------------------------------------------------------------------------
