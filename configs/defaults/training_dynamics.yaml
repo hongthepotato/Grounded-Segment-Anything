@@ -9,6 +9,12 @@ training_dynamics:
     norm_type: 2.0       # L2 norm
     error_if_nonfinite: true  # Stop training if NaN/Inf gradients
   
+  # Gradient accumulation: accumulate N micro-batches before each optimizer step.
+  # Effective batch = batch_size × steps with zero extra VRAM cost.
+  # Set steps > 1 when GPU memory limits physical batch_size (e.g. steps: 8 → 8× effective batch).
+  gradient_accumulation:
+    steps: 1
+
   # Mixed precision training (FP16)
   mixed_precision:
     enabled: true
