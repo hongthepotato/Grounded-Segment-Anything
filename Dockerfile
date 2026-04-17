@@ -5,6 +5,13 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
 
 WORKDIR /app
 
+# Switch to Aliyun mirror — archive.ubuntu.com and security.ubuntu.com are
+# unreliable on restricted networks (e.g., mainland China).
+RUN sed -i \
+    's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g; \
+     s|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' \
+    /etc/apt/sources.list
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3.10-dev \
@@ -41,6 +48,11 @@ RUN uv sync --frozen --no-editable && \
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 WORKDIR /app
+
+RUN sed -i \
+    's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g; \
+     s|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' \
+    /etc/apt/sources.list
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
