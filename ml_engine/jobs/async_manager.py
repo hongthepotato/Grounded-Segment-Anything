@@ -101,6 +101,7 @@ class AsyncJobManager:
                 status=JobStatus.CANCELLED,
                 finished_at=datetime.now(timezone.utc),
             )
+            await self.store.remove_from_queue(job_id)
             logger.info("Cancelled pending job %s", job_id[:8])
         elif job.status == JobStatus.RUNNING:
             await self.store.update_job(job_id, status=JobStatus.CANCELLING)

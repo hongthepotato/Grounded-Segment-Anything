@@ -152,6 +152,17 @@ class AsyncRedisJobStore:
             logger.warning("Failed to get queue length: %s", e)
             return 0
 
+    async def remove_from_queue(self, job_id: str) -> bool:
+        """Remove a job ID from the pending queue LIST (LREM). Used when cancelling a pending job."""
+        try:
+            removed = await self.redis.lrem(self.JOB_QUEUE_KEY, 0, job_id)
+            if removed:
+                logger.info("Removed job %s from queue list", job_id[:8])
+            return bool(removed)
+        except RedisError as e:
+            logger.warning("Failed to remove job %s from queue: %s", job_id[:8], e)
+            return False
+
     # =========================================================================
     # Job State Operations
     # =========================================================================
