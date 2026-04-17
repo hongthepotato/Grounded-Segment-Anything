@@ -78,28 +78,47 @@ class TrainingManager:
         self.optimizer = optimizer
         self.scheduler = scheduler
 
-        # Mixed precision (use default scaler params)
-        self.use_amp = config.get('mixed_precision', {}).get('enabled', False)
-        self.scaler = GradScaler() if self.use_amp else None
+        # Mixed precision — wire all GradScaler params from config
+        amp_cfg = config.get('mixed_precision', {})
+        self.use_amp = amp_cfg.get('enabled', False)
         if self.use_amp:
-            logger.info("AMP enabled")
-        
+            self.scaler = GradScaler(
+                init_scale=amp_cfg.get('init_scale', 65536),
+                growth_factor=amp_cfg.get('growth_factor', 2.0),
+                backoff_factor=amp_cfg.get('backoff_factor', 0.5),
+                growth_interval=amp_cfg.get('growth_interval', 2000),
+            )
+            logger.info("AMP enabled (init_scale=%s)", amp_cfg.get('init_scale', 65536))
+        else:
+            self.scaler = None
+
         # Gradient clipping
         clip_cfg = config.get('gradient_clipping', {})
         self.clip_enabled = clip_cfg.get('enabled', False)
         self.clip_max_norm = clip_cfg.get('max_norm', 1.0)
         self.clip_norm_type = clip_cfg.get('norm_type', 2.0)
+        self.clip_error_if_nonfinite = clip_cfg.get('error_if_nonfinite', False)
         if self.clip_enabled:
-            logger.info("Gradient clipping enabled (max_norm=%s)", self.clip_max_norm)
-        
+            logger.info(
+                "Gradient clipping enabled (max_norm=%s, error_if_nonfinite=%s)",
+                self.clip_max_norm, self.clip_error_if_nonfinite
+            )
+
+        # Gradient accumulation
+        accum_cfg = config.get('gradient_accumulation', {})
+        self.accumulation_steps = max(1, accum_cfg.get('steps', 1))
+        if self.accumulation_steps > 1:
+            logger.info("Gradient accumulation: %d steps (effective batch ×%d)",
+                        self.accumulation_steps, self.accumulation_steps)
+
         # Freeze BatchNorm for LoRA training
         norm_cfg = config.get('normalization', {})
         if norm_cfg.get('freeze_bn_teacher', False):
             self._freeze_batch_norm()
-        
+
         # Step counter for gradient accumulation
         self.global_step = 0
-    
+
     def _freeze_batch_norm(self) -> None:
         """Freeze BatchNorm layers for LoRA training."""
         logger.info("Freezing BatchNorm layers for LoRA training")
@@ -110,12 +129,12 @@ class TrainingManager:
                 for param in module.parameters():
                     param.requires_grad = False
         logger.info("BatchNorm frozen")
-    
+
     def training_step(
         self,
         batch: Dict,
         compute_loss_fn: Callable,
-        accumulation_steps: int = 1
+        accumulation_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Execute one training step with AMP and gradient clipping.
@@ -128,19 +147,22 @@ class TrainingManager:
         Returns:
             Dict with loss and metrics
         """
+        if accumulation_steps is None:
+            accumulation_steps = self.accumulation_steps
+
         # Zero gradients at start of accumulation cycle
         if self.global_step % accumulation_steps == 0:
             self.optimizer.zero_grad(set_to_none=True)
-        
+
         if self.use_amp:
             with autocast(device_type='cuda'):
                 loss_dict = compute_loss_fn(batch)
                 loss = loss_dict['loss']
-            
+
             # Scale loss for accumulation
             scaled_loss = loss / accumulation_steps
             self.scaler.scale(scaled_loss).backward()
-            
+
             # Update weights after accumulation
             if (self.global_step + 1) % accumulation_steps == 0:
                 if self.clip_enabled:
@@ -148,35 +170,37 @@ class TrainingManager:
                     torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(),
                         max_norm=self.clip_max_norm,
-                        norm_type=self.clip_norm_type
+                        norm_type=self.clip_norm_type,
+                        error_if_nonfinite=self.clip_error_if_nonfinite,
                     )
-                
+
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-                
+
                 if self.scheduler is not None:
                     self.scheduler.step()
         else:
             loss_dict = compute_loss_fn(batch)
             loss = loss_dict['loss']
-            
+
             scaled_loss = loss / accumulation_steps
             scaled_loss.backward()
-            
+
             if (self.global_step + 1) % accumulation_steps == 0:
                 if self.clip_enabled:
                     torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(),
                         max_norm=self.clip_max_norm,
-                        norm_type=self.clip_norm_type
+                        norm_type=self.clip_norm_type,
+                        error_if_nonfinite=self.clip_error_if_nonfinite,
                     )
-                
+
                 self.optimizer.step()
-                
+
                 if self.scheduler is not None:
                     self.scheduler.step()
-        
+
         self.global_step += 1
         loss_dict['lr'] = self.optimizer.param_groups[0]['lr']
-        
+
         return loss_dict
