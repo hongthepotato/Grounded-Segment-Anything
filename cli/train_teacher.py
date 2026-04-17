@@ -31,7 +31,6 @@ from typing import Dict, Any
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ml_engine.training import Trainer
 from ml_engine.data.manager import DataManager
 from core.config import (
     save_config, create_experiment_dir, load_config, merge_configs
@@ -111,6 +110,16 @@ Note: User provides ONE dataset file. Platform automatically:
                         default='medium',
                         help='Augmentation intensity')
 
+    # Gradient accumulation (effective batch scaling with no VRAM cost)
+    parser.add_argument('--grad-accum', type=int, default=None,
+                        metavar='N',
+                        help=(
+                            'Accumulate gradients over N micro-batches before each optimizer step. '
+                            'Effective batch = batch_size × N with zero extra VRAM. '
+                            'Use when OOM prevents increasing --batch-size '
+                            '(e.g. --batch-size 1 --grad-accum 8 = effective batch of 8).'
+                        ))
+
     # Other options
     parser.add_argument('--gpu', type=int, default=0,
                         help='GPU ID to use')
@@ -154,6 +163,12 @@ def build_cli_overrides(args) -> Dict[str, Any]:
             'intensity': args.aug_intensity
         }
         # TODO(sh/2025-11-12): Add environment overrides
+
+    # Gradient accumulation
+    if args.grad_accum is not None:
+        overrides['training_dynamics'] = {
+            'gradient_accumulation': {'steps': args.grad_accum}
+        }
 
     # Model checkpoints
     model_overrides = {}
@@ -311,6 +326,8 @@ def main():
 
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
 
+    from ml_engine.training import Trainer  # deferred: avoids torch import at --help time
+
     trainer = Trainer(
         data_manager=data_manager,
         output_dir=str(exp_dir),
@@ -330,9 +347,33 @@ def main():
         # Save current state before exiting
         sys.exit(0)
     except Exception as e:
-        logger.error(f"\n❌ Training failed with error: {e}")
         import traceback
+        error_str = str(e).lower()
+        is_oom = (
+            'out of memory' in error_str
+            or 'cuda out of memory' in error_str
+            or 'oom' in error_str
+        )
+        logger.error("\n Training failed: %s", e)
         traceback.print_exc()
+        if is_oom:
+            current_bs = config.get('batch_size', 1)
+            current_accum = config.get('training_dynamics', {}).get(
+                'gradient_accumulation', {}
+            ).get('steps', 1)
+            suggested_accum = max(current_accum * 2, 4)
+            logger.error(
+                "\n OOM detected. Try reducing memory pressure:\n"
+                "  Option A (recommended — same effective batch, lower VRAM):\n"
+                "    --batch-size 1 --grad-accum %d\n"
+                "  Option B (smaller effective batch):\n"
+                "    --batch-size 1\n"
+                "  Current: batch_size=%d, grad_accum=%d → effective batch=%d",
+                suggested_accum,
+                current_bs,
+                current_accum,
+                current_bs * current_accum,
+            )
         sys.exit(1)
 
     logger.info("\n Training completed successfully!")
