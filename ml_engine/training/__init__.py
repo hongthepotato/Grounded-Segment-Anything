@@ -7,11 +7,9 @@ from .losses import SegmentationLoss, CombinedTeacherLoss, build_criterion
 from .peft_utils import (
     apply_lora,
     verify_freezing,
-    load_lora_model,
     save_lora_adapters,
     freeze_module,
     unfreeze_module,
-    partial_freeze_for_lora
 )
 
 # Lazy imports for heavy model-dependent modules
@@ -59,9 +57,7 @@ __all__ = [
     # LoRA utilities
     'apply_lora',
     'verify_freezing',
-    'load_lora_model',
     'save_lora_adapters',
     'freeze_module',
     'unfreeze_module',
-    'partial_freeze_for_lora'
 ]
