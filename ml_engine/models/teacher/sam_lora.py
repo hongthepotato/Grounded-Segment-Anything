@@ -15,7 +15,7 @@ import torch
 from torch import nn
 from segment_anything import sam_hq_model_registry  # Use SAM-HQ
 from ml_engine.training.peft_utils import (
-    apply_lora, freeze_module, unfreeze_module, load_lora_model, verify_freezing
+    apply_lora, freeze_module, unfreeze_module, verify_freezing
 )
 
 logger = logging.getLogger(__name__)
