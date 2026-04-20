@@ -50,7 +50,6 @@ class TrainingManager:
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
         config_path: str,
-        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         config_overrides: Optional[Dict] = None,
     ):
         """
@@ -58,11 +57,14 @@ class TrainingManager:
             model: The model being trained
             optimizer: The optimizer
             config_path: Path to training dynamics config YAML
-            scheduler: Optional learning rate scheduler
             config_overrides: Dict of training_dynamics overrides from experiment loop.
                 Deep-merged over the YAML values after loading. Keys match the YAML
                 structure under the top-level 'training_dynamics' key, e.g.
                 {'gradient_clipping': {'max_norm': 0.5}, 'mixed_precision': {'enabled': False}}.
+
+        Note: LR scheduler stepping is intentionally NOT handled here. TrainingManager
+        is a per-batch primitive (AMP, clipping, accumulation). Epoch-level concerns
+        like scheduler stepping belong in BaseModelTrainer / Trainer.
         """
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
@@ -76,7 +78,6 @@ class TrainingManager:
 
         self.model = model
         self.optimizer = optimizer
-        self.scheduler = scheduler
 
         # Mixed precision — wire all GradScaler params from config
         amp_cfg = config.get('mixed_precision', {})
@@ -111,30 +112,37 @@ class TrainingManager:
             logger.info("Gradient accumulation: %d steps (effective batch ×%d)",
                         self.accumulation_steps, self.accumulation_steps)
 
-        # Freeze BatchNorm for LoRA training
+        # Freeze BatchNorm for LoRA training.
+        # _freeze_bn is stored so training_step() can re-apply eval() after
+        # each model.train() call (which would otherwise undo the freeze).
         norm_cfg = config.get('normalization', {})
-        if norm_cfg.get('freeze_bn_teacher', False):
+        self._freeze_bn = norm_cfg.get('freeze_bn_teacher', False)
+        if self._freeze_bn:
             self._freeze_batch_norm()
 
         # Step counter for gradient accumulation
         self.global_step = 0
 
     def _freeze_batch_norm(self) -> None:
-        """Freeze BatchNorm layers for LoRA training."""
-        logger.info("Freezing BatchNorm layers for LoRA training")
+        """
+        Freeze BatchNorm layers for LoRA training.
+
+        Sets BN to eval mode so it uses the pre-trained running statistics
+        (running_mean / running_var) rather than batch statistics. This keeps
+        normalization stable with the small effective batch sizes typical of
+        LoRA runs. track_running_stats is intentionally left True — setting it
+        to False would make BN compute batch stats even in eval mode.
+        """
         for module in self.model.modules():
             if isinstance(module, (nn.BatchNorm2d, nn.BatchNorm1d)):
                 module.eval()
-                module.track_running_stats = False
                 for param in module.parameters():
                     param.requires_grad = False
-        logger.info("BatchNorm frozen")
 
     def training_step(
         self,
         batch: Dict,
         compute_loss_fn: Callable,
-        accumulation_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Execute one training step with AMP and gradient clipping.
@@ -142,29 +150,35 @@ class TrainingManager:
         Args:
             batch: Input batch
             compute_loss_fn: Function that computes loss given batch
-            accumulation_steps: Number of steps to accumulate gradients
         
         Returns:
             Dict with loss and metrics
         """
-        if accumulation_steps is None:
-            accumulation_steps = self.accumulation_steps
+        # Set training mode here (not in BaseModelTrainer) so that the BN
+        # re-freeze happens atomically: model.train() sets all submodules to
+        # train mode, then _freeze_batch_norm() immediately overrides BN back
+        # to eval. Without this, model.train() in base.py would undo the freeze
+        # set during __init__.
+        self.model.train()
+        if self._freeze_bn:
+            self._freeze_batch_norm()
 
         # Zero gradients at start of accumulation cycle
-        if self.global_step % accumulation_steps == 0:
+        if self.global_step % self.accumulation_steps == 0:
             self.optimizer.zero_grad(set_to_none=True)
 
         if self.use_amp:
-            with autocast(device_type='cuda'):
+            device_type = next(self.model.parameters()).device.type
+            with autocast(device_type=device_type):
                 loss_dict = compute_loss_fn(batch)
                 loss = loss_dict['loss']
 
             # Scale loss for accumulation
-            scaled_loss = loss / accumulation_steps
+            scaled_loss = loss / self.accumulation_steps
             self.scaler.scale(scaled_loss).backward()
 
             # Update weights after accumulation
-            if (self.global_step + 1) % accumulation_steps == 0:
+            if (self.global_step + 1) % self.accumulation_steps == 0:
                 if self.clip_enabled:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(
@@ -176,17 +190,14 @@ class TrainingManager:
 
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-
-                if self.scheduler is not None:
-                    self.scheduler.step()
         else:
             loss_dict = compute_loss_fn(batch)
             loss = loss_dict['loss']
 
-            scaled_loss = loss / accumulation_steps
+            scaled_loss = loss / self.accumulation_steps
             scaled_loss.backward()
 
-            if (self.global_step + 1) % accumulation_steps == 0:
+            if (self.global_step + 1) % self.accumulation_steps == 0:
                 if self.clip_enabled:
                     torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(),
@@ -196,9 +207,6 @@ class TrainingManager:
                     )
 
                 self.optimizer.step()
-
-                if self.scheduler is not None:
-                    self.scheduler.step()
 
         self.global_step += 1
         loss_dict['lr'] = self.optimizer.param_groups[0]['lr']
