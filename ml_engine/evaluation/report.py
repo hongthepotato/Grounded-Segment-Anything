@@ -260,6 +260,10 @@ class ModelReportGenerator:
         if report['model_type'] == 'segmentation':
             lines.append(f"Coverage Rate: {simple.get('coverage_rate', 0):.1f}%")
             lines.append(f"Quality Rate: {simple.get('quality_rate', 0):.1f}%")
+            if report.get('evaluation_mode') == 'oracle_gt_prompts':
+                lines.append("")
+                lines.append("NOTE: Evaluated with ground-truth box prompts (oracle mode).")
+                lines.append("      In production, prompts come from GroundingDINO — real mIoU will be lower.")
             lines.append("")
         
         # Technical metrics

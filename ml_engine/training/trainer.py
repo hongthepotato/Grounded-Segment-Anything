@@ -11,6 +11,7 @@ It coordinates:
 - Test evaluation and export
 """
 
+import json
 import logging
 from collections import defaultdict
 from pathlib import Path
@@ -265,6 +266,7 @@ class Trainer:
                 all_metrics = {**train_metrics, **val_metrics, 'epoch': epoch}
 
                 # Save checkpoints and log
+                stop_training = False
                 for name, trainer in self.trainers.items():
                     trainer.save_checkpoint(epoch, all_metrics)
                     trainer.log_metrics(train_metrics, epoch, prefix='train')
@@ -273,7 +275,11 @@ class Trainer:
 
                     if trainer.should_stop:
                         logger.info("Early stopping triggered for %s", name)
-                        break
+                        stop_training = True
+                        break  # exits inner trainer loop
+
+                if stop_training:
+                    break  # exits epoch loop — finalization still runs in try block
 
                 # Report progress
                 if self.progress_callback:
@@ -317,30 +323,36 @@ class Trainer:
                 losses = trainer.train_batch(batch)
                 for k, v in losses.items():
                     metrics_acc[f"{name}_{k}"].append(v)
-            
+
             # Update progress bar
             postfix = {}
             for k, v in metrics_acc.items():
                 if 'total_loss' in k:
                     postfix[k] = f"{v[-1]:.4f}"
             pbar.set_postfix(postfix)
-            
+
             # Report step progress
             if self.progress_callback and total_steps > 0:
                 report_interval = max(1, total_steps // 10)
                 if step % report_interval == 0:
                     self.progress_callback({
-                        'current_epoch': epoch,
+                        'current_epoch': epoch + 1,
                         'total_epochs': self.config.get('epochs', 50),
                         'current_step': step + 1,
                         'total_steps': total_steps,
                         'message': f"Epoch {epoch + 1}, Step {step + 1}/{total_steps}"
                     })
         
+        # Step LR schedulers once per epoch (correct granularity for CosineAnnealingWarmRestarts
+        # with T_0 set in epochs). Stepping per optimizer-update inside TrainingManager would
+        # compress the schedule by a factor of accumulation_steps * batches_per_epoch.
+        for trainer in self.trainers.values():
+            trainer.step_scheduler()
+
         # Average metrics
         train_metrics = {f'train_{k}': sum(v) / len(v) for k, v in metrics_acc.items()}
         log_metrics(logger, train_metrics, epoch, prefix="Train")
-        
+
         return train_metrics
     
     @torch.no_grad()
@@ -492,8 +504,7 @@ class Trainer:
 
                 report_path = self.output_dir / 'evaluation' / f'{name}_report.json'
                 if report_path.exists():
-                    import json
-                    with open(report_path) as f:
+                    with open(report_path, 'r', encoding='utf-8') as f:
                         report = json.load(f)
                         metrics = report.get('technical_metrics', {})
                         training_info['mAP50'] = metrics.get('mAP50', 0)
@@ -514,8 +525,17 @@ class Trainer:
     def _resume_from_checkpoint(self, checkpoint_path: str) -> None:
         """Resume training from checkpoint."""
         logger.info("Resuming from: %s", checkpoint_path)
-        for trainer in self.trainers.values():
-            trainer.load_checkpoint(checkpoint_path)
+        for name, trainer in self.trainers.items():
+            if checkpoint_path in ('best', 'last'):
+                # Each checkpoint manager resolves this relative to its own output_dir
+                trainer.load_checkpoint(checkpoint_path)
+            else:
+                # Treat as experiment root; each model saves under output_dir/{name}/
+                model_path = Path(checkpoint_path) / name / 'best.pth'
+                if model_path.exists():
+                    trainer.load_checkpoint(str(model_path))
+                else:
+                    logger.warning("No checkpoint for %s at %s, skipping resume", name, model_path)
 
 
 # Backward compatibility alias

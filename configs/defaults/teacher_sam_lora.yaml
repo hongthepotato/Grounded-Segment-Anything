@@ -44,7 +44,6 @@ mask_decoder_lr_multiplier: 0.1  # Lower LR for mask_decoder (pretrained weights
 
 # Prompt strategy during fine-tuning
 prompt_type: "boxes"         # Use GT boxes as prompts (auto-gen if masks-only)
-multimask_output: true       # Output multiple mask candidates
 
 # Evaluation metric
 evaluation:

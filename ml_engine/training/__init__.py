@@ -3,15 +3,13 @@
 # Core utilities (always available)
 from .training_manager import TrainingManager
 from .checkpoint_manager import CheckpointManager
-from .losses import SegmentationLoss, CombinedTeacherLoss, build_criterion
+from .losses import SegmentationLoss, build_criterion
 from .peft_utils import (
     apply_lora,
     verify_freezing,
-    load_lora_model,
     save_lora_adapters,
     freeze_module,
     unfreeze_module,
-    partial_freeze_for_lora
 )
 
 # Lazy imports for heavy model-dependent modules
@@ -54,14 +52,11 @@ __all__ = [
     'CheckpointManager',
     # Losses
     'SegmentationLoss',
-    'CombinedTeacherLoss',
     'build_criterion',
     # LoRA utilities
     'apply_lora',
     'verify_freezing',
-    'load_lora_model',
     'save_lora_adapters',
     'freeze_module',
     'unfreeze_module',
-    'partial_freeze_for_lora'
 ]

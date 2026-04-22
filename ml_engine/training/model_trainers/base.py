@@ -96,7 +96,6 @@ class BaseModelTrainer(ABC):
             model=self.model,
             optimizer=self.optimizer,
             config_path=str(DEFAULT_CONFIGS_DIR / 'training_dynamics.yaml'),
-            scheduler=self.scheduler,
             config_overrides=config.get('training_dynamics'),
         )
 
@@ -178,14 +177,15 @@ class BaseModelTrainer(ABC):
     def train_batch(self, batch: Dict[str, Any]) -> Dict[str, float]:
         """
         Execute one training step.
-        
+
         Args:
             batch: Batch from dataloader
-        
+
         Returns:
             Dict of loss values (float)
         """
-        self.model.train()
+        # model.train() is called inside training_manager.training_step() so
+        # that BN re-freeze (if configured) happens atomically with the mode switch.
 
         def _compute_loss(batch):
             return self.compute_loss(batch)
@@ -226,6 +226,11 @@ class BaseModelTrainer(ABC):
                 result[key] = value
 
         return result
+
+    def step_scheduler(self) -> None:
+        """Step the LR scheduler. Called once per epoch by Trainer."""
+        if self.scheduler is not None:
+            self.scheduler.step()
 
     def save_checkpoint(self, epoch: int, metrics: Dict[str, float]) -> bool:
         """
