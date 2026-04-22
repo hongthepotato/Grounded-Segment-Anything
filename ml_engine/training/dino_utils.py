@@ -112,8 +112,8 @@ def build_detr_targets(
         if len(valid_boxes) > 0:
             if (valid_boxes < 0).any() or (valid_boxes > 1).any():
                 logger.warning(
-                    f"Batch {b}: boxes not normalized! "
-                    f"Range: [{valid_boxes.min():.3f}, {valid_boxes.max():.3f}]"
+                    "Batch %d: boxes not normalized! Range: [%.3f, %.3f]",
+                    b, valid_boxes.min(), valid_boxes.max()
                 )
         
         # Create token labels for each valid object using the positive map

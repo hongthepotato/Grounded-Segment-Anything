@@ -95,10 +95,47 @@ class SAMTrainer(BaseModelTrainer):
             mask_decoder_mode=mask_decoder_mode
         )
         
-        logger.info(f"  Modes: encoder={image_encoder_mode}, prompt={prompt_encoder_mode}, decoder={mask_decoder_mode}")
+        logger.info("  Modes: encoder=%s, prompt=%s, decoder=%s",
+                    image_encoder_mode, prompt_encoder_mode, mask_decoder_mode)
         
         return model
     
+    def _create_optimizer(self) -> torch.optim.Optimizer:
+        """
+        Create AdamW with differential LR: mask decoder at a lower rate than LoRA adapters.
+
+        mask_decoder_mode='full' means all mask-decoder weights are trainable, so they
+        need a lower LR to avoid overwriting pretrained representations. LoRA adapters
+        start from zero and can tolerate the full base LR.
+        """
+        lr = self.config.get('learning_rate', 1e-4)
+        weight_decay = self.config.get('weight_decay', 1e-4)
+        multiplier = self.config.get('mask_decoder_lr_multiplier', 1.0)
+        mask_decoder_lr = lr * multiplier
+
+        mask_decoder_params = []
+        lora_params = []
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if 'mask_decoder' in name:
+                mask_decoder_params.append(param)
+            else:
+                lora_params.append(param)
+
+        param_groups = []
+        if lora_params:
+            param_groups.append({'params': lora_params, 'lr': lr, 'name': 'lora'})
+        if mask_decoder_params:
+            param_groups.append({'params': mask_decoder_params, 'lr': mask_decoder_lr, 'name': 'mask_decoder'})
+
+        optimizer = torch.optim.AdamW(param_groups, weight_decay=weight_decay)
+        logger.info(
+            "  Optimizer: AdamW — lora %d params (lr=%s), mask_decoder %d params (lr=%s)",
+            len(lora_params), lr, len(mask_decoder_params), mask_decoder_lr
+        )
+        return optimizer
+
     def _create_criterion(self) -> nn.Module:
         """Create segmentation loss (focal + dice + IoU)."""
         criterion = SegmentationLoss()
@@ -125,18 +162,27 @@ class SAMTrainer(BaseModelTrainer):
         boxes = sam_data['boxes'].to(self.device)
         masks = sam_data['masks'].to(self.device)
         labels = sam_data['labels'].to(self.device)
-        
-        # Create validity mask
-        valid_mask = (labels != -1)
-        
+
+        # Create validity mask: collate_fn always puts valid objects first,
+        # so valid_mask is True at indices 0..n_valid-1 per image.
+        valid_mask = (labels != -1)  # [B, max_objs]
+
         # Check for valid data
         if not valid_mask.any():
             logger.warning("Batch has no valid objects! Skipping...")
             return {'loss': torch.tensor(0.0, device=self.device, requires_grad=True)}
-        
+
+        # Trim to max_valid: avoids running the mask decoder on padding entries.
+        # With max_objs=10 and 3 real objects, this cuts 7 wasted decoder calls per image.
+        max_valid = int(valid_mask.sum(dim=1).max().item())
+        max_valid = max(max_valid, 1)
+        boxes = boxes[:, :max_valid, :]   # [B, max_valid, 4]
+        masks = masks[:, :max_valid, :]   # [B, max_valid, H, W]
+        valid_mask = valid_mask[:, :max_valid]  # [B, max_valid]
+
         # Forward pass (boxes already in correct xyxy format from SAM preprocessing)
         outputs = self.model(images, box_prompts=boxes)
-        
+
         # Prepare targets
         targets = {
             'masks': masks,

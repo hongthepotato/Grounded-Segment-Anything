@@ -3,7 +3,7 @@
 # Core utilities (always available)
 from .training_manager import TrainingManager
 from .checkpoint_manager import CheckpointManager
-from .losses import SegmentationLoss, CombinedTeacherLoss, build_criterion
+from .losses import SegmentationLoss, build_criterion
 from .peft_utils import (
     apply_lora,
     verify_freezing,
@@ -52,7 +52,6 @@ __all__ = [
     'CheckpointManager',
     # Losses
     'SegmentationLoss',
-    'CombinedTeacherLoss',
     'build_criterion',
     # LoRA utilities
     'apply_lora',

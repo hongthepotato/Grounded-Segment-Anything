@@ -265,7 +265,16 @@ class SegmentationMetrics:
                 self.total_fp += 1
         
         self.total_fn += len(tgt_masks) - len(matched_gt)
-    
+
+        # Unmatched GTs count as 0 IoU/Dice — standard mIoU penalizes missed detections.
+        # Without this, a model with 10% recall that segments perfectly reports mIoU=1.0.
+        for gt_idx in range(len(tgt_masks)):
+            if gt_idx not in matched_gt:
+                gt_label = tgt_labels[gt_idx].item()
+                if 0 <= gt_label < self.num_classes:
+                    self.class_ious[gt_label].append(0.0)
+                    self.class_dice[gt_label].append(0.0)
+
     def compute(self) -> Dict[str, Any]:
         """Compute all segmentation metrics."""
         per_class_iou = {}
@@ -336,7 +345,7 @@ class SimpleMetricsConverter:
             Dict with simple metrics for rookies
         """
         # Overall score is mAP@50 scaled to 0-100
-        overall_score = technical_metrics.get('mAP50') * 100
+        overall_score = technical_metrics.get('mAP50', 0.0) * 100
 
         # Grade based on overall score
         grade = self._get_grade(overall_score)

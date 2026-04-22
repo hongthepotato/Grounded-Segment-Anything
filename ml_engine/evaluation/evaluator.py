@@ -212,6 +212,10 @@ class ModelEvaluator:
         
         return {
             'model_type': 'segmentation',
+            # SAM is evaluated with GT bounding boxes as prompts (oracle mode).
+            # In production, prompts come from GroundingDINO, so real mIoU will be lower.
+            # This metric represents the upper bound of SAM's segmentation quality.
+            'evaluation_mode': 'oracle_gt_prompts',
             'technical_metrics': technical_metrics,
             'simple_metrics': simple_metrics,
             'samples': {
@@ -302,20 +306,28 @@ class ModelEvaluator:
         predictions_list = []
         targets_list = []
         
-        # Forward pass with box prompts
-        # Note: SAM expects boxes in xyxy format
-        outputs = model(images, box_prompts=gt_boxes)
+        # Trim to max_valid before the forward pass — mirrors SAMTrainer.compute_loss().
+        # Padding slots are zero-boxes; running them through the decoder wastes compute.
+        valid_mask_batch = (gt_labels != -1)
+        max_valid = int(valid_mask_batch.sum(dim=1).max().item())
+        max_valid = max(max_valid, 1)
+
+        # Forward pass with box prompts (xyxy format, padding trimmed)
+        outputs = model(images, box_prompts=gt_boxes[:, :max_valid, :])
         
         pred_masks = outputs['pred_masks']  # [B, N, H, W]
         iou_predictions = outputs.get('iou_predictions', torch.ones_like(gt_labels, dtype=torch.float))
         
         for b in range(batch_size):
             valid_mask = gt_labels[b] != -1
-            
+            # pred_masks comes from a forward pass on trimmed input (max_valid boxes),
+            # so index it with a trimmed mask to match its leading dimension.
+            valid_mask_trimmed = valid_mask[:max_valid]
+
             # Process predictions - only for valid GT boxes
-            if valid_mask.sum() > 0:
-                valid_pred_masks = pred_masks[b][valid_mask]
-                valid_iou_preds = iou_predictions[b][valid_mask] if len(iou_predictions.shape) > 1 else iou_predictions[valid_mask]
+            if valid_mask_trimmed.sum() > 0:
+                valid_pred_masks = pred_masks[b][valid_mask_trimmed]
+                valid_iou_preds = iou_predictions[b][valid_mask_trimmed] if len(iou_predictions.shape) > 1 else iou_predictions[valid_mask_trimmed]
                 valid_labels_raw = gt_labels[b][valid_mask]
                 
                 # Convert category_id to class index
@@ -337,14 +349,14 @@ class ModelEvaluator:
                 binary_masks = torch.zeros((0, pred_masks.shape[-2], pred_masks.shape[-1]), device=self.device)
                 valid_iou_preds = torch.zeros((0,), device=self.device)
                 valid_labels = torch.zeros((0,), dtype=torch.long, device=self.device)
-            
+
             predictions_list.append({
                 'masks': binary_masks,
                 'scores': valid_iou_preds,
                 'labels': valid_labels
             })
-            
-            # Process targets
+
+            # Process targets (gt_masks was NOT trimmed, so use the full valid_mask)
             if valid_mask.sum() > 0:
                 valid_gt_masks = gt_masks[b][valid_mask]
                 valid_labels_raw = gt_labels[b][valid_mask]

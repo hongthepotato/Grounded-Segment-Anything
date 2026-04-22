@@ -14,7 +14,7 @@ import logging
 import torch
 from torch import nn
 from ml_engine.training.peft_utils import (
-    verify_freezing, save_lora_adapters, apply_lora, load_lora_model
+    verify_freezing, save_lora_adapters, apply_lora
 )
 from groundingdino.util.slconfig import SLConfig
 from groundingdino.models import build_model
@@ -86,6 +86,10 @@ class GroundingDINOLoRA(nn.Module):
 
         self.lora_config = lora_config
         self.bert_model_path = bert_model_path
+        self._text_token_mask_cache: Optional[torch.Tensor] = None
+        self._text_token_mask_caption: Optional[str] = None
+        self._positive_map_cache: Optional[torch.Tensor] = None
+        self._positive_map_class_key: Optional[str] = None
 
         logger.info("Loading Grounding DINO from: %s", base_checkpoint)
         self.model = self._load_base_model(base_checkpoint)
@@ -304,14 +308,21 @@ class GroundingDINOLoRA(nn.Module):
         # Must use 'samples' parameter name to match original GroundingDINO signature
         outputs = self.model(samples=images, captions=captions)
         
-        # Add text_token_mask for loss computation (needed to filter -inf padding)
-        # Get tokenizer and tokenize captions to extract mask
-        base_model = self.model.base_model.model if hasattr(self.model, 'base_model') else self.model
-        tokenized = base_model.tokenizer(captions, padding='longest', return_tensors='pt')
-        text_token_mask = tokenized.attention_mask.bool()  # [B, num_valid_tokens]
-        
-        # Move to same device as outputs
-        text_token_mask = text_token_mask.to(outputs['pred_logits'].device)
+        # Add text_token_mask for loss computation (needed to filter -inf padding).
+        # All batch items share the same caption (class names don't change), so we
+        # tokenize once and cache — the mask is identical for every forward call.
+        assert captions is not None  # guaranteed: either passed in or built from class_names above
+        caption_key = captions[0]
+        if self._text_token_mask_cache is None or self._text_token_mask_caption != caption_key:
+            base_model = self.model.base_model.model if hasattr(self.model, 'base_model') else self.model
+            tokenized = base_model.tokenizer(captions[:1], padding='longest', return_tensors='pt')
+            self._text_token_mask_cache = tokenized.attention_mask.bool()  # [1, num_valid_tokens]
+            self._text_token_mask_caption = caption_key
+
+        # Expand cached mask to match current batch size and move to correct device
+        assert self._text_token_mask_cache is not None
+        batch_size = outputs['pred_logits'].shape[0]
+        text_token_mask = self._text_token_mask_cache.expand(batch_size, -1).to(outputs['pred_logits'].device)
         outputs['text_token_mask'] = text_token_mask
         
         if return_features and hasattr(self.model, 'get_features'):
@@ -363,21 +374,28 @@ class GroundingDINOLoRA(nn.Module):
         batch_size = pred_logits.shape[0]
         device = pred_logits.device
 
-        # Build positive_map for token -> class mapping (same for all batch items)
-        caption, cat2tokenspan = build_captions_and_token_span(class_names, force_lowercase=False)
-        tokenized = self.tokenizer(caption, padding="longest", return_tensors="pt").to(device)
-        token_span_per_class = []
-        for name in class_names:
-            if name not in cat2tokenspan:
-                raise ValueError(
-                    f"Class '{name}' not found in cat2tokenspan during predict()!\n"
-                    f"Available classes: {list(cat2tokenspan.keys())}\n"
-                    f"This indicates a mismatch between class_names and caption tokenization."
-                )
-            token_span_per_class.append(cat2tokenspan[name])
-        positive_map = create_positive_map_from_span(
-            tokenized, token_span_per_class, max_text_len=pred_logits.shape[-1]
-        ).to(device)  # [num_classes, num_tokens]
+        # Build positive_map for token -> class mapping (same for all batch items).
+        # class_names never change during evaluation, so cache after first build.
+        class_key = ",".join(class_names)
+        if self._positive_map_cache is None or self._positive_map_class_key != class_key:
+            caption, cat2tokenspan = build_captions_and_token_span(class_names, force_lowercase=False)
+            tokenized = self.tokenizer(caption, padding="longest", return_tensors="pt")
+            token_span_per_class = []
+            for name in class_names:
+                if name not in cat2tokenspan:
+                    raise ValueError(
+                        f"Class '{name}' not found in cat2tokenspan during predict()!\n"
+                        f"Available classes: {list(cat2tokenspan.keys())}\n"
+                        f"This indicates a mismatch between class_names and caption tokenization."
+                    )
+                token_span_per_class.append(cat2tokenspan[name])
+            self._positive_map_cache = create_positive_map_from_span(
+                tokenized, token_span_per_class, max_text_len=pred_logits.shape[-1]
+            )  # [num_classes, num_tokens]
+            self._positive_map_class_key = class_key
+
+        assert self._positive_map_cache is not None
+        positive_map = self._positive_map_cache.to(device)  # [num_classes, num_tokens]
 
         # Convert to per-image predictions
         results = []

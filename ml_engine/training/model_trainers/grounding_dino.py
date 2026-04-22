@@ -102,7 +102,7 @@ class GroundingDINOTrainer(BaseModelTrainer):
         num_classes = self.dataset_info['num_classes']
         
         # Get number of decoder layers from model architecture
-        base_model = self.model.model.model  # Unwrap PEFT wrapper
+        base_model = self.model.model.base_model.model if hasattr(self.model.model, 'base_model') else self.model.model
         num_decoder_layers = base_model.transformer.decoder.num_layers
         
         criterion = build_criterion(
@@ -112,8 +112,8 @@ class GroundingDINOTrainer(BaseModelTrainer):
             focal_gamma=2.0
         )
         
-        logger.info(f"  Criterion: Hungarian matching with {num_decoder_layers} decoder layers")
-        logger.info(f"  Num classes: {num_classes}")
+        logger.info("  Criterion: Hungarian matching with %d decoder layers", num_decoder_layers)
+        logger.info("  Num classes: %d", num_classes)
         
         return criterion
     
@@ -179,22 +179,20 @@ class GroundingDINOTrainer(BaseModelTrainer):
         # Compute loss with Hungarian matching
         loss_dict = self.criterion(outputs, targets)
         
-        # Check for NaN
-        for k, v in loss_dict.items():
-            if torch.isnan(v).any():
-                logger.error(f"NaN detected in {k}: {v}")
-        
         # Compute total weighted loss
         total_loss = sum(
             loss_dict[k] * self.criterion.weight_dict[k]
             for k in loss_dict.keys()
             if k in self.criterion.weight_dict
         )
-        
+
         if torch.isnan(total_loss):
-            logger.error("NaN in total_loss!")
-            logger.error(f"Loss components: {loss_dict}")
-            logger.error(f"Valid objects: {total_valid_objs}")
+            logger.warning(
+                "NaN in total_loss, skipping batch. valid_objs=%d, components=%s",
+                total_valid_objs,
+                {k: v.item() for k, v in loss_dict.items() if k in self.criterion.weight_dict}
+            )
+            return {'loss': torch.tensor(0.0, device=self.device, requires_grad=True)}
         
         # Return dict with total loss and components
         result = {'loss': total_loss, 'total_loss': total_loss.detach()}
