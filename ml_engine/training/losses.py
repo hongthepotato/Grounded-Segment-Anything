@@ -114,9 +114,16 @@ class HungarianMatcher(nn.Module):
         neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
         pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
 
-        # Mask out invalid positions (set cost to 0 for padded tokens)
-        neg_cost_class = neg_cost_class * text_mask.float()
-        pos_cost_class = pos_cost_class * text_mask.float()
+        # Mask out invalid positions via torch.where, NOT a post-hoc multiply.
+        # GroundingDINO's ContrastiveEmbed fills padded text positions with -inf,
+        # and sigmoid + log(p + eps) can produce ±inf at those positions under
+        # reduced precision (FP16's 1e-8 epsilon underflows to 0, log(0) = -inf).
+        # A subsequent `cost * mask.float()` would turn those inf values into
+        # NaN via 0 * inf, regardless of dtype. torch.where selects the zero
+        # branch directly at masked positions, so the NaN class is eliminated
+        # independently of the numerical properties of the arithmetic above.
+        neg_cost_class = torch.where(text_mask, neg_cost_class, 0.0)
+        pos_cost_class = torch.where(text_mask, pos_cost_class, 0.0)
 
         # Compute cost for each query-target pair via matmul
         # tgt_token_labels: [total_targets, num_tokens]
@@ -250,8 +257,14 @@ class GroundingDINOCriterion(nn.Module):
             if len(src_idx) > 0:
                 # src_idx: queries are matched
                 # tgt_idx: ground truth boxes they match to
-                # fill-in a 256 length vector of token labels for each matched query
-                target_labels[batch_idx, src_idx] = targets[batch_idx]['token_labels'][tgt_idx]
+                # fill-in a 256 length vector of token labels for each matched query.
+                # .to(target_labels.dtype) handles the case where target_labels
+                # inherited the autocast dtype (fp16/bf16) from src_logits but
+                # token_labels is built as fp32 in dino_utils.py — index_put_
+                # is strict about dtype match and would otherwise raise.
+                target_labels[batch_idx, src_idx] = (
+                    targets[batch_idx]['token_labels'][tgt_idx].to(target_labels.dtype)
+                )
                 num_total_pos += len(src_idx)
             num_total_neg += num_queries - len(src_idx)
 

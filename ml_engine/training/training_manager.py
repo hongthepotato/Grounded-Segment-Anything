@@ -79,17 +79,35 @@ class TrainingManager:
         self.model = model
         self.optimizer = optimizer
 
-        # Mixed precision — wire all GradScaler params from config
+        # Mixed precision — read dtype from config; gate GradScaler on float16.
+        # bfloat16 shares FP32's exponent range, so gradients don't underflow;
+        # loss scaling is unnecessary (and unsupported — GradScaler is FP16-only).
         amp_cfg = config.get('mixed_precision', {})
         self.use_amp = amp_cfg.get('enabled', False)
-        if self.use_amp:
+        _dtype_aliases = {
+            'bfloat16': torch.bfloat16, 'bf16': torch.bfloat16,
+            'float16': torch.float16, 'fp16': torch.float16, 'half': torch.float16,
+        }
+        dtype_str = str(amp_cfg.get('dtype', 'bfloat16')).lower()
+        if dtype_str not in _dtype_aliases:
+            raise ValueError(
+                f"mixed_precision.dtype must be one of {sorted(_dtype_aliases)}, "
+                f"got {dtype_str!r}"
+            )
+        self.amp_dtype = _dtype_aliases[dtype_str]
+
+        if self.use_amp and self.amp_dtype == torch.float16:
             self.scaler = GradScaler(
                 init_scale=amp_cfg.get('init_scale', 65536),
                 growth_factor=amp_cfg.get('growth_factor', 2.0),
                 backoff_factor=amp_cfg.get('backoff_factor', 0.5),
                 growth_interval=amp_cfg.get('growth_interval', 2000),
             )
-            logger.info("AMP enabled (init_scale=%s)", amp_cfg.get('init_scale', 65536))
+            logger.info("AMP enabled (dtype=float16, init_scale=%s)",
+                        amp_cfg.get('init_scale', 65536))
+        elif self.use_amp:
+            self.scaler = None
+            logger.info("AMP enabled (dtype=%s, no GradScaler)", dtype_str)
         else:
             self.scaler = None
 
@@ -169,18 +187,22 @@ class TrainingManager:
 
         if self.use_amp:
             device_type = next(self.model.parameters()).device.type
-            with autocast(device_type=device_type):
+            with autocast(device_type=device_type, dtype=self.amp_dtype):
                 loss_dict = compute_loss_fn(batch)
                 loss = loss_dict['loss']
 
             # Scale loss for accumulation
             scaled_loss = loss / self.accumulation_steps
-            self.scaler.scale(scaled_loss).backward()
+            if self.scaler is not None:
+                self.scaler.scale(scaled_loss).backward()
+            else:
+                scaled_loss.backward()
 
             # Update weights after accumulation
             if (self.global_step + 1) % self.accumulation_steps == 0:
                 if self.clip_enabled:
-                    self.scaler.unscale_(self.optimizer)
+                    if self.scaler is not None:
+                        self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(),
                         max_norm=self.clip_max_norm,
@@ -188,8 +210,11 @@ class TrainingManager:
                         error_if_nonfinite=self.clip_error_if_nonfinite,
                     )
 
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
+                if self.scaler is not None:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    self.optimizer.step()
         else:
             loss_dict = compute_loss_fn(batch)
             loss = loss_dict['loss']
