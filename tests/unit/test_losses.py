@@ -301,5 +301,149 @@ class TestSegmentationLoss(unittest.TestCase):
         self.assertFalse(torch.isnan(loss_dict["loss"]))
 
 
+class TestMatcherRobustToInfLogits(unittest.TestCase):
+    """
+    Regression tests for the FP16/autocast NaN bug in HungarianMatcher.
+
+    Root cause: GroundingDINO's ContrastiveEmbed fills padded text positions in
+    pred_logits with -inf. The focal-cost chain (sigmoid + log(p+eps) + post-hoc
+    mask multiply) produces `inf * 0 = NaN` at those positions under reduced
+    precision. Fix: torch.where(text_mask, cost, 0.0) instead of cost * mask.float().
+
+    The matcher is designed to run INSIDE an autocast context (see
+    training_manager.training_step) — autocast handles op-level dtype routing
+    (cdist/matmul auto-promote). These tests mirror that invocation pattern.
+    """
+
+    def _build_inputs_with_inf(self, B, N, num_tokens, num_valid, M, device="cpu"):
+        """
+        Simulate the bug shape: pred_logits with -inf at padding positions,
+        finite values elsewhere; few valid tokens relative to num_tokens.
+        Build in FP32 — the autocast context in each test downcasts as needed.
+        """
+        pred_logits = torch.full((B, N, num_tokens), float('-inf'), device=device)
+        pred_logits[:, :, :num_valid] = torch.randn(B, N, num_valid, device=device)
+
+        outputs = {
+            "pred_logits": pred_logits,
+            "pred_boxes": torch.rand(B, N, 4, device=device),
+        }
+        text_token_mask = torch.zeros(B, num_tokens, dtype=torch.bool, device=device)
+        text_token_mask[:, :num_valid] = True
+        outputs["text_token_mask"] = text_token_mask
+
+        targets = []
+        for _ in range(B):
+            tl = torch.zeros(M, num_tokens, device=device)
+            tl[:, :num_valid] = 1.0 / num_valid
+            targets.append({
+                "labels": torch.zeros(M, dtype=torch.long, device=device),
+                "boxes": torch.rand(M, 4, device=device),
+                "token_labels": tl,
+            })
+        return outputs, targets
+
+    def test_no_nan_with_inf_padding_fp32(self):
+        """Baseline: matcher produces finite cost matrix in pure FP32."""
+        from ml_engine.training.losses import HungarianMatcher
+        matcher = HungarianMatcher()
+
+        # Heavy padding shape mirroring the real bug: 4 valid tokens out of 256.
+        outputs, targets = self._build_inputs_with_inf(
+            B=1, N=900, num_tokens=256, num_valid=4, M=6
+        )
+        indices = matcher(outputs, targets)  # must not raise
+        self.assertEqual(len(indices), 1)
+        self.assertEqual(len(indices[0][0]), 6)  # one match per target
+
+    def test_no_nan_with_inf_padding_under_bf16_autocast(self):
+        """Inside autocast(bfloat16) — what production does on Ampere+/Ada."""
+        if not torch.cuda.is_available():
+            self.skipTest("autocast(cuda, bfloat16) requires CUDA")
+        from ml_engine.training.losses import HungarianMatcher
+        matcher = HungarianMatcher()
+        outputs, targets = self._build_inputs_with_inf(
+            B=1, N=900, num_tokens=256, num_valid=4, M=6, device="cuda",
+        )
+        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            indices = matcher(outputs, targets)
+        self.assertEqual(len(indices), 1)
+
+    def test_no_nan_with_inf_padding_under_fp16_autocast(self):
+        """
+        Inside autocast(float16) — the original bug reproduction path. With the
+        torch.where fix, this passes despite 1e-8 underflowing in FP16.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("autocast(cuda, float16) requires CUDA")
+        from ml_engine.training.losses import HungarianMatcher
+        matcher = HungarianMatcher()
+        outputs, targets = self._build_inputs_with_inf(
+            B=1, N=900, num_tokens=256, num_valid=4, M=6, device="cuda",
+        )
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            indices = matcher(outputs, targets)
+        self.assertEqual(len(indices), 1)
+
+
+class TestLossLabelsDtypeAgnostic(unittest.TestCase):
+    """
+    Regression: loss_labels must handle the case where pred_logits comes in as
+    fp16/bf16 (autocast output) while token_labels is fp32 (explicit in
+    dino_utils.py). index_put_ is strict about dtype match.
+
+    These tests invoke the criterion inside an autocast context — the same way
+    training_manager does in production.
+    """
+
+    def _build_inputs(self, B, N, T, M, device="cpu"):
+        """FP32 inputs; autocast inside the test will downcast pred_logits."""
+        outputs = {
+            "pred_logits": torch.randn(B, N, T, device=device),
+            "pred_boxes": torch.rand(B, N, 4, device=device),
+        }
+        targets = []
+        for _ in range(B):
+            targets.append({
+                "labels": torch.zeros(M, dtype=torch.long, device=device),
+                "boxes": torch.rand(M, 4, device=device),
+                # token_labels stays fp32 by design (dino_utils.py:120)
+                "token_labels": torch.randint(0, 2, (M, T), dtype=torch.float32, device=device),
+            })
+        return outputs, targets
+
+    def test_loss_labels_under_fp16_autocast(self):
+        """
+        Mimics the exact shape that crashed production: pred_logits downcast
+        to fp16 by autocast, token_labels still fp32 by design.
+        """
+        if not torch.cuda.is_available():
+            self.skipTest("autocast(cuda, float16) requires CUDA")
+        from ml_engine.training.losses import build_criterion
+        criterion = build_criterion(num_classes=10, num_decoder_layers=2).cuda()
+
+        outputs, targets = self._build_inputs(B=2, N=10, T=20, M=3, device="cuda")
+
+        # Must not raise "Index put requires source and destination dtypes match"
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            losses = criterion(outputs, targets)
+        self.assertIn("loss_ce", losses)
+        for name, val in losses.items():
+            self.assertFalse(torch.isnan(val).any(), f"NaN in {name}")
+
+    def test_loss_labels_under_bf16_autocast(self):
+        """Same regression in the bfloat16 path."""
+        if not torch.cuda.is_available():
+            self.skipTest("autocast(cuda, bfloat16) requires CUDA")
+        from ml_engine.training.losses import build_criterion
+        criterion = build_criterion(num_classes=10, num_decoder_layers=2).cuda()
+
+        outputs, targets = self._build_inputs(B=2, N=10, T=20, M=3, device="cuda")
+
+        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+            losses = criterion(outputs, targets)
+        self.assertIn("loss_ce", losses)
+
+
 if __name__ == "__main__":
     unittest.main()

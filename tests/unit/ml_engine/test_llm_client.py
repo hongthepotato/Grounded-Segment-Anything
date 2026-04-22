@@ -420,6 +420,171 @@ class TestBlockToDict:
 
 
 # ---------------------------------------------------------------------------
+# Anthropic -> OpenAI message conversion (_to_openai_messages)
+# ---------------------------------------------------------------------------
+
+class TestToOpenAIMessages:
+    r"""Pure-function tests for the Claude→OpenAI message shape converter."""
+
+    def test_plain_user_string_passes_through(self):
+        out = LLMClient._to_openai_messages([{"role": "user", "content": "hi"}])
+        assert out == [{"role": "user", "content": "hi"}]
+
+    def test_plain_assistant_string_passes_through(self):
+        out = LLMClient._to_openai_messages([{"role": "assistant", "content": "ok"}])
+        assert out == [{"role": "assistant", "content": "ok"}]
+
+    def test_assistant_text_plus_tool_use(self):
+        r"""Assistant with text + tool_use becomes content string + tool_calls with JSON-stringified arguments."""
+        msg = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I'll dispatch."},
+                {"type": "tool_use", "id": "call_1", "name": "dispatch_stage", "input": {"stage": "hpo"}},
+            ],
+        }
+        out = LLMClient._to_openai_messages([msg])
+        assert len(out) == 1
+        assert out[0]["role"] == "assistant"
+        assert out[0]["content"] == "I'll dispatch."
+        assert len(out[0]["tool_calls"]) == 1
+        tc = out[0]["tool_calls"][0]
+        assert tc["id"] == "call_1"
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "dispatch_stage"
+        # arguments MUST be a JSON string per OpenAI's schema, not a dict
+        assert isinstance(tc["function"]["arguments"], str)
+        assert json.loads(tc["function"]["arguments"]) == {"stage": "hpo"}
+
+    def test_assistant_only_tool_use_gets_null_content(self):
+        r"""Assistant with no text block emits content=None alongside tool_calls (OpenAI-spec compliant)."""
+        msg = {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "call_1", "name": "x", "input": {}},
+            ],
+        }
+        out = LLMClient._to_openai_messages([msg])
+        assert out[0]["content"] is None
+        assert len(out[0]["tool_calls"]) == 1
+
+    def test_user_tool_result_becomes_tool_message(self):
+        r"""User turn carrying a tool_result block emits a role=tool message with tool_call_id set."""
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "result text"},
+            ],
+        }
+        out = LLMClient._to_openai_messages([msg])
+        assert out == [{"role": "tool", "tool_call_id": "call_1", "content": "result text"}]
+
+    def test_user_tool_result_list_content_concatenates_text(self):
+        r"""Anthropic permits tool_result.content as a list of blocks; we concatenate text blocks."""
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": [
+                    {"type": "text", "text": "part A "},
+                    {"type": "text", "text": "part B"},
+                ]},
+            ],
+        }
+        out = LLMClient._to_openai_messages([msg])
+        assert out == [{"role": "tool", "tool_call_id": "call_1", "content": "part A part B"}]
+
+    def test_multiple_tool_results_emit_multiple_tool_messages(self):
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "r1"},
+                {"type": "tool_result", "tool_use_id": "call_2", "content": "r2"},
+            ],
+        }
+        out = LLMClient._to_openai_messages([msg])
+        assert len(out) == 2
+        assert out[0] == {"role": "tool", "tool_call_id": "call_1", "content": "r1"}
+        assert out[1] == {"role": "tool", "tool_call_id": "call_2", "content": "r2"}
+
+    def test_user_mixed_tool_result_and_text(self):
+        r"""Mixed user turn: tool_result blocks emit role=tool first, then a user text message."""
+        msg = {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "tool out"},
+                {"type": "text", "text": "and also please continue"},
+            ],
+        }
+        out = LLMClient._to_openai_messages([msg])
+        assert len(out) == 2
+        assert out[0] == {"role": "tool", "tool_call_id": "call_1", "content": "tool out"}
+        assert out[1] == {"role": "user", "content": "and also please continue"}
+
+    def test_full_multiturn_roundtrip(self):
+        r"""Regression: exact shape from Coordinator turn 2 that triggered the DeepSeek 400."""
+        messages = [
+            {"role": "user", "content": "plan teacher training"},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "calling tool"},
+                {"type": "tool_use", "id": "toolu_1", "name": "propose_plan", "input": {"stage": "hpo"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"},
+            ]},
+        ]
+        out = LLMClient._to_openai_messages(messages)
+        assert len(out) == 3
+        assert out[0] == {"role": "user", "content": "plan teacher training"}
+        assert out[1]["role"] == "assistant"
+        assert out[1]["content"] == "calling tool"
+        assert out[1]["tool_calls"][0]["function"]["arguments"] == json.dumps({"stage": "hpo"})
+        assert out[2] == {"role": "tool", "tool_call_id": "toolu_1", "content": "ok"}
+
+
+class TestCallOpenAIRequestShape:
+    r"""Verify _call_openai actually forwards OpenAI-shaped messages to the SDK."""
+
+    @pytest.mark.asyncio
+    async def test_multiturn_tool_use_sent_as_openai_shape(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        c = LLMClient(provider="openai")
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(
+            message=MagicMock(content="final", tool_calls=None),
+            finish_reason="stop",
+        )]
+        mock_response.model = "deepseek-chat"
+
+        mock_client_cls = MagicMock()
+        mock_instance = MagicMock()
+        mock_instance.chat.completions.create = AsyncMock(return_value=mock_response)
+        mock_client_cls.return_value = mock_instance
+
+        messages = [
+            {"role": "user", "content": "start"},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "calling"},
+                {"type": "tool_use", "id": "toolu_1", "name": "x", "input": {"k": "v"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "done"},
+            ]},
+        ]
+
+        with patch("openai.AsyncOpenAI", mock_client_cls):
+            await c._call_openai("sys", messages, None, 256)
+
+        sent = mock_instance.chat.completions.create.call_args[1]["messages"]
+        # system + user + assistant(with tool_calls) + tool
+        assert [m["role"] for m in sent] == ["system", "user", "assistant", "tool"]
+        assert sent[2]["tool_calls"][0]["function"]["name"] == "x"
+        assert sent[2]["tool_calls"][0]["function"]["arguments"] == json.dumps({"k": "v"})
+        assert sent[3]["tool_call_id"] == "toolu_1"
+        assert sent[3]["content"] == "done"
+
+
+# ---------------------------------------------------------------------------
 # Client caching
 # ---------------------------------------------------------------------------
 
