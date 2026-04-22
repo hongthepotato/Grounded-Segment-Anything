@@ -85,3 +85,8 @@ Thumbs.db
 # Keep structure files
 !configs/defaults/
 .gstack/
+
+# Secrets (docker-compose reads .env for ${VAR} interpolation)
+.env
+.env.local
+.env.*.local
