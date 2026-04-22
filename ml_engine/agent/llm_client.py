@@ -133,6 +133,84 @@ class LLMClient:
             self._openai_client = AsyncOpenAI(**client_kwargs)
         return self._openai_client
 
+    @staticmethod
+    def _to_openai_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Convert Anthropic-style messages to OpenAI chat-completion format.
+
+        Claude is LLMClient's canonical internal format. Callers pass messages
+        with typed content blocks (text / tool_use / tool_result). OpenAI's API
+        expects tool invocations on `assistant.tool_calls[]` and tool outputs
+        as separate `role=tool` messages. Without this conversion, turn 2+ of
+        any tool-using conversation fails with
+        `unknown variant 'tool_use', expected 'text'`.
+        """
+        out: List[Dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content")
+
+            # Plain-string content passes through unchanged.
+            if isinstance(content, str):
+                out.append({"role": role, "content": content})
+                continue
+
+            if not isinstance(content, list):
+                out.append(msg)
+                continue
+
+            if role == "user":
+                # tool_result blocks become separate role=tool messages;
+                # text blocks fold into a single role=user message.
+                text_parts: List[str] = []
+                for block in content:
+                    btype = block.get("type")
+                    if btype == "tool_result":
+                        tc = block.get("content")
+                        if isinstance(tc, list):
+                            tc = "".join(
+                                b.get("text", "")
+                                for b in tc
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            )
+                        out.append({
+                            "role": "tool",
+                            "tool_call_id": block.get("tool_use_id", ""),
+                            "content": tc if isinstance(tc, str) else json.dumps(tc),
+                        })
+                    elif btype == "text":
+                        text_parts.append(block.get("text", ""))
+                if text_parts:
+                    out.append({"role": "user", "content": "".join(text_parts)})
+
+            elif role == "assistant":
+                text_parts: List[str] = []
+                tool_calls: List[Dict[str, Any]] = []
+                for block in content:
+                    btype = block.get("type")
+                    if btype == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif btype == "tool_use":
+                        tool_calls.append({
+                            "id": block.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": block.get("name", ""),
+                                "arguments": json.dumps(block.get("input", {})),
+                            },
+                        })
+                oai_msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": "".join(text_parts) if text_parts else None,
+                }
+                if tool_calls:
+                    oai_msg["tool_calls"] = tool_calls
+                out.append(oai_msg)
+
+            else:
+                out.append(msg)
+        return out
+
     async def _call_openai(
         self,
         system: str,
@@ -142,7 +220,7 @@ class LLMClient:
     ) -> Dict[str, Any]:
         client = self._get_openai_client()
 
-        oai_messages = [{"role": "system", "content": system}] + messages
+        oai_messages = [{"role": "system", "content": system}] + self._to_openai_messages(messages)
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "max_tokens": max_tokens,

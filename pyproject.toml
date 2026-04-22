@@ -34,6 +34,10 @@ dependencies = [
     "websockets>=11.0",
     "redis>=7.0.0",
 
+    # === LLM clients (Coordinator + experiment HPO) ===
+    "anthropic>=0.40.0",
+    "openai>=1.50.0",
+
     # === Data / IO ===
     "numpy>=2.0.0",
     "opencv-python>=4.10.0",

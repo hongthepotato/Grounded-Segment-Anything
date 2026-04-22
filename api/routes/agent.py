@@ -80,10 +80,25 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
 
     from ml_engine.agent.coordinator import Coordinator
     from ml_engine.agent.contracts import PipelineContract
+    from ml_engine.agent.llm_client import LLMClient
 
     r = _get_async_redis()
     contract = PipelineContract.from_dict(contract_dict)
-    coordinator = Coordinator(redis_client=r, run_id=run_id, contract=contract)
+
+    # Build LLMClient from env so the Coordinator can target alternative
+    # providers (e.g. DeepSeek via OpenAI-compat) without code changes.
+    llm_kwargs: Dict[str, Any] = {
+        "provider": os.environ.get("LLM_PROVIDER", "anthropic"),
+        "model": os.environ.get("LLM_MODEL") or None,
+        "base_url": os.environ.get("LLM_BASE_URL") or None,
+        "api_key_env": os.environ.get("LLM_API_KEY_ENV") or None,
+    }
+    _timeout_env = os.environ.get("LLM_TIMEOUT")
+    if _timeout_env:
+        llm_kwargs["timeout"] = float(_timeout_env)
+    llm = LLMClient(**llm_kwargs)
+
+    coordinator = Coordinator(redis_client=r, run_id=run_id, contract=contract, llm_client=llm)
 
     task = asyncio.create_task(
         coordinator.run(),
