@@ -3,7 +3,7 @@ services:
     image: redis:8.6.1-alpine
     container_name: training-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
@@ -26,6 +26,13 @@ services:
       MODEL_MANIFEST_PATH: configs/model_urls.json
       MODEL_ROOT_DIR: data/models/pretrained
       TOKENIZERS_PARALLELISM: "false"
+      # --- Agent Coordinator LLM (DeepSeek via OpenAI-compat) ---
+      LLM_PROVIDER: openai
+      LLM_BASE_URL: https://api.deepseek.com/v1
+      LLM_API_KEY_ENV: DEEPSEEK_API_KEY
+      LLM_MODEL: deepseek-chat
+      LLM_TIMEOUT: "60"
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     depends_on:
       redis:
         condition: service_healthy

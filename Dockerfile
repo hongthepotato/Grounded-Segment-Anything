@@ -30,7 +30,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV UV_LINK_MODE=copy
 ENV CUDA_HOME=/usr/local/cuda
-ENV TORCH_CUDA_ARCH_LIST="7.5"
+ENV TORCH_CUDA_ARCH_LIST="8.9"
 
 COPY pyproject.toml uv.lock ./
 COPY deps/ deps/
