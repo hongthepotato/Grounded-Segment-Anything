@@ -263,12 +263,19 @@ class TestGetRequiredModelsFromMode:
         assert GROUNDING_DINO in models
         assert SAM not in models
 
-    def test_segmentation_mode_returns_sam(self):
-        """Segmentation mode requires SAM."""
+    def test_segmentation_mode_returns_both_models(self):
+        """Segmentation mode requires SAM for masks and GroundingDINO for bbox prompts.
+
+        GroundingDINO is co-loaded because SAM needs box prompts to generate masks,
+        and the normalization step auto-generates boxes from mask contours so DINO
+        has valid training targets. See inspection.py::get_required_models_from_mode
+        docstring for the rationale.
+        """
         models = get_required_models_from_mode(MODE_SEGMENTATION)
 
         assert SAM in models
-        assert GROUNDING_DINO not in models
+        assert GROUNDING_DINO in models
+        assert len(models) == 2
 
     def test_combined_mode_returns_both(self):
         """Combined mode requires both DINO and SAM."""

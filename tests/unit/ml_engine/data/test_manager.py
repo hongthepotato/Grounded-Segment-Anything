@@ -236,8 +236,13 @@ class TestDataManagerGetRequiredModels:
         assert 'grounding_dino' in models
         assert 'sam' not in models
 
-    def test_segmentation_returns_sam_only(self, normalized_coco_data, simple_image_path_map):
-        """Segmentation mode returns only sam."""
+    def test_segmentation_returns_both_models(self, normalized_coco_data, simple_image_path_map):
+        """Segmentation mode returns sam + grounding_dino.
+
+        GroundingDINO is co-loaded because SAM requires box prompts. Auto-generated
+        bboxes from mask contours serve as DINO training targets. See
+        ml_engine/data/inspection.py::get_required_models_from_mode for rationale.
+        """
         manager = DataManager(
             raw_data=normalized_coco_data,
             image_path_map=simple_image_path_map,
@@ -247,7 +252,8 @@ class TestDataManagerGetRequiredModels:
         models = manager.get_required_models()
 
         assert 'sam' in models
-        assert 'grounding_dino' not in models
+        assert 'grounding_dino' in models
+        assert len(models) == 2
 
 
 # =============================================================================

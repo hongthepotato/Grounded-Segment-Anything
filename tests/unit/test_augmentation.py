@@ -23,7 +23,10 @@ class TestAugmentationRegistry(unittest.TestCase):
             np.random.randint(0, 2, (480, 640), dtype=np.uint8),
             np.random.randint(0, 2, (480, 640), dtype=np.uint8)
         ]
-        self.sample_boxes = np.array([[100, 100, 50, 50], [200, 200, 60, 60]], dtype=np.float32)
+        # COCO format [x, y, w, h], matching ml_engine/data/loaders.py:142
+        # and the albumentations pipeline's format='coco' configuration.
+        # Real callers pass a Python list of bboxes, not an ndarray.
+        self.sample_boxes = [[100, 100, 50, 50], [200, 200, 60, 60]]
     
     def test_get_augmentation_registry(self):
         """Test getting augmentation registry."""
