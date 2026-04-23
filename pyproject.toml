@@ -61,6 +61,7 @@ onnx = [
 ]
 test = [
     "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
     "pytest-cov",
     "pytest-mock",
     "pytest-timeout",
@@ -109,6 +110,21 @@ groundingdino = { path = "GroundingDINO", editable = true }
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# Vendored / third-party / research trees are not our lint scope. Our own
+# code lives in api, core, ml_engine, augmentation, cli, tests.
+extend-exclude = [
+    "GroundingDINO",
+    "deps",
+    "EfficientSAM",
+    "experiments",
+    "voxelnext_3d_box",
+    "assets",
+    "logs",
+    "output",
+    ".venv",
+    "build",
+    "dist",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

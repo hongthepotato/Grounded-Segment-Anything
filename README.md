@@ -806,3 +806,67 @@ If you find this project helpful for your research, please consider citing the f
       primaryClass={cs.CV}
 }
 ```
+
+---
+
+## Continuous Integration
+
+This fork ships a GitHub Actions CI pipeline (`.github/workflows/ci.yml` and
+`.github/workflows/nightly.yml`). Runs on `ubuntu-24.04` CPU runners — no GPU
+required for PR-time checks.
+
+### Running the same checks locally
+
+```bash
+# The exact sequence CI runs, in the exact order
+make ci-local
+
+# Faster feedback: unit + integration + contract, skip slow + gpu
+make test
+
+# Just lint
+make lint
+
+# With coverage report (HTML at htmlcov/index.html)
+make coverage
+```
+
+### CI jobs (runs on every push + PR into main/agentic)
+
+1. **lint** (~2 min) — `ruff check`, `ruff format --check`, `mypy`. Skips heavy deps. Fails fast.
+2. **unit** (~5 min warm / ~10 min cold) — `pytest tests/unit -n 4 --dist=loadscope`, coverage artifact.
+3. **contract** (~4 min warm) — `pytest tests/integration tests/contract`, coverage artifact.
+4. **coverage-gate** (~1 min) — combines coverage artifacts; fails if below `COVERAGE_MIN` env var in `ci.yml`.
+
+### Nightly (scheduled 06:00 UTC)
+
+- Full slow-test run (still CPU-only).
+- Docker smoke build (real CUDA arch list) via `docker buildx build --target=builder`. **No GPU required** — `nvcc` in the CUDA toolkit image compiles without one; the nightly catches extension-build regressions that PR CI skips.
+
+### Branch protection (admin action, one-time)
+
+Configure in repo Settings → Branches → Add rule:
+- Target branches: `main`, `agentic`
+- Require status checks to pass: **lint**, **unit**, **contract**, **coverage-gate** (all 4)
+- Require branches to be up to date before merging
+
+### Coverage ratchet
+
+`COVERAGE_MIN` is committed as a workflow-level env var in `ci.yml`. Starts at `0` on first green run (initialize by reading the measured value, committing it). Ratchets up via PR edits as coverage improves, targeting 70% over 4–8 weeks. A CI step enforces monotonic non-decrease between commits.
+
+### Local CUDA toolchain caveat
+
+If your dev box has multiple CUDA toolkits installed (common when the apt `nvidia-cuda-toolkit` package coexists with `/usr/local/cuda-*` versions), `uv sync` can fail during GroundingDINO's extension compile with a version mismatch. Fix:
+
+```bash
+export CUDA_HOME=/usr/local/cuda-12.4
+export PATH=/usr/local/cuda-12.4/bin:$PATH
+uv sync --frozen --extra test
+```
+
+CI runners don't hit this — they have no CUDA at all, so GroundingDINO's `setup.py` naturally takes the no-CUDA branch and the pure-PyTorch fallback in `ms_deform_attn.py` handles forward passes.
+
+### Test markers
+
+- `@pytest.mark.gpu` — test requires CUDA. Auto-skipped in CI by `tests/conftest.py` when `torch.cuda.is_available()` is False.
+- `@pytest.mark.slow` — slow test, excluded from PR CI, included in nightly.

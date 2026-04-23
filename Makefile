@@ -41,3 +41,71 @@ endif
 	-e DISPLAY=$DISPLAY \
 	--name=gsa \
 	--ipc=host -it gsa:v0
+
+# ============================================================================
+# Test + lint targets — mirror CI exactly.
+# Use `make ci-local` to run the same sequence CI runs, in the same order.
+# ============================================================================
+
+# pytest-xdist worker count. Pinned to 4 to match GitHub Actions free-tier
+# vCPU count AND avoid "Different tests collected" errors observed at higher
+# worker counts on dev machines. Override with `make test PYTEST_WORKERS=8`.
+PYTEST_WORKERS ?= 4
+
+# Common pytest flags: skip GPU + slow by default, fixed worker count,
+# loadscope distribution groups tests by module for deterministic collection.
+PYTEST_FAST = -m "not gpu and not slow" -n $(PYTEST_WORKERS) --dist=loadscope
+PYTEST_SLOW = -m "slow and not gpu" -n $(PYTEST_WORKERS) --dist=loadscope
+
+# Coverage scope: runtime code only. cli/ and experiment/ are high-churn
+# entry-point / research scripts, excluded from coverage targets.
+COV_FLAGS = --cov=core --cov=ml_engine --cov=augmentation --cov=api
+
+.PHONY: test test-slow lint coverage ci-local
+
+test:
+	uv run pytest tests/unit tests/integration tests/contract $(PYTEST_FAST)
+
+test-slow:
+	uv run pytest tests $(PYTEST_SLOW)
+
+lint:
+	@# Ruff + mypy are both on a ramp-up period. The project has a large
+	@# pre-existing lint baseline (3593 ruff findings at PR time, mostly
+	@# trivial: trailing whitespace, unsorted imports, long lines). Rather
+	@# than block shipping the CI pipeline on cleanup of unrelated files,
+	@# both tools log their findings but do not fail the lint job. Cleanup
+	@# is tracked in TODOS.md.
+	@# When ruff/mypy baselines reach zero, drop the trailing `|| echo ...`
+	@# to make these gating.
+	uv run ruff check . || echo "ruff: continuing despite findings (ramp-up period)"
+	uv run ruff format --check . || echo "ruff format: continuing despite findings (ramp-up period)"
+	uv run mypy core ml_engine api --ignore-missing-imports || \
+		echo "mypy: continuing despite findings (ramp-up period)"
+
+coverage:
+	uv run pytest tests/unit tests/integration tests/contract $(PYTEST_FAST) \
+		$(COV_FLAGS) --cov-report=term-missing --cov-report=html:htmlcov
+	@echo "Coverage HTML report: htmlcov/index.html"
+
+# ci-local runs the EXACT commands CI runs, in the EXACT order.
+# If this passes, PR CI will pass. If this fails, fix before pushing.
+#
+# The first step syncs both `lint` and `test` extras so ruff/mypy/pytest are
+# all present. CI itself installs these per job, so this mirrors the
+# aggregate install the developer's workspace needs.
+ci-local:
+	@echo "=== install (test + lint extras) ==="
+	uv sync --frozen --extra test --extra lint
+	@echo "=== lint ==="
+	$(MAKE) lint
+	@echo "=== unit ==="
+	uv run pytest tests/unit $(PYTEST_FAST) $(COV_FLAGS) --cov-report= --cov-context=test
+	mv .coverage .coverage.unit
+	@echo "=== contract + integration ==="
+	uv run pytest tests/integration tests/contract $(PYTEST_FAST) $(COV_FLAGS) --cov-report=
+	mv .coverage .coverage.contract
+	@echo "=== coverage gate ==="
+	uv run coverage combine .coverage.unit .coverage.contract
+	uv run coverage report --show-missing
+	@rm -f .coverage.unit .coverage.contract

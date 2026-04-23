@@ -1,0 +1,243 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, agentic]
+
+# Cancel superseded runs on PR branches; never cancel runs on protected branches.
+# Rationale: amendment #6 — losing signal on a main-branch run that got cancelled
+# mid-flight is worse than burning extra minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/agentic' }}
+
+# Least-privilege. id-token:write only for coverage-gate (Codecov OIDC).
+permissions:
+  contents: read
+
+# Shared env. UV_INDEX_PYTORCH_CU124_URL redirects the named index from
+# pyproject.toml's [tool.uv.sources] to CPU wheels — critical to avoid the 2GB
+# CUDA 12.4 torch download on every CI run. The assertion step in each job
+# that installs torch verifies this override actually took effect.
+env:
+  UV_INDEX_PYTORCH_CU124_URL: https://download.pytorch.org/whl/cpu
+  UV_TORCH_BACKEND: cpu
+  FORCE_CUDA: "0"
+  TORCH_CUDA_ARCH_LIST: ""
+  # Coverage floor — ratchets up over time via PR edits. See amendment #13 for
+  # the monotonicity guard that prevents this from being lowered silently.
+  # Initial value is 0 so the first green run measures actual coverage; commit
+  # that value in a follow-up PR to start the ratchet.
+  COVERAGE_MIN: "0"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Fail fast on pyproject.toml / uv.lock drift.
+      - name: Verify uv.lock in sync
+        run: uv lock --locked
+
+      # Lint install: skip heavy deps so this job stays at ~2 min even on
+      # cold cache. --no-install-package takes the distribution name; verify
+      # against pyproject.toml during implementation.
+      - name: Install lint deps only
+        run: |
+          uv sync --frozen --extra lint \
+            --no-install-package torch \
+            --no-install-package torchvision \
+            --no-install-package groundingdino \
+            --no-install-package segment-anything
+
+      # Ruff + mypy are both on a ramp-up period. The project has a large
+      # pre-existing lint baseline (3593 ruff findings at PR time, mostly
+      # trivial: trailing whitespace, unsorted imports, long lines).
+      # continue-on-error keeps the JOB passing while cleanup PRs reduce the
+      # baseline. Remove continue-on-error after the baseline reaches zero —
+      # tracked in TODOS.md.
+      - name: ruff check
+        run: uv run ruff check .
+        continue-on-error: true
+
+      - name: ruff format check
+        run: uv run ruff format --check .
+        continue-on-error: true
+
+      - name: mypy
+        run: uv run mypy core ml_engine api --ignore-missing-imports
+        continue-on-error: true
+
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Cache the compiled GroundingDINO .so (editable install → .so lands
+      # in-tree). Key on sources that determine the build output.
+      - name: Cache GroundingDINO compiled extension
+        uses: actions/cache@v4
+        with:
+          path: GroundingDINO/**/*.so
+          key: gdino-${{ runner.os }}-py3.10-${{ hashFiles('uv.lock', 'GroundingDINO/setup.py', 'GroundingDINO/groundingdino/models/GroundingDINO/csrc/**') }}
+          restore-keys: |
+            gdino-${{ runner.os }}-py3.10-
+
+      - name: Install test deps
+        run: uv sync --frozen --extra test
+
+      # Verify the UV_INDEX_PYTORCH_CU124_URL override actually worked.
+      # torch.cuda.is_available() is trivially False on CPU runners even if
+      # the 2GB CUDA wheel installed — must check the wheel tag in version.
+      - name: Assert CPU torch wheel installed
+        run: |
+          uv run python -c "import torch; assert '+cpu' in torch.__version__, \
+            f'Expected CPU torch wheel, got {torch.__version__}'; \
+            print(f'OK: torch {torch.__version__}')"
+
+      - name: Run unit tests
+        run: |
+          uv run pytest tests/unit \
+            -m "not gpu and not slow" \
+            -n 4 --dist=loadscope \
+            --cov=core --cov=ml_engine --cov=augmentation --cov=api \
+            --cov-report=
+          mv .coverage .coverage.unit
+
+      - name: Upload unit coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: .coverage.unit
+          if-no-files-found: error
+          retention-days: 1
+
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Cache GroundingDINO compiled extension
+        uses: actions/cache@v4
+        with:
+          path: GroundingDINO/**/*.so
+          key: gdino-${{ runner.os }}-py3.10-${{ hashFiles('uv.lock', 'GroundingDINO/setup.py', 'GroundingDINO/groundingdino/models/GroundingDINO/csrc/**') }}
+          restore-keys: |
+            gdino-${{ runner.os }}-py3.10-
+
+      - name: Install test deps
+        run: uv sync --frozen --extra test
+
+      - name: Assert CPU torch wheel installed
+        run: |
+          uv run python -c "import torch; assert '+cpu' in torch.__version__, \
+            f'Expected CPU torch wheel, got {torch.__version__}'; \
+            print(f'OK: torch {torch.__version__}')"
+
+      - name: Run integration + contract tests
+        run: |
+          uv run pytest tests/integration tests/contract \
+            -m "not gpu and not slow" \
+            -n 4 --dist=loadscope \
+            --cov=core --cov=ml_engine --cov=augmentation --cov=api \
+            --cov-report=
+          mv .coverage .coverage.contract
+
+      - name: Upload contract coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-contract
+          path: .coverage.contract
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage-gate:
+    needs: [unit, contract]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # id-token: write  # uncomment when Codecov OIDC is enabled
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need base branch to run the monotonicity guard.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Minimal install — just coverage tooling.
+      - name: Install coverage tool
+        run: uv pip install --system coverage
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+      - name: Download contract coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-contract
+
+      - name: Combine + report
+        run: |
+          coverage combine .coverage.unit .coverage.contract
+          coverage report --show-missing
+
+      # Monotonicity guard (amendment #13): COVERAGE_MIN must never decrease
+      # between commits. Prevents silent ratchet-downward via typo or rushed
+      # merge.
+      - name: Monotonicity guard — COVERAGE_MIN never decreases
+        run: |
+          NEW_MIN="${{ env.COVERAGE_MIN }}"
+          # Resolve the base branch for PRs, default to main for push events.
+          BASE_REF="${{ github.base_ref }}"
+          BASE_REF="${BASE_REF:-main}"
+          git fetch origin "${BASE_REF}" --depth=1
+          OLD_MIN=$(git show "origin/${BASE_REF}:.github/workflows/ci.yml" 2>/dev/null | \
+            awk -F'"' '/COVERAGE_MIN:/ {print $2; exit}' || echo "0")
+          OLD_MIN="${OLD_MIN:-0}"
+          echo "Base ${BASE_REF} COVERAGE_MIN: ${OLD_MIN}"
+          echo "This PR  COVERAGE_MIN: ${NEW_MIN}"
+          if awk -v n="$NEW_MIN" -v o="$OLD_MIN" 'BEGIN{exit !(n+0 < o+0)}'; then
+            echo "ERROR: COVERAGE_MIN decreased from ${OLD_MIN} to ${NEW_MIN}. Ratchet is monotonic non-decreasing."
+            exit 1
+          fi
+          echo "OK: COVERAGE_MIN is monotonic non-decreasing."
+
+      - name: Enforce coverage floor
+        run: |
+          coverage report --fail-under="${COVERAGE_MIN}"
+        env:
+          COVERAGE_MIN: ${{ env.COVERAGE_MIN }}
+
+      - name: Emit coverage XML for external tools
+        run: coverage xml -o coverage.xml
+
+      - name: Upload combined coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-combined
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 7
