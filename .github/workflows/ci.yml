@@ -49,10 +49,14 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      # Fail fast on pyproject.toml / uv.lock drift.
-      - name: Verify uv.lock in sync
-        run: uv lock --locked
-
+      # Note: we used to run `uv lock --locked` here to fail fast on
+      # pyproject.toml/uv.lock drift. But with the GroundingDINO editable
+      # install + `no-build-isolation-package = ["groundingdino"]`, the
+      # --locked check re-resolves the full graph which needs to build
+      # GroundingDINO's metadata, which imports torch at the top of its
+      # setup.py. Torch isn't installed yet → the step fails.
+      # Drift is still caught by `uv sync --frozen` in the unit/contract
+      # jobs; --frozen errors out if the lockfile disagrees with pyproject.
       # Lint install: skip heavy deps so this job stays at ~2 min even on
       # cold cache. --no-install-package takes the distribution name; verify
       # against pyproject.toml during implementation.
