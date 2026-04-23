@@ -38,6 +38,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      # Install system Python 3.10 first. pyproject.toml sets
+      # `python-preference = "only-system"` so uv won't download a managed
+      # Python. GitHub runners don't ship 3.10 by default.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
@@ -81,6 +87,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # Install system Python 3.10 first. pyproject.toml sets
+      # `python-preference = "only-system"` so uv won't download a managed
+      # Python. GitHub runners don't ship 3.10 by default.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
@@ -130,6 +142,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # Install system Python 3.10 first. pyproject.toml sets
+      # `python-preference = "only-system"` so uv won't download a managed
+      # Python. GitHub runners don't ship 3.10 by default.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
@@ -181,6 +199,10 @@ jobs:
         with:
           # Need base branch to run the monotonicity guard.
           fetch-depth: 0
+      # See rationale above — uv needs system Python 3.10.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true

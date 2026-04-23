@@ -23,6 +23,11 @@ jobs:
       TORCH_CUDA_ARCH_LIST: ""
     steps:
       - uses: actions/checkout@v4
+      # pyproject.toml's `python-preference = "only-system"` means uv won't
+      # download a managed Python; GitHub runners don't ship 3.10 by default.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
