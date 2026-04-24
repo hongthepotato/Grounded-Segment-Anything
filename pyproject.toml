@@ -54,6 +54,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "debugpy>=1.8.0",
+    "pre-commit>=3.6.0",
 ]
 onnx = [
     "onnx>=1.14.0",
