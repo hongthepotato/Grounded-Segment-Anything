@@ -30,7 +30,15 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV UV_LINK_MODE=copy
 ENV CUDA_HOME=/usr/local/cuda
-ENV TORCH_CUDA_ARCH_LIST="8.9"
+# Fat build covering every non-ancient NVIDIA arch + PTX JIT for future GPUs.
+# Turing (7.5), Ampere A100 (8.0), Ampere consumer 30-series (8.6), Ada
+# Lovelace 40-series (8.9), Hopper H100 (9.0), Blackwell 50-series (10.0).
+# The `+PTX` on the last arch embeds intermediate representation so newer
+# GPUs (post-Blackwell) JIT at first run instead of failing outright.
+# Cost: ~5x longer nvcc compile, ~200MB fatter extension binary. Zero runtime
+# cost — only the matching SASS executes on a given GPU. One image, many
+# GPU generations. No arch-specific branches.
+ENV TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0;10.0+PTX"
 
 COPY pyproject.toml uv.lock ./
 COPY deps/ deps/
