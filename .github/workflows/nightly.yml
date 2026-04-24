@@ -17,8 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      UV_INDEX_PYTORCH_CU124_URL: https://download.pytorch.org/whl/cpu
-      UV_TORCH_BACKEND: cpu
+      # Torch variant is selected via the `cpu` extra on the sync command.
       FORCE_CUDA: "0"
       TORCH_CUDA_ARCH_LIST: ""
     steps:
@@ -34,7 +33,7 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Install test deps
-        run: uv sync --frozen --extra test
+        run: uv sync --frozen --extra test --extra cpu
 
       - name: Assert CPU torch wheel installed
         run: |

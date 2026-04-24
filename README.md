@@ -854,17 +854,34 @@ Configure in repo Settings → Branches → Add rule:
 
 `COVERAGE_MIN` is committed as a workflow-level env var in `ci.yml`. Starts at `0` on first green run (initialize by reading the measured value, committing it). Ratchets up via PR edits as coverage improves, targeting 70% over 4–8 weeks. A CI step enforces monotonic non-decrease between commits.
 
-### Local CUDA toolchain caveat
+### Torch variant selection: `--extra cpu` or `--extra gpu`
 
-If your dev box has multiple CUDA toolkits installed (common when the apt `nvidia-cuda-toolkit` package coexists with `/usr/local/cuda-*` versions), `uv sync` can fail during GroundingDINO's extension compile with a version mismatch. Fix:
+`pyproject.toml` defines two mutually-exclusive extras that control which
+torch wheel gets installed:
+
+```bash
+# For GPU development (training, inference, everything that uses CUDA)
+uv sync --frozen --extra test --extra gpu
+
+# For CPU-only development (linting, fast iteration, laptop coding)
+uv sync --frozen --extra test --extra cpu
+```
+
+CI uses `--extra cpu`. The Dockerfile builder uses `--extra gpu`. Pick one
+or the other — uv enforces mutual exclusion via a `[tool.uv] conflicts`
+block, so trying to activate both simultaneously errors out cleanly.
+
+### Local CUDA toolchain caveat (GPU dev only)
+
+If your dev box has multiple CUDA toolkits installed (common when the apt `nvidia-cuda-toolkit` package coexists with `/usr/local/cuda-*` versions), `uv sync --extra gpu` can fail during GroundingDINO's extension compile with a version mismatch. Fix:
 
 ```bash
 export CUDA_HOME=/usr/local/cuda-12.4
 export PATH=/usr/local/cuda-12.4/bin:$PATH
-uv sync --frozen --extra test
+uv sync --frozen --extra test --extra gpu
 ```
 
-CI runners don't hit this — they have no CUDA at all, so GroundingDINO's `setup.py` naturally takes the no-CUDA branch and the pure-PyTorch fallback in `ms_deform_attn.py` handles forward passes.
+CI runners don't hit this — they have no CUDA at all, and they use `--extra cpu` so GroundingDINO's `setup.py` naturally takes the no-CUDA branch and the pure-PyTorch fallback in `ms_deform_attn.py` handles forward passes.
 
 ### Test markers
 

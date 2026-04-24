@@ -95,8 +95,11 @@ coverage:
 # all present. CI itself installs these per job, so this mirrors the
 # aggregate install the developer's workspace needs.
 ci-local:
-	@echo "=== install (test + lint extras) ==="
-	uv sync --frozen --extra test --extra lint
+	@echo "=== install (test + lint + cpu extras) ==="
+	@# --extra cpu selects CPU torch so `make ci-local` behaves like PR CI.
+	@# Developers working on GPU code should `uv sync --extra gpu --extra test`
+	@# separately for their primary venv.
+	uv sync --frozen --extra test --extra lint --extra cpu
 	@echo "=== lint ==="
 	$(MAKE) lint
 	@echo "=== unit ==="

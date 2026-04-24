@@ -75,6 +75,21 @@ lint = [
     "ruff",
     "mypy",
 ]
+# Torch variant flag extras. Mutually exclusive — uv enforces via the
+# `[tool.uv] conflicts` block below. One of these must be selected at
+# `uv sync` time:
+#   --extra cpu  →  CPU torch (CI, lint, laptop dev without GPU)
+#   --extra gpu  →  CUDA 12.4 torch (training, inference, Dockerfile)
+# The Makefile test/coverage targets already pass `--extra cpu` where
+# appropriate.
+cpu = [
+    "torch",
+    "torchvision",
+]
+gpu = [
+    "torch",
+    "torchvision",
+]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
@@ -92,14 +107,48 @@ python-preference = "only-system"
 # GroundingDINO needs torch at build time for CUDA extensions.
 no-build-isolation-package = ["groundingdino"]
 
+# The `cpu` and `gpu` extras below are mutually exclusive torch variants.
+# Declaring the conflict here tells uv's resolver not to include both in
+# the same resolution, which eliminates the "conflicting indexes" error
+# that would otherwise appear when the same package (torch) is sourced
+# from two different indexes.
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "gpu" },
+    ],
+]
+
+# Two torch indexes. Selection is driven by the `gpu` extra below.
+# Default (no `gpu` extra) → CPU torch. Good for CI runners without GPUs
+# and for machines where you just want fast, light installs.
+# `--extra gpu` → CUDA 12.4 torch. Required for training, inference on GPU,
+# and for the Dockerfile builder target (which compiles GroundingDINO's
+# CUDA extension against CUDA torch).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [[tool.uv.index]]
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu124" }
-torchvision = { index = "pytorch-cu124" }
+# Mutually-exclusive torch variants, selected via the `cpu` or `gpu` extras.
+# See [project.optional-dependencies] and [tool.uv].conflicts above for how
+# the extras are declared and enforced. Linux-only marker on cu124 because
+# PyTorch's CUDA 12.4 index doesn't ship Windows wheels, and this project
+# only targets Linux.
+torch = [
+    { index = "pytorch-cu124", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", extra = "cpu" },
+]
+torchvision = [
+    { index = "pytorch-cu124", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", extra = "cpu" },
+]
 segment-anything = { path = "deps/segment_anything", editable = true }
 groundingdino = { path = "GroundingDINO", editable = true }
 

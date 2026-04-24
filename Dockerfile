@@ -36,10 +36,13 @@ COPY pyproject.toml uv.lock ./
 COPY deps/ deps/
 COPY GroundingDINO/ GroundingDINO/
 
-RUN uv sync --frozen --no-editable --no-install-project
+# --extra gpu selects CUDA 12.4 torch via [tool.uv.sources] in pyproject.toml.
+# Without this, uv falls back to the cpu index which breaks GroundingDINO's
+# CUDA extension compile against torch's CUDA headers.
+RUN uv sync --frozen --no-editable --no-install-project --extra gpu
 
 COPY . .
-RUN uv sync --frozen --no-editable && \
+RUN uv sync --frozen --no-editable --extra gpu && \
     find /opt/venv -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 # ============================================================

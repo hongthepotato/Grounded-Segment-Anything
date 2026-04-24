@@ -17,13 +17,12 @@ concurrency:
 permissions:
   contents: read
 
-# Shared env. UV_INDEX_PYTORCH_CU124_URL redirects the named index from
-# pyproject.toml's [tool.uv.sources] to CPU wheels — critical to avoid the 2GB
-# CUDA 12.4 torch download on every CI run. The assertion step in each job
-# that installs torch verifies this override actually took effect.
+# Shared env. Torch variant is now selected via pyproject.toml's conditional
+# [tool.uv.sources] entries and the mutually-exclusive `cpu`/`gpu` extras —
+# see the Install test deps step in each job. FORCE_CUDA + empty arch list
+# stay set as defense in depth so GroundingDINO's setup.py takes the
+# no-CUDA branch even if the host somehow has nvcc on PATH.
 env:
-  UV_INDEX_PYTORCH_CU124_URL: https://download.pytorch.org/whl/cpu
-  UV_TORCH_BACKEND: cpu
   FORCE_CUDA: "0"
   TORCH_CUDA_ARCH_LIST: ""
   # Coverage floor — ratchets up over time via PR edits. See amendment #13 for
@@ -58,11 +57,14 @@ jobs:
       # Drift is still caught by `uv sync --frozen` in the unit/contract
       # jobs; --frozen errors out if the lockfile disagrees with pyproject.
       # Lint install: skip heavy deps so this job stays at ~2 min even on
-      # cold cache. --no-install-package takes the distribution name; verify
-      # against pyproject.toml during implementation.
+      # cold cache. Pick `--extra cpu` so the torch resolution (still in the
+      # graph via base deps) is unambiguous; --no-install-package flags
+      # then skip the actual wheel download + GroundingDINO build. The
+      # graph is resolved from uv.lock; skipping specific packages at
+      # install time is safe.
       - name: Install lint deps only
         run: |
-          uv sync --frozen --extra lint \
+          uv sync --frozen --extra lint --extra cpu \
             --no-install-package torch \
             --no-install-package torchvision \
             --no-install-package groundingdino \
@@ -112,8 +114,11 @@ jobs:
           restore-keys: |
             gdino-${{ runner.os }}-py3.10-
 
+      # --extra cpu selects CPU torch via [tool.uv.sources] + [tool.uv]
+      # conflicts in pyproject.toml. --extra gpu is for CUDA; developers
+      # use that locally and the Dockerfile builder pins it. CI stays CPU.
       - name: Install test deps
-        run: uv sync --frozen --extra test
+        run: uv sync --frozen --extra test --extra cpu
 
       # Verify the UV_INDEX_PYTORCH_CU124_URL override actually worked.
       # torch.cuda.is_available() is trivially False on CPU runners even if
@@ -165,8 +170,11 @@ jobs:
           restore-keys: |
             gdino-${{ runner.os }}-py3.10-
 
+      # --extra cpu selects CPU torch via [tool.uv.sources] + [tool.uv]
+      # conflicts in pyproject.toml. --extra gpu is for CUDA; developers
+      # use that locally and the Dockerfile builder pins it. CI stays CPU.
       - name: Install test deps
-        run: uv sync --frozen --extra test
+        run: uv sync --frozen --extra test --extra cpu
 
       - name: Assert CPU torch wheel installed
         run: |
