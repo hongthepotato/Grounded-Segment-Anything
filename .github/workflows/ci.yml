@@ -76,16 +76,21 @@ jobs:
       # continue-on-error keeps the JOB passing while cleanup PRs reduce the
       # baseline. Remove continue-on-error after the baseline reaches zero —
       # tracked in TODOS.md.
+      # --extra cpu on every `uv run` is load-bearing: uv run implicitly
+      # re-syncs to match the requested extras, and without a selection uv
+      # falls back to the default resolution (cu124 on linux) which triggers
+      # a ~2GB reinstall + fails the +cpu assertion in unit/contract. Pattern
+      # matches uv's PyTorch guide for conflicting-extras setups.
       - name: ruff check
-        run: uv run ruff check .
+        run: uv run --extra lint --extra cpu ruff check .
         continue-on-error: true
 
       - name: ruff format check
-        run: uv run ruff format --check .
+        run: uv run --extra lint --extra cpu ruff format --check .
         continue-on-error: true
 
       - name: mypy
-        run: uv run mypy core ml_engine api --ignore-missing-imports
+        run: uv run --extra lint --extra cpu mypy core ml_engine api --ignore-missing-imports
         continue-on-error: true
 
   unit:
@@ -120,18 +125,20 @@ jobs:
       - name: Install test deps
         run: uv sync --frozen --extra test --extra cpu
 
-      # Verify the UV_INDEX_PYTORCH_CU124_URL override actually worked.
-      # torch.cuda.is_available() is trivially False on CPU runners even if
-      # the 2GB CUDA wheel installed — must check the wheel tag in version.
+      # Verify the --extra cpu selection actually routed torch to the CPU
+      # index. torch.cuda.is_available() is trivially False on CPU runners
+      # even if the 2GB CUDA wheel installed — must check the wheel tag in
+      # version. --extra cpu is required on every `uv run`; without it uv
+      # re-syncs to the default (cu124 on linux) and quietly reinstalls.
       - name: Assert CPU torch wheel installed
         run: |
-          uv run python -c "import torch; assert '+cpu' in torch.__version__, \
+          uv run --extra test --extra cpu python -c "import torch; assert '+cpu' in torch.__version__, \
             f'Expected CPU torch wheel, got {torch.__version__}'; \
             print(f'OK: torch {torch.__version__}')"
 
       - name: Run unit tests
         run: |
-          uv run pytest tests/unit \
+          uv run --extra test --extra cpu pytest tests/unit \
             -m "not gpu and not slow" \
             -n 4 --dist=loadscope \
             --cov=core --cov=ml_engine --cov=augmentation --cov=api \
@@ -178,13 +185,13 @@ jobs:
 
       - name: Assert CPU torch wheel installed
         run: |
-          uv run python -c "import torch; assert '+cpu' in torch.__version__, \
+          uv run --extra test --extra cpu python -c "import torch; assert '+cpu' in torch.__version__, \
             f'Expected CPU torch wheel, got {torch.__version__}'; \
             print(f'OK: torch {torch.__version__}')"
 
       - name: Run integration + contract tests
         run: |
-          uv run pytest tests/integration tests/contract \
+          uv run --extra test --extra cpu pytest tests/integration tests/contract \
             -m "not gpu and not slow" \
             -n 4 --dist=loadscope \
             --cov=core --cov=ml_engine --cov=augmentation --cov=api \

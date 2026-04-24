@@ -35,15 +35,18 @@ jobs:
       - name: Install test deps
         run: uv sync --frozen --extra test --extra cpu
 
+      # --extra cpu on every `uv run` is load-bearing: without it uv
+      # re-syncs to the default resolution (cu124 on linux) and quietly
+      # reinstalls ~2GB of CUDA wheels, failing the +cpu assertion below.
       - name: Assert CPU torch wheel installed
         run: |
-          uv run python -c "import torch; assert '+cpu' in torch.__version__, \
+          uv run --extra test --extra cpu python -c "import torch; assert '+cpu' in torch.__version__, \
             f'Expected CPU torch wheel, got {torch.__version__}'; \
             print(f'OK: torch {torch.__version__}')"
 
       # Full suite including @pytest.mark.slow. Still excludes gpu-marked.
       - name: Run slow + all CPU tests
-        run: uv run pytest tests -m "not gpu" -n 4 --dist=loadscope
+        run: uv run --extra test --extra cpu pytest tests -m "not gpu" -n 4 --dist=loadscope
 
   docker-smoke:
     runs-on: ubuntu-24.04
