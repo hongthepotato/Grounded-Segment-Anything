@@ -30,6 +30,10 @@ env:
   # Initial value is 0 so the first green run measures actual coverage; commit
   # that value in a follow-up PR to start the ratchet.
   COVERAGE_MIN: "0"
+  # Opt into Node 24 runtime for actions/* and astral-sh/setup-uv. GitHub
+  # forces this flip on 2026-06-02; opting in early surfaces any Node-24
+  # incompatibility in CI now instead of breaking prod on the cutover day.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   lint:
