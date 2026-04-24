@@ -839,7 +839,11 @@ before each `git commit`. Green here ≈ green in CI.
 One-time setup per machine:
 
 ```bash
-uv sync --extra dev          # installs pre-commit into .venv
+# `dev` brings in pre-commit itself; `lint` brings in ruff + mypy so the
+# hooks can resolve them from .venv. `cpu` (or `gpu` if you have a GPU)
+# picks the torch variant — pre-commit hooks run `uv run --no-sync` so
+# the binaries must already be installed, not re-resolved per invocation.
+uv sync --extra dev --extra lint --extra cpu
 uv run pre-commit install    # wires up .git/hooks/pre-commit
 ```
 
