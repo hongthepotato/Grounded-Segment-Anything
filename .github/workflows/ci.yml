@@ -136,14 +136,22 @@ jobs:
             f'Expected CPU torch wheel, got {torch.__version__}'; \
             print(f'OK: torch {torch.__version__}')"
 
+      # COVERAGE_FILE writes pytest-cov's combined data file straight to the
+      # artifact name — removes the post-pytest `mv .coverage .coverage.unit`
+      # step and its "did the mv succeed?" ambiguity. The `ls` after the run
+      # is a diagnostic trail: if the artifact step ever fails with "no
+      # files", the ls output shows whether pytest-cov wrote anything at all.
       - name: Run unit tests
+        env:
+          COVERAGE_FILE: .coverage.unit
         run: |
           uv run --extra test --extra cpu pytest tests/unit \
             -m "not gpu and not slow" \
             -n 4 --dist=loadscope \
             --cov=core --cov=ml_engine --cov=augmentation --cov=api \
             --cov-report=
-          mv .coverage .coverage.unit
+          echo "=== coverage files on disk ==="
+          ls -la .coverage* || echo "(no .coverage* files)"
 
       - name: Upload unit coverage artifact
         uses: actions/upload-artifact@v4
@@ -190,13 +198,16 @@ jobs:
             print(f'OK: torch {torch.__version__}')"
 
       - name: Run integration + contract tests
+        env:
+          COVERAGE_FILE: .coverage.contract
         run: |
           uv run --extra test --extra cpu pytest tests/integration tests/contract \
             -m "not gpu and not slow" \
             -n 4 --dist=loadscope \
             --cov=core --cov=ml_engine --cov=augmentation --cov=api \
             --cov-report=
-          mv .coverage .coverage.contract
+          echo "=== coverage files on disk ==="
+          ls -la .coverage* || echo "(no .coverage* files)"
 
       - name: Upload contract coverage artifact
         uses: actions/upload-artifact@v4
