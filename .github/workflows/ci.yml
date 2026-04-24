@@ -30,24 +30,20 @@ env:
   # Initial value is 0 so the first green run measures actual coverage; commit
   # that value in a follow-up PR to start the ratchet.
   COVERAGE_MIN: "0"
-  # Opt into Node 24 runtime for actions/* and astral-sh/setup-uv. GitHub
-  # forces this flip on 2026-06-02; opting in early surfaces any Node-24
-  # incompatibility in CI now instead of breaking prod on the cutover day.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # Install system Python 3.10 first. pyproject.toml sets
       # `python-preference = "only-system"` so uv won't download a managed
       # Python. GitHub runners don't ship 3.10 by default.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -101,14 +97,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # Install system Python 3.10 first. pyproject.toml sets
       # `python-preference = "only-system"` so uv won't download a managed
       # Python. GitHub runners don't ship 3.10 by default.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -116,7 +112,7 @@ jobs:
       # Cache the compiled GroundingDINO .so (editable install → .so lands
       # in-tree). Key on sources that determine the build output.
       - name: Cache GroundingDINO compiled extension
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: GroundingDINO/**/*.so
           key: gdino-${{ runner.os }}-py3.10-${{ hashFiles('uv.lock', 'GroundingDINO/setup.py', 'GroundingDINO/groundingdino/models/GroundingDINO/csrc/**') }}
@@ -158,11 +154,11 @@ jobs:
           ls -la .coverage* || echo "(no .coverage* files)"
 
       # include-hidden-files: required because .coverage.unit starts with a
-      # dot and actions/upload-artifact@v4 defaults to skipping dotfiles.
+      # dot and actions/upload-artifact@v7 defaults to skipping dotfiles.
       # Without this flag, the ls above shows the file exists but upload
       # fails with "No files were found with the provided path".
       - name: Upload unit coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-unit
           path: .coverage.unit
@@ -174,20 +170,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # Install system Python 3.10 first. pyproject.toml sets
       # `python-preference = "only-system"` so uv won't download a managed
       # Python. GitHub runners don't ship 3.10 by default.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
       - name: Cache GroundingDINO compiled extension
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: GroundingDINO/**/*.so
           key: gdino-${{ runner.os }}-py3.10-${{ hashFiles('uv.lock', 'GroundingDINO/setup.py', 'GroundingDINO/groundingdino/models/GroundingDINO/csrc/**') }}
@@ -219,7 +215,7 @@ jobs:
           ls -la .coverage* || echo "(no .coverage* files)"
 
       - name: Upload contract coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-contract
           path: .coverage.contract
@@ -235,15 +231,15 @@ jobs:
       contents: read
       # id-token: write  # uncomment when Codecov OIDC is enabled
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Need base branch to run the monotonicity guard.
           fetch-depth: 0
       # See rationale above — uv needs system Python 3.10.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -253,11 +249,11 @@ jobs:
         run: uv pip install --system coverage
 
       - name: Download unit coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage-unit
       - name: Download contract coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: coverage-contract
 
@@ -297,7 +293,7 @@ jobs:
         run: coverage xml -o coverage.xml
 
       - name: Upload combined coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-combined
           path: coverage.xml

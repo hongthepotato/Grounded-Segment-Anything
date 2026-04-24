@@ -12,12 +12,6 @@ on:
 permissions:
   contents: read
 
-# Opt into Node 24 runtime for actions/* and astral-sh/setup-uv. GitHub
-# forces this flip on 2026-06-02; opting in early surfaces any Node-24
-# incompatibility in CI now instead of breaking prod on the cutover day.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   slow-tests:
     runs-on: ubuntu-24.04
@@ -27,13 +21,13 @@ jobs:
       FORCE_CUDA: "0"
       TORCH_CUDA_ARCH_LIST: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # pyproject.toml's `python-preference = "only-system"` means uv won't
       # download a managed Python; GitHub runners don't ship 3.10 by default.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -58,7 +52,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Amendment #15: free disk space unconditionally. The math (14GB free -
       # 7GB CUDA image - 2GB torch wheels - build intermediates) routinely
@@ -70,14 +64,14 @@ jobs:
           df -h /
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Build only the `builder` target. Exercises the real GroundingDINO
       # CUDA extension compile (setup.py detects the CUDA toolkit from the
       # nvidia/cuda base image and compiles .cu files for TORCH_CUDA_ARCH_LIST).
       # No GPU is used — the runner has none; the toolkit is just files.
       - name: Build builder target
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: builder
