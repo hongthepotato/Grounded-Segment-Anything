@@ -1,0 +1,115 @@
+# Dependabot — automated dependency update PRs.
+#
+# Two ecosystems monitored:
+#   1. `uv`             → Python deps via pyproject.toml + uv.lock
+#   2. `github-actions` → workflow action version pins
+#
+# Every Dependabot PR is auto-run by the `lint + unit + contract +
+# coverage-gate` CI pipeline. Green means the bump doesn't break anything we
+# test. Red means it does, and we catch it here instead of on main.
+#
+# Scheduled for Monday 06:00 UTC — PRs land before the workweek starts.
+#
+# Security-flavored updates (known CVEs from the GitHub Advisory Database)
+# bypass the weekly schedule and fire immediately, labeled `security`. That
+# system is separate and always-on; not configured in this file.
+
+version: 2
+updates:
+
+  # =======================================================================
+  # Python dependencies — tracked via pyproject.toml + uv.lock
+  # =======================================================================
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "python"
+    # Request review on every PR so your inbox guaranteed sees it, regardless
+    # of general watch settings.
+    reviewers:
+      - "hongthepotato"
+    groups:
+      # Fold all minor + patch bumps into one PR per week. Major bumps still
+      # get their own PR so the breaking-change surface is reviewable in
+      # isolation.
+      python-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # --- Editable path installs, not PyPI packages ---
+      # groundingdino and segment-anything live on-disk via [tool.uv.sources]
+      # `path = "..."` entries; Dependabot can't produce update PRs for them.
+      - dependency-name: "groundingdino"
+      - dependency-name: "segment-anything"
+
+      # --- Torch ecosystem: block major bumps only ---
+      # Major torch bumps (2.x -> 3.x) commonly require coordinated changes
+      # to CUDA toolkit version, [tool.uv.sources] index URL, Docker base
+      # image, and TORCH_CUDA_ARCH_LIST — none of which Dependabot can
+      # reason about in a single PR. Minor + patch bumps usually respect our
+      # torch 2.6.0 + cu124 pins and often carry security fixes; let those
+      # through and trust CI to catch any resolver conflicts (red PR = don't
+      # merge).
+      #
+      # Same policy applied to the transitive torch-ecosystem packages below:
+      # their major bumps routinely tighten torch version floors above what
+      # we pin, which would produce unresolvable Dependabot PRs. Minor +
+      # patch bumps historically respect the torch pin.
+      - dependency-name: "torch"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "torchvision"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "transformers"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "peft"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "timm"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "torchmetrics"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "ultralytics"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "accelerate"
+        update-types: ["version-update:semver-major"]
+
+  # =======================================================================
+  # GitHub Actions — workflow action pins in .github/workflows/*.yml
+  # =======================================================================
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    reviewers:
+      - "hongthepotato"
+    groups:
+      # Group minor + patch updates across all actions into one weekly PR.
+      # Major bumps (e.g., checkout@v6 → v7) stay as separate PRs because
+      # they occasionally have breaking changes.
+      actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
