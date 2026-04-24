@@ -7,30 +7,20 @@ on:
     branches: [main, agentic]
 
 # Cancel superseded runs on PR branches; never cancel runs on protected branches.
-# Rationale: amendment #6 — losing signal on a main-branch run that got cancelled
+# Rationale: losing signal on a main-branch run that got cancelled
 # mid-flight is worse than burning extra minutes.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/agentic' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Least-privilege. id-token:write only for coverage-gate (Codecov OIDC).
 permissions:
   contents: read
 
-# Shared env. Torch variant is now selected via pyproject.toml's conditional
-# [tool.uv.sources] entries and the mutually-exclusive `cpu`/`gpu` extras —
-# see the Install test deps step in each job. FORCE_CUDA + empty arch list
-# stay set as defense in depth so GroundingDINO's setup.py takes the
-# no-CUDA branch even if the host somehow has nvcc on PATH.
 env:
-  FORCE_CUDA: "0"
+  FORCE_CUDA: "0" # disable GPU
   TORCH_CUDA_ARCH_LIST: ""
-  # Coverage floor — ratchets up over time via PR edits. See amendment #13 for
-  # the monotonicity guard that prevents this from being lowered silently.
-  # First green run measured 52% combined unit+contract coverage; seeded at 50
-  # to leave 2pp of headroom for transient noise (flaky test skips, rounding).
-  # Raise this via PR each time real coverage grows; target 70% over 4-8 weeks.
-  COVERAGE_MIN: "50"
+  COVERAGE_MIN: "50" # Coverage floor
 
 jobs:
   lint:
@@ -71,13 +61,6 @@ jobs:
             --no-install-package groundingdino \
             --no-install-package segment-anything
 
-      # Ruff + mypy are both on a ramp-up period. The project has a large
-      # pre-existing lint baseline (3593 ruff findings at PR time, mostly
-      # trivial: trailing whitespace, unsorted imports, long lines).
-      # continue-on-error keeps the JOB passing while cleanup PRs reduce the
-      # baseline. Remove continue-on-error after the baseline reaches zero —
-      # tracked in TODOS.md.
-      #
       # --no-sync is load-bearing for this job: the install step above
       # deliberately skips torch/torchvision/groundingdino/segment-anything
       # via --no-install-package to keep the lint job fast on cold cache.
@@ -102,9 +85,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      # Install system Python 3.10 first. pyproject.toml sets
-      # `python-preference = "only-system"` so uv won't download a managed
-      # Python. GitHub runners don't ship 3.10 by default.
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.10"
@@ -140,11 +121,6 @@ jobs:
             f'Expected CPU torch wheel, got {torch.__version__}'; \
             print(f'OK: torch {torch.__version__}')"
 
-      # COVERAGE_FILE writes pytest-cov's combined data file straight to the
-      # artifact name — removes the post-pytest `mv .coverage .coverage.unit`
-      # step and its "did the mv succeed?" ambiguity. The `ls` after the run
-      # is a diagnostic trail: if the artifact step ever fails with "no
-      # files", the ls output shows whether pytest-cov wrote anything at all.
       - name: Run unit tests
         env:
           COVERAGE_FILE: .coverage.unit
@@ -159,8 +135,6 @@ jobs:
 
       # include-hidden-files: required because .coverage.unit starts with a
       # dot and actions/upload-artifact@v7 defaults to skipping dotfiles.
-      # Without this flag, the ls above shows the file exists but upload
-      # fails with "No files were found with the provided path".
       - name: Upload unit coverage artifact
         uses: actions/upload-artifact@v7
         with:
@@ -175,9 +149,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      # Install system Python 3.10 first. pyproject.toml sets
-      # `python-preference = "only-system"` so uv won't download a managed
-      # Python. GitHub runners don't ship 3.10 by default.
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.10"

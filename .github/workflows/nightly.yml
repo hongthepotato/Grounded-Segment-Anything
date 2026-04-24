@@ -54,10 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Amendment #15: free disk space unconditionally. The math (14GB free -
-      # 7GB CUDA image - 2GB torch wheels - build intermediates) routinely
-      # goes <1GB, so we can't rely on "add cleanup if disk becomes a
-      # problem." ~10GB freed.
+      # Free disk space unconditionally.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
