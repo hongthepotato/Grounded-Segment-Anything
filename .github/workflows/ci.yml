@@ -76,21 +76,24 @@ jobs:
       # continue-on-error keeps the JOB passing while cleanup PRs reduce the
       # baseline. Remove continue-on-error after the baseline reaches zero —
       # tracked in TODOS.md.
-      # --extra cpu on every `uv run` is load-bearing: uv run implicitly
-      # re-syncs to match the requested extras, and without a selection uv
-      # falls back to the default resolution (cu124 on linux) which triggers
-      # a ~2GB reinstall + fails the +cpu assertion in unit/contract. Pattern
-      # matches uv's PyTorch guide for conflicting-extras setups.
+      #
+      # --no-sync is load-bearing for this job: the install step above
+      # deliberately skips torch/torchvision/groundingdino/segment-anything
+      # via --no-install-package to keep the lint job fast on cold cache.
+      # If we let `uv run` re-sync, it drops those skip flags, tries to
+      # install groundingdino, fails the metadata build (groundingdino's
+      # setup.py `import torch` before torch is installed). --no-sync
+      # trusts the environment the install step produced.
       - name: ruff check
-        run: uv run --extra lint --extra cpu ruff check .
+        run: uv run --no-sync ruff check .
         continue-on-error: true
 
       - name: ruff format check
-        run: uv run --extra lint --extra cpu ruff format --check .
+        run: uv run --no-sync ruff format --check .
         continue-on-error: true
 
       - name: mypy
-        run: uv run --extra lint --extra cpu mypy core ml_engine api --ignore-missing-imports
+        run: uv run --no-sync mypy core ml_engine api --ignore-missing-imports
         continue-on-error: true
 
   unit:
