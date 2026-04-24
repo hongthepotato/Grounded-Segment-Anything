@@ -153,11 +153,16 @@ jobs:
           echo "=== coverage files on disk ==="
           ls -la .coverage* || echo "(no .coverage* files)"
 
+      # include-hidden-files: required because .coverage.unit starts with a
+      # dot and actions/upload-artifact@v4 defaults to skipping dotfiles.
+      # Without this flag, the ls above shows the file exists but upload
+      # fails with "No files were found with the provided path".
       - name: Upload unit coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage-unit
           path: .coverage.unit
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -214,6 +219,7 @@ jobs:
         with:
           name: coverage-contract
           path: .coverage.contract
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
