@@ -39,6 +39,8 @@ env/
 !README.md
 !**/README.md
 !configs/agent/skills/*.md
+!TODOS.md
+!CLAUDE.md
 
 # Jupyter Notebook
 .ipynb_checkpoints
