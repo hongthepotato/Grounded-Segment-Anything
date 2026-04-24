@@ -38,9 +38,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "safetensors" },
     { name = "torch", version = "2.6.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torch", version = "2.6.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4a/8e/ac2a9566747a93f8be36ee08532eb0160558b07630a081a6056a9f89bf1d/accelerate-1.12.0.tar.gz", hash = "sha256:70988c352feb481887077d2ab845125024b2a137a5090d6d7a32b57d03a45df6", size = 398399, upload-time = "2025-11-21T11:27:46.973Z" }
 wheels = [
@@ -164,6 +164,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/af/2d/7bf41579a8986e348fa033a31cdd0e4121114f6bce2457e8876010b092dd/certifi-2026.2.25.tar.gz", hash = "sha256:e887ab5cee78ea814d3472169153c2d12cd43b14bd03329a39a9c6e2e80bfba7", size = 155029, upload-time = "2026-02-25T02:54:17.342Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9a/3c/c17fb3ca2d9c3acff52e30b309f538586f9f5b9c9cf454f3845fc9af4881/certifi-2026.2.25-py3-none-any.whl", hash = "sha256:027692e4402ad994f1c42e52a4997a9763c646b73e4096e4d5d6db8af1d6f0fa", size = 153684, upload-time = "2026-02-25T02:54:15.766Z" },
+]
+
+[[package]]
+name = "cfgv"
+version = "3.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/b5/721b8799b04bf9afe054a3899c6cf4e880fcf8563cc71c15610242490a0c/cfgv-3.5.0.tar.gz", hash = "sha256:d5b1034354820651caa73ede66a6294d6e95c1b00acc5e9b098e917404669132", size = 7334, upload-time = "2025-11-19T20:55:51.612Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/3c/33bac158f8ab7f89b2e59426d5fe2e4f63f7ed25df84c036890172b412b5/cfgv-3.5.0-py2.py3-none-any.whl", hash = "sha256:a8dc6b26ad22ff227d2634a65cb388215ce6cc96bbcc5cfde7641ae87e8dacc0", size = 7445, upload-time = "2025-11-19T20:55:50.744Z" },
 ]
 
 [[package]]
@@ -305,6 +314,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124974bfe172b4daf3c984ebd9c2a06e2b8a4dc7331c72/defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69", size = 75520, upload-time = "2021-03-08T10:59:26.269Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
+]
+
+[[package]]
+name = "distlib"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/8e/709914eb2b5749865801041647dc7f4e6d00b549cfe88b65ca192995f07c/distlib-0.4.0.tar.gz", hash = "sha256:feec40075be03a04501a973d81f633735b4b69f98b05450592310c0f401a4e0d", size = 614605, upload-time = "2025-07-17T16:52:00.465Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/6b/e0547afaf41bf2c42e52430072fa5658766e3d65bd4b03a563d1b6336f57/distlib-0.4.0-py2.py3-none-any.whl", hash = "sha256:9659f7d87e46584a30b5780e43ac7a2143098441670ff0a49d5f9034c54a6c16", size = 469047, upload-time = "2025-07-17T16:51:58.613Z" },
 ]
 
 [[package]]
@@ -460,14 +478,14 @@ dependencies = [
     { name = "termcolor" },
     { name = "timm" },
     { name = "torch", version = "2.6.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torch", version = "2.6.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torchmetrics" },
     { name = "torchvision", version = "0.21.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (platform_machine != 'aarch64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torchvision", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torchvision", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torchvision", version = "0.21.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torchvision", version = "0.21.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torchvision", version = "0.21.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "tqdm" },
     { name = "transformers" },
     { name = "ultralytics" },
@@ -485,10 +503,13 @@ cpu = [
 ]
 dev = [
     { name = "debugpy" },
+    { name = "pre-commit" },
 ]
 gpu = [
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" } },
-    { name = "torchvision", version = "0.21.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" } },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torchvision", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torchvision", version = "0.21.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 lint = [
     { name = "mypy" },
@@ -533,6 +554,7 @@ requires-dist = [
     { name = "opencv-python", specifier = ">=4.10.0" },
     { name = "peft", specifier = ">=0.18.0" },
     { name = "pillow", specifier = ">=11.0.0" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
     { name = "pycocotools", specifier = ">=2.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.4.0" },
@@ -705,6 +727,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/e1/ef365ff480903b929d28e057f57b76cae51a30375943e33374ec9a165d9c/hypothesis-6.151.9.tar.gz", hash = "sha256:2f284428dda6c3c48c580de0e18470ff9c7f5ef628a647ee8002f38c3f9097ca", size = 463534, upload-time = "2026-02-16T22:59:23.09Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/f7/5cc291d701094754a1d327b44d80a44971e13962881d9a400235726171da/hypothesis-6.151.9-py3-none-any.whl", hash = "sha256:7b7220585c67759b1b1ef839b1e6e9e3d82ed468cfc1ece43c67184848d7edd9", size = 529307, upload-time = "2026-02-16T22:59:20.443Z" },
+]
+
+[[package]]
+name = "identify"
+version = "2.6.19"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/63/51723b5f116cc04b061cb6f5a561790abf249d25931d515cd375e063e0f4/identify-2.6.19.tar.gz", hash = "sha256:6be5020c38fcb07da56c53733538a3081ea5aa70d36a156f83044bfbf9173842", size = 99567, upload-time = "2026-04-17T18:39:50.265Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/84/d9273cd09688070a6523c4aee4663a8538721b2b755c4962aafae0011e72/identify-2.6.19-py2.py3-none-any.whl", hash = "sha256:20e6a87f786f768c092a721ad107fc9df0eb89347be9396cadf3f4abbd1fb78a", size = 99397, upload-time = "2026-04-17T18:39:49.221Z" },
 ]
 
 [[package]]
@@ -970,6 +1001,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nodeenv"
+version = "1.10.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/bf/d1bda4f6168e0b2e9e5958945e01910052158313224ada5ce1fb2e1113b8/nodeenv-1.10.0.tar.gz", hash = "sha256:996c191ad80897d076bdfba80a41994c2b47c68e224c542b48feba42ba00f8bb", size = 55611, upload-time = "2025-12-20T14:08:54.006Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/b2/d0896bdcdc8d28a7fc5717c305f1a861c26e18c05047949fb371034d98bd/nodeenv-1.10.0-py2.py3-none-any.whl", hash = "sha256:5bb13e3eed2923615535339b3c620e76779af4cb4c6a90deccc9e36b274d3827", size = 23438, upload-time = "2025-12-20T14:08:52.782Z" },
+]
+
+[[package]]
 name = "numpy"
 version = "2.2.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1036,7 +1076,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.1.0.70"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "nvidia-cublas-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9f/fd/713452cd72343f682b1c7b9321e23829f00b842ceaedcda96e742ea0b0b3/nvidia_cudnn_cu12-9.1.0.70-py3-none-manylinux2014_x86_64.whl", hash = "sha256:165764f44ef8c61fcdfdfdbe769d687e06374059fbb388b6c89ecb0e28793a6f", size = 664752741, upload-time = "2024-04-22T15:24:15.253Z" },
@@ -1048,7 +1088,7 @@ name = "nvidia-cufft-cu12"
 version = "11.2.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7a/8a/0e728f749baca3fbeffad762738276e5df60851958be7783af121a7221e7/nvidia_cufft_cu12-11.2.1.3-py3-none-manylinux2014_aarch64.whl", hash = "sha256:5dad8008fc7f92f5ddfa2101430917ce2ffacd86824914c82e28990ad7f00399", size = 211422548, upload-time = "2024-06-18T19:33:39.396Z" },
@@ -1071,9 +1111,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.6.1.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "nvidia-cusparse-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "nvidia-cublas-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "nvidia-cusparse-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/46/6b/a5c33cf16af09166845345275c34ad2190944bcc6026797a39f8e0a282e0/nvidia_cusolver_cu12-11.6.1.9-py3-none-manylinux2014_aarch64.whl", hash = "sha256:d338f155f174f90724bbde3758b7ac375a70ce8e706d70b018dd3375545fc84e", size = 127634111, upload-time = "2024-06-18T19:35:01.793Z" },
@@ -1086,7 +1126,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.3.1.170"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/96/a9/c0d2f83a53d40a4a41be14cea6a0bf9e668ffcf8b004bd65633f433050c0/nvidia_cusparse_cu12-12.3.1.170-py3-none-manylinux2014_aarch64.whl", hash = "sha256:9d32f62896231ebe0480efd8a7f702e143c98cfaa0e8a76df3386c1ba2b54df3", size = 207381987, upload-time = "2024-06-18T19:35:32.989Z" },
@@ -1260,9 +1300,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "safetensors" },
     { name = "torch", version = "2.6.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torch", version = "2.6.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "tqdm" },
     { name = "transformers" },
 ]
@@ -1334,6 +1374,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/f3/b2a5e720cc56eaa38b4518e63aa577b4bbd60e8b05a00fe43ca051be5879/polars_runtime_32-1.38.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:61e8d73c614b46a00d2f853625a7569a2e4a0999333e876354ac81d1bf1bb5e2", size = 45336615, upload-time = "2026-02-06T18:12:14.074Z" },
     { url = "https://files.pythonhosted.org/packages/f1/8d/ee2e4b7de948090cfb3df37d401c521233daf97bfc54ddec5d61d1d31618/polars_runtime_32-1.38.1-cp310-abi3-win_amd64.whl", hash = "sha256:08c2b3b93509c1141ac97891294ff5c5b0c548a373f583eaaea873a4bf506437", size = 45680732, upload-time = "2026-02-06T18:12:19.097Z" },
     { url = "https://files.pythonhosted.org/packages/bf/18/72c216f4ab0c82b907009668f79183ae029116ff0dd245d56ef58aac48e7/polars_runtime_32-1.38.1-cp310-abi3-win_arm64.whl", hash = "sha256:6d07d0cc832bfe4fb54b6e04218c2c27afcfa6b9498f9f6bbf262a00d58cc7c4", size = 41639413, upload-time = "2026-02-06T18:12:22.044Z" },
+]
+
+[[package]]
+name = "pre-commit"
+version = "4.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cfgv" },
+    { name = "identify" },
+    { name = "nodeenv" },
+    { name = "pyyaml" },
+    { name = "virtualenv" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8e/22/2de9408ac81acbb8a7d05d4cc064a152ccf33b3d480ebe0cd292153db239/pre_commit-4.6.0.tar.gz", hash = "sha256:718d2208cef53fdc38206e40524a6d4d9576d103eb16f0fec11c875e7716e9d9", size = 198525, upload-time = "2026-04-21T20:31:41.613Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/80/6e/4b28b62ecb6aae56769c34a8ff1d661473ec1e9519e2d5f8b2c150086b26/pre_commit-4.6.0-py2.py3-none-any.whl", hash = "sha256:e2cf246f7299edcabcf15f9b0571fdce06058527f0a06535068a86d38089f29b", size = 226472, upload-time = "2026-04-21T20:31:40.092Z" },
 ]
 
 [[package]]
@@ -1568,6 +1624,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
+]
+
+[[package]]
+name = "python-discovery"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "filelock" },
+    { name = "platformdirs" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/de/ef/3bae0e537cfe91e8431efcba4434463d2c5a65f5a89edd47c6cf2f03c55f/python_discovery-1.2.2.tar.gz", hash = "sha256:876e9c57139eb757cb5878cbdd9ae5379e5d96266c99ef731119e04fffe533bb", size = 58872, upload-time = "2026-04-07T17:28:49.249Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/db/795879cc3ddfe338599bddea6388cc5100b088db0a4caf6e6c1af1c27e04/python_discovery-1.2.2-py3-none-any.whl", hash = "sha256:e1ae95d9af875e78f15e19aed0c6137ab1bb49c200f21f5061786490c9585c7a", size = 31894, upload-time = "2026-04-07T17:28:48.09Z" },
 ]
 
 [[package]]
@@ -1936,13 +2005,13 @@ dependencies = [
     { name = "pyyaml" },
     { name = "safetensors" },
     { name = "torch", version = "2.6.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torch", version = "2.6.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torchvision", version = "0.21.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (platform_machine != 'aarch64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torchvision", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torchvision", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torchvision", version = "0.21.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torchvision", version = "0.21.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torchvision", version = "0.21.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d7/2c/593109822fe735e637382aca6640c1102c19797f7791f1fd1dab2d6c3cb1/timm-1.0.25.tar.gz", hash = "sha256:47f59fc2754725735cc81bb83bcbfce5bec4ebd5d4bb9e69da57daa92fcfa768", size = 2414743, upload-time = "2026-02-23T16:49:00.137Z" }
 wheels = [
@@ -2012,14 +2081,16 @@ name = "torch"
 version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "sys_platform == 'win32'",
-    "sys_platform != 'win32'",
+    "sys_platform == 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu'",
+    "sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu'",
+    "sys_platform == 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu'",
+    "sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu'",
 ]
 dependencies = [
-    { name = "filelock", marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "fsspec", marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "jinja2", marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "networkx", marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "filelock", marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "fsspec", marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "jinja2", marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "networkx", marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-cuda-cupti-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-cuda-nvrtc-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
@@ -2033,9 +2104,9 @@ dependencies = [
     { name = "nvidia-nccl-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-nvtx-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "sympy", marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "sympy", marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "triton", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "typing-extensions", marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "typing-extensions", marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/37/81/aa9ab58ec10264c1abe62c8b73f5086c3c558885d6beecebf699f0dbeaeb/torch-2.6.0-cp310-cp310-manylinux1_x86_64.whl", hash = "sha256:6860df13d9911ac158f4c44031609700e1eba07916fff62e21e6ffa0a9e01961", size = 766685561, upload-time = "2025-01-29T16:19:12.12Z" },
@@ -2073,14 +2144,12 @@ version = "2.6.0+cu124"
 source = { registry = "https://download.pytorch.org/whl/cu124" }
 resolution-markers = [
     "sys_platform == 'linux'",
-    "sys_platform == 'win32'",
-    "sys_platform != 'linux' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "filelock", marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
-    { name = "fsspec", marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
-    { name = "jinja2", marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
-    { name = "networkx", marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "filelock", marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "fsspec", marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "jinja2", marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "networkx", marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_machine != 'x86_64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-cuda-cupti-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_machine != 'x86_64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-cuda-nvrtc-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_machine != 'x86_64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
@@ -2094,9 +2163,9 @@ dependencies = [
     { name = "nvidia-nccl-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_machine != 'x86_64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_machine != 'x86_64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "nvidia-nvtx-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_machine != 'x86_64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "sympy", marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "sympy", marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "triton", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_machine != 'x86_64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "typing-extensions", marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "typing-extensions", marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu124/torch-2.6.0%2Bcu124-cp310-cp310-linux_x86_64.whl", hash = "sha256:7f2ba7f7c0459320a521696f6b5bccc187f59890b23c9dfb6c49b0b87c6bfc97", upload-time = "2025-01-30T00:53:02Z" },
@@ -2112,9 +2181,9 @@ dependencies = [
     { name = "numpy" },
     { name = "packaging" },
     { name = "torch", version = "2.6.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torch", version = "2.6.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/85/2e/48a887a59ecc4a10ce9e8b35b3e3c5cef29d902c4eac143378526e7485cb/torchmetrics-1.8.2.tar.gz", hash = "sha256:cf64a901036bf107f17a524009eea7781c9c5315d130713aeca5747a686fe7a5", size = 580679, upload-time = "2025-09-03T14:00:54.077Z" }
 wheels = [
@@ -2145,13 +2214,15 @@ name = "torchvision"
 version = "0.21.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "sys_platform == 'win32'",
-    "sys_platform != 'win32'",
+    "sys_platform == 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu'",
+    "sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu'",
+    "sys_platform == 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu'",
+    "sys_platform != 'win32' and extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu'",
 ]
 dependencies = [
-    { name = "numpy", marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "pillow", marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "numpy", marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "pillow", marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/20/72eb0b5b08fa293f20fc41c374e37cf899f0033076f0144d2cdc48f9faee/torchvision-0.21.0-1-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:5568c5a1ff1b2ec33127b629403adb530fab81378d9018ca4ed6508293f76e2b", size = 2327643, upload-time = "2025-03-18T17:25:51.165Z" },
@@ -2185,13 +2256,11 @@ version = "0.21.0+cu124"
 source = { registry = "https://download.pytorch.org/whl/cu124" }
 resolution-markers = [
     "sys_platform == 'linux'",
-    "sys_platform == 'win32'",
-    "sys_platform != 'linux' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "numpy", marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
-    { name = "pillow", marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "numpy", marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "pillow", marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu124/torchvision-0.21.0%2Bcu124-cp310-cp310-linux_x86_64.whl", hash = "sha256:3d3e74018eaa7837c73e3764dad3b7792b7544401c25a42977e9744303731bd3", upload-time = "2025-01-30T01:04:28Z" },
@@ -2284,13 +2353,13 @@ dependencies = [
     { name = "requests" },
     { name = "scipy" },
     { name = "torch", version = "2.6.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torch", version = "2.6.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torchvision", version = "0.21.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (platform_machine != 'aarch64' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (platform_python_implementation != 'CPython' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torchvision", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torchvision", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torchvision", version = "0.21.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (platform_python_implementation != 'CPython' and sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform != 'darwin' and sys_platform != 'linux' and extra == 'extra-25-grounded-segment-anything-cpu') or (sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torchvision", version = "0.21.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torchvision", version = "0.21.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
     { name = "ultralytics-thop" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/12/93/c1136865ed59be3e87d333c095e7ab91e0c428f42429a3f8560b1661c3db/ultralytics-8.4.19.tar.gz", hash = "sha256:e4bb5abf58e54fcb2c36fe37a6b12ab96b73de766692f24e53b69f1fa8987eb3", size = 1017018, upload-time = "2026-02-28T12:57:51.132Z" }
@@ -2305,9 +2374,9 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "torch", version = "2.6.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
+    { name = "torch", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and extra != 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra != 'extra-25-grounded-segment-anything-cpu' and extra != 'extra-25-grounded-segment-anything-gpu')" },
     { name = "torch", version = "2.6.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-25-grounded-segment-anything-cpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
-    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "extra == 'extra-25-grounded-segment-anything-gpu'" },
+    { name = "torch", version = "2.6.0+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(sys_platform == 'linux' and extra == 'extra-25-grounded-segment-anything-gpu') or (extra == 'extra-25-grounded-segment-anything-cpu' and extra == 'extra-25-grounded-segment-anything-gpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1f/63/21a32e1facfeee245dbdfb7b4669faf7a36ff7c00b50987932bdab126f4b/ultralytics_thop-2.0.18.tar.gz", hash = "sha256:21103bcd39cc9928477dc3d9374561749b66a1781b35f46256c8d8c4ac01d9cf", size = 34557, upload-time = "2025-10-29T16:58:13.526Z" }
 wheels = [
@@ -2360,6 +2429,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/f6/21657bb3beb5f8c57ce8be3b83f653dd7933c2fd00545ed1b092d464799a/uvloop-0.22.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:481c990a7abe2c6f4fc3d98781cc9426ebd7f03a9aaa7eb03d3bfc68ac2a46bd", size = 3700133, upload-time = "2025-10-16T22:16:16.272Z" },
     { url = "https://files.pythonhosted.org/packages/09/e0/604f61d004ded805f24974c87ddd8374ef675644f476f01f1df90e4cdf72/uvloop-0.22.1-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:a592b043a47ad17911add5fbd087c76716d7c9ccc1d64ec9249ceafd735f03c2", size = 3512681, upload-time = "2025-10-16T22:16:18.07Z" },
     { url = "https://files.pythonhosted.org/packages/bb/ce/8491fd370b0230deb5eac69c7aae35b3be527e25a911c0acdffb922dc1cd/uvloop-0.22.1-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:1489cf791aa7b6e8c8be1c5a080bae3a672791fcb4e9e12249b05862a2ca9cec", size = 3615261, upload-time = "2025-10-16T22:16:19.596Z" },
+]
+
+[[package]]
+name = "virtualenv"
+version = "21.2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "distlib" },
+    { name = "filelock" },
+    { name = "platformdirs" },
+    { name = "python-discovery" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/98/3a7e644e19cb26133488caff231be390579860bbbb3da35913c49a1d0a46/virtualenv-21.2.4.tar.gz", hash = "sha256:b294ef68192638004d72524ce7ef303e9d0cf5a44c95ce2e54a7500a6381cada", size = 5850742, upload-time = "2026-04-14T22:15:31.438Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/8d/edd0bd910ff803c308ee9a6b7778621af0d10252219ad9f19ef4d4982a61/virtualenv-21.2.4-py3-none-any.whl", hash = "sha256:29d21e941795206138d0f22f4e45ff7050e5da6c6472299fb7103318763861ac", size = 5831232, upload-time = "2026-04-14T22:15:29.342Z" },
 ]
 
 [[package]]

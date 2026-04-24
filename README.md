@@ -831,6 +831,36 @@ make lint
 make coverage
 ```
 
+### Pre-commit hooks (sub-second feedback on every commit)
+
+Pre-commit runs the same lint tools as CI, but locally against staged files
+before each `git commit`. Green here ≈ green in CI.
+
+One-time setup per machine:
+
+```bash
+uv sync --extra dev          # installs pre-commit into .venv
+uv run pre-commit install    # wires up .git/hooks/pre-commit
+```
+
+After install, every `git commit` runs:
+- File hygiene: trailing whitespace, EOF newline, YAML/TOML validity, large
+  files, merge conflict markers, private key detection, stray `breakpoint()`
+- `ruff check` on staged `*.py` (no `--fix`; flags new violations only)
+- `ruff format --check` on staged `*.py`
+- `mypy` on staged files under `core/`, `ml_engine/`, `api/`
+
+Ad-hoc run against the whole repo (e.g., before opening a PR):
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Note: `ruff check --all-files` will report the ~3500-finding baseline.
+That's expected — baseline cleanup is tracked as a separate effort (see
+`TODOS.md`). Per-file cleanup happens naturally as pre-commit flags new
+violations when you touch a file.
+
 ### CI jobs (runs on every push + PR into main/agentic)
 
 1. **lint** (~2 min) — `ruff check`, `ruff format --check`, `mypy`. Skips heavy deps. Fails fast.
