@@ -27,9 +27,10 @@ env:
   TORCH_CUDA_ARCH_LIST: ""
   # Coverage floor — ratchets up over time via PR edits. See amendment #13 for
   # the monotonicity guard that prevents this from being lowered silently.
-  # Initial value is 0 so the first green run measures actual coverage; commit
-  # that value in a follow-up PR to start the ratchet.
-  COVERAGE_MIN: "0"
+  # First green run measured 52% combined unit+contract coverage; seeded at 50
+  # to leave 2pp of headroom for transient noise (flaky test skips, rounding).
+  # Raise this via PR each time real coverage grows; target 70% over 4-8 weeks.
+  COVERAGE_MIN: "50"
 
 jobs:
   lint:
