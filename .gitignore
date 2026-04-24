@@ -39,6 +39,8 @@ env/
 !README.md
 !**/README.md
 !configs/agent/skills/*.md
+!TODOS.md
+!CLAUDE.md
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -90,3 +92,12 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# Coverage tooling — don't commit test run artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# pytest
+.pytest_cache/

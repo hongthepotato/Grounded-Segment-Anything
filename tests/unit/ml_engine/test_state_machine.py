@@ -110,7 +110,9 @@ class TestTransition:
         await sm.transition("planning")
         assert await sm.current_state() == "planning"
 
-    ALL_POSSIBLE_PAIRS = [(src, dst) for src in STATES for dst in STATES]
+    # sorted() to make parametrize IDs deterministic across xdist workers.
+    # STATES is a set; iteration order is hash-randomized per process.
+    ALL_POSSIBLE_PAIRS = [(src, dst) for src in sorted(STATES) for dst in sorted(STATES)]
 
     @pytest.mark.parametrize("src,dst", ALL_POSSIBLE_PAIRS)
     @pytest.mark.asyncio
@@ -134,7 +136,7 @@ class TestTransition:
         with pytest.raises(ValueError, match="Unknown state"):
             await sm.transition("not_a_real_state")
 
-    ALL_STATES = list(STATES)
+    ALL_STATES = sorted(STATES)  # deterministic across xdist workers
 
     @pytest.mark.parametrize("terminal_state", ALL_STATES)
     @pytest.mark.asyncio
@@ -179,7 +181,7 @@ class TestTransition:
         data = await sm.load()
         assert json.loads(data["metadata"]) == {"note": "test"}
 
-    ALL_TERMINAL_PAIRS = [(src, dst) for src in TERMINAL_STATES for dst in STATES]
+    ALL_TERMINAL_PAIRS = [(src, dst) for src in sorted(TERMINAL_STATES) for dst in sorted(STATES)]
 
     @pytest.mark.parametrize("src, dst", ALL_TERMINAL_PAIRS)
     @pytest.mark.asyncio

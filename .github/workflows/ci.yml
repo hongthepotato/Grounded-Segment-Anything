@@ -1,0 +1,277 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, agentic]
+
+# Cancel superseded runs on PR branches; never cancel runs on protected branches.
+# Rationale: losing signal on a main-branch run that got cancelled
+# mid-flight is worse than burning extra minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Least-privilege. id-token:write only for coverage-gate (Codecov OIDC).
+permissions:
+  contents: read
+
+env:
+  FORCE_CUDA: "0" # disable GPU
+  TORCH_CUDA_ARCH_LIST: ""
+  COVERAGE_MIN: "50" # Coverage floor
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      # Install system Python 3.10 first. pyproject.toml sets
+      # `python-preference = "only-system"` so uv won't download a managed
+      # Python. GitHub runners don't ship 3.10 by default.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Note: we used to run `uv lock --locked` here to fail fast on
+      # pyproject.toml/uv.lock drift. But with the GroundingDINO editable
+      # install + `no-build-isolation-package = ["groundingdino"]`, the
+      # --locked check re-resolves the full graph which needs to build
+      # GroundingDINO's metadata, which imports torch at the top of its
+      # setup.py. Torch isn't installed yet → the step fails.
+      # Drift is still caught by `uv sync --frozen` in the unit/contract
+      # jobs; --frozen errors out if the lockfile disagrees with pyproject.
+      # Lint install: skip heavy deps so this job stays at ~2 min even on
+      # cold cache. Pick `--extra cpu` so the torch resolution (still in the
+      # graph via base deps) is unambiguous; --no-install-package flags
+      # then skip the actual wheel download + GroundingDINO build. The
+      # graph is resolved from uv.lock; skipping specific packages at
+      # install time is safe.
+      - name: Install lint deps only
+        run: |
+          uv sync --frozen --extra lint --extra cpu \
+            --no-install-package torch \
+            --no-install-package torchvision \
+            --no-install-package groundingdino \
+            --no-install-package segment-anything
+
+      # --no-sync is load-bearing for this job: the install step above
+      # deliberately skips torch/torchvision/groundingdino/segment-anything
+      # via --no-install-package to keep the lint job fast on cold cache.
+      # If we let `uv run` re-sync, it drops those skip flags, tries to
+      # install groundingdino, fails the metadata build (groundingdino's
+      # setup.py `import torch` before torch is installed). --no-sync
+      # trusts the environment the install step produced.
+      - name: ruff check
+        run: uv run --no-sync ruff check .
+        continue-on-error: true
+
+      - name: ruff format check
+        run: uv run --no-sync ruff format --check .
+        continue-on-error: true
+
+      - name: mypy
+        run: uv run --no-sync mypy core ml_engine api --ignore-missing-imports
+        continue-on-error: true
+
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Cache the compiled GroundingDINO .so (editable install → .so lands
+      # in-tree). Key on sources that determine the build output.
+      - name: Cache GroundingDINO compiled extension
+        uses: actions/cache@v5
+        with:
+          path: GroundingDINO/**/*.so
+          key: gdino-${{ runner.os }}-py3.10-${{ hashFiles('uv.lock', 'GroundingDINO/setup.py', 'GroundingDINO/groundingdino/models/GroundingDINO/csrc/**') }}
+          restore-keys: |
+            gdino-${{ runner.os }}-py3.10-
+
+      # --extra cpu selects CPU torch via [tool.uv.sources] + [tool.uv]
+      # conflicts in pyproject.toml. --extra gpu is for CUDA; developers
+      # use that locally and the Dockerfile builder pins it. CI stays CPU.
+      - name: Install test deps
+        run: uv sync --frozen --extra test --extra cpu
+
+      # Verify the --extra cpu selection actually routed torch to the CPU
+      # index. torch.cuda.is_available() is trivially False on CPU runners
+      # even if the 2GB CUDA wheel installed — must check the wheel tag in
+      # version. --extra cpu is required on every `uv run`; without it uv
+      # re-syncs to the default (cu124 on linux) and quietly reinstalls.
+      - name: Assert CPU torch wheel installed
+        run: |
+          uv run --extra test --extra cpu python -c "import torch; assert '+cpu' in torch.__version__, \
+            f'Expected CPU torch wheel, got {torch.__version__}'; \
+            print(f'OK: torch {torch.__version__}')"
+
+      - name: Run unit tests
+        env:
+          COVERAGE_FILE: .coverage.unit
+        run: |
+          uv run --extra test --extra cpu pytest tests/unit \
+            -m "not gpu and not slow" \
+            -n 4 --dist=loadscope \
+            --cov=core --cov=ml_engine --cov=augmentation --cov=api \
+            --cov-report=
+          echo "=== coverage files on disk ==="
+          ls -la .coverage* || echo "(no .coverage* files)"
+
+      # include-hidden-files: required because .coverage.unit starts with a
+      # dot and actions/upload-artifact@v7 defaults to skipping dotfiles.
+      - name: Upload unit coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-unit
+          path: .coverage.unit
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Cache GroundingDINO compiled extension
+        uses: actions/cache@v5
+        with:
+          path: GroundingDINO/**/*.so
+          key: gdino-${{ runner.os }}-py3.10-${{ hashFiles('uv.lock', 'GroundingDINO/setup.py', 'GroundingDINO/groundingdino/models/GroundingDINO/csrc/**') }}
+          restore-keys: |
+            gdino-${{ runner.os }}-py3.10-
+
+      # --extra cpu selects CPU torch via [tool.uv.sources] + [tool.uv]
+      # conflicts in pyproject.toml. --extra gpu is for CUDA; developers
+      # use that locally and the Dockerfile builder pins it. CI stays CPU.
+      - name: Install test deps
+        run: uv sync --frozen --extra test --extra cpu
+
+      - name: Assert CPU torch wheel installed
+        run: |
+          uv run --extra test --extra cpu python -c "import torch; assert '+cpu' in torch.__version__, \
+            f'Expected CPU torch wheel, got {torch.__version__}'; \
+            print(f'OK: torch {torch.__version__}')"
+
+      - name: Run integration + contract tests
+        env:
+          COVERAGE_FILE: .coverage.contract
+        run: |
+          uv run --extra test --extra cpu pytest tests/integration tests/contract \
+            -m "not gpu and not slow" \
+            -n 4 --dist=loadscope \
+            --cov=core --cov=ml_engine --cov=augmentation --cov=api \
+            --cov-report=
+          echo "=== coverage files on disk ==="
+          ls -la .coverage* || echo "(no .coverage* files)"
+
+      - name: Upload contract coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-contract
+          path: .coverage.contract
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage-gate:
+    needs: [unit, contract]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # id-token: write  # uncomment when Codecov OIDC is enabled
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need base branch to run the monotonicity guard.
+          fetch-depth: 0
+      # See rationale above — uv needs system Python 3.10.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Minimal install — just coverage tooling.
+      - name: Install coverage tool
+        run: uv pip install --system coverage
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-unit
+      - name: Download contract coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-contract
+
+      - name: Combine + report
+        run: |
+          coverage combine .coverage.unit .coverage.contract
+          coverage report --show-missing
+
+      # Monotonicity guard (amendment #13): COVERAGE_MIN must never decrease
+      # between commits. Prevents silent ratchet-downward via typo or rushed
+      # merge.
+      - name: Monotonicity guard — COVERAGE_MIN never decreases
+        run: |
+          NEW_MIN="${{ env.COVERAGE_MIN }}"
+          # Resolve the base branch for PRs, default to main for push events.
+          BASE_REF="${{ github.base_ref }}"
+          BASE_REF="${BASE_REF:-main}"
+          git fetch origin "${BASE_REF}" --depth=1
+          OLD_MIN=$(git show "origin/${BASE_REF}:.github/workflows/ci.yml" 2>/dev/null | \
+            awk -F'"' '/COVERAGE_MIN:/ {print $2; exit}' || echo "0")
+          OLD_MIN="${OLD_MIN:-0}"
+          echo "Base ${BASE_REF} COVERAGE_MIN: ${OLD_MIN}"
+          echo "This PR  COVERAGE_MIN: ${NEW_MIN}"
+          if awk -v n="$NEW_MIN" -v o="$OLD_MIN" 'BEGIN{exit !(n+0 < o+0)}'; then
+            echo "ERROR: COVERAGE_MIN decreased from ${OLD_MIN} to ${NEW_MIN}. Ratchet is monotonic non-decreasing."
+            exit 1
+          fi
+          echo "OK: COVERAGE_MIN is monotonic non-decreasing."
+
+      - name: Enforce coverage floor
+        run: |
+          coverage report --fail-under="${COVERAGE_MIN}"
+        env:
+          COVERAGE_MIN: ${{ env.COVERAGE_MIN }}
+
+      - name: Emit coverage XML for external tools
+        run: coverage xml -o coverage.xml
+
+      - name: Upload combined coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-combined
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 7

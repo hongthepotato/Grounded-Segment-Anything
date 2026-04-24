@@ -263,15 +263,24 @@ class ConfigurableAugmentationPipeline:
 
     def _validate_bboxes(self, bboxes: List[List[int]], image_h: int, image_w: int) -> None:
         """
-        Validate bboxes, check the type of the bboxes and the shape of the bboxes
+        Validate bboxes in COCO format [x, y, width, height].
+
+        Format rationale: real callers pass COCO-format bboxes (see
+        ml_engine/data/loaders.py:142 where ``bbox = ann['bbox']`` reads from
+        COCO annotations). The albumentations pipeline is also configured with
+        ``format='coco'`` (see _create_pipeline). Keeping the validator in the
+        same format prevents silent misinterpretation.
 
         Args:
             bboxes: List of bboxes (N, 4), typical N = 1
+                Each bbox is [x, y, w, h] where:
+                    x, y = top-left corner in pixels (both >= 0)
+                    w, h = width and height in pixels (both > 0)
                 [] is valid (no bboxes)
                 [[]] is invalid (malformed bbox)
             image_h: Image height
             image_w: Image width
-            
+
         Raises:
             TypeError: If bboxes is not a list or has wrong element types
             ValueError: If bbox coordinates are invalid
@@ -296,13 +305,13 @@ class ConfigurableAugmentationPipeline:
             if len(bbox) != 4:
                 raise ValueError(f"bbox {i+1} must have exactly 4 elements, got {len(bbox)}")
 
-            x_min, y_min, x_max, y_max = bbox
+            x, y, w, h = bbox
 
             # Convert string-integers to int, but reject floats and string-floats
             try:
                 coords = []
-                coord_names = ['x_min', 'y_min', 'x_max', 'y_max']
-                for coord, name in zip([x_min, y_min, x_max, y_max], coord_names):
+                coord_names = ['x', 'y', 'w', 'h']
+                for coord, name in zip([x, y, w, h], coord_names):
                     if isinstance(coord, str):
                         # Check if it's a float string
                         if '.' in coord or 'e' in coord.lower():
@@ -319,34 +328,39 @@ class ConfigurableAugmentationPipeline:
                             f"{name}={type(coord).__name__}"
                         )
 
-                x_min, y_min, x_max, y_max = coords
+                x, y, w, h = coords
 
             except ValueError as e:
                 # int() conversion failed
                 raise TypeError(
                     f"bbox {i+1} coordinates must be integers or string-integers, "
-                    f"got x_min={type(bbox[0]).__name__}, y_min={type(bbox[1]).__name__}, "
-                    f"x_max={type(bbox[2]).__name__}, y_max={type(bbox[3]).__name__}"
+                    f"got x={type(bbox[0]).__name__}, y={type(bbox[1]).__name__}, "
+                    f"w={type(bbox[2]).__name__}, h={type(bbox[3]).__name__}"
                 ) from e
 
-            # Validate bounds
-            x_in_bounds = all(0 <= x < image_w for x in [x_min, x_max])
-            y_in_bounds = all(0 <= y < image_h for y in [y_min, y_max])
-
-            if not (x_in_bounds and y_in_bounds):
+            # Validate positive dimensions (COCO: w and h must be > 0)
+            if w <= 0:
                 raise ValueError(
-                    f"bbox {i+1} ({x_min}, {y_min}, {x_max}, {y_max}) out of bounds for image size "
+                    f"bbox {i+1} invalid: width ({w}) must be > 0"
+                )
+            if h <= 0:
+                raise ValueError(
+                    f"bbox {i+1} invalid: height ({h}) must be > 0"
+                )
+
+            # Validate top-left corner is inside the image
+            if not (0 <= x < image_w and 0 <= y < image_h):
+                raise ValueError(
+                    f"bbox {i+1} top-left ({x}, {y}) out of bounds for image size "
                     f"(width={image_w}, height={image_h})"
                 )
 
-            # Validate bbox format (x_min <= x_max, y_min <= y_max)
-            if x_min > x_max:
+            # Validate bbox fits within the image
+            if x + w > image_w or y + h > image_h:
                 raise ValueError(
-                    f"bbox {i+1} invalid: x_min ({x_min}) > x_max ({x_max})"
-                )
-            if y_min > y_max:
-                raise ValueError(
-                    f"bbox {i+1} invalid: y_min ({y_min}) > y_max ({y_max})"
+                    f"bbox {i+1} [x={x}, y={y}, w={w}, h={h}] extends beyond image "
+                    f"(width={image_w}, height={image_h}): "
+                    f"x+w={x+w}, y+h={y+h}"
                 )
 
 

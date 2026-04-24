@@ -51,7 +51,7 @@ class TestWriteRead:
         assert len(records) == 1
         assert records[0]["content"]["value"] == 2
 
-    @pytest.mark.parametrize("mem_type", MEMORY_TYPES)
+    @pytest.mark.parametrize("mem_type", sorted(MEMORY_TYPES))
     @pytest.mark.asyncio
     async def test_write_all_valid_types(self, store, mem_type):
         await store.write(mem_type, "test-key", {"data": "x"})

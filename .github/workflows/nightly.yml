@@ -1,0 +1,78 @@
+name: Nightly
+
+# Runs at 06:00 UTC daily + manual dispatch. Covers what PR CI skips:
+# slow tests (still CPU-only) and a Docker smoke build that exercises the
+# real CUDA extension compile path (no GPU needed — nvcc compiles without
+# one, see design doc for the runner-vs-image explanation).
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  slow-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # Torch variant is selected via the `cpu` extra on the sync command.
+      FORCE_CUDA: "0"
+      TORCH_CUDA_ARCH_LIST: ""
+    steps:
+      - uses: actions/checkout@v6
+      # pyproject.toml's `python-preference = "only-system"` means uv won't
+      # download a managed Python; GitHub runners don't ship 3.10 by default.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install test deps
+        run: uv sync --frozen --extra test --extra cpu
+
+      # --extra cpu on every `uv run` is load-bearing: without it uv
+      # re-syncs to the default resolution (cu124 on linux) and quietly
+      # reinstalls ~2GB of CUDA wheels, failing the +cpu assertion below.
+      - name: Assert CPU torch wheel installed
+        run: |
+          uv run --extra test --extra cpu python -c "import torch; assert '+cpu' in torch.__version__, \
+            f'Expected CPU torch wheel, got {torch.__version__}'; \
+            print(f'OK: torch {torch.__version__}')"
+
+      # Full suite including @pytest.mark.slow. Still excludes gpu-marked.
+      - name: Run slow + all CPU tests
+        run: uv run --extra test --extra cpu pytest tests -m "not gpu" -n 4 --dist=loadscope
+
+  docker-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      # Free disk space unconditionally.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build only the `builder` target. Exercises the real GroundingDINO
+      # CUDA extension compile (setup.py detects the CUDA toolkit from the
+      # nvidia/cuda base image and compiles .cu files for TORCH_CUDA_ARCH_LIST).
+      # No GPU is used — the runner has none; the toolkit is just files.
+      - name: Build builder target
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: builder
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
