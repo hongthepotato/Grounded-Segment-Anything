@@ -6,24 +6,24 @@ Provides functions to draw bounding boxes, masks, and labels on images.
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 import cv2
 import numpy as np
 
 from ml_engine.inference.config import (
+    OUTPUT_BOTH,
     OUTPUT_BOXES_ONLY,
     OUTPUT_MASKS_ONLY,
-    OUTPUT_BOTH,
 )
 
 logger = logging.getLogger(__name__)
 
 # Color palette (BGR format for OpenCV)
 COLORS = [
-    (0, 255, 0),    # Green
-    (255, 0, 0),    # Blue
-    (0, 0, 255),    # Red
+    (0, 255, 0),  # Green
+    (255, 0, 0),  # Blue
+    (0, 0, 255),  # Red
     (255, 255, 0),  # Cyan
     (255, 0, 255),  # Magenta
     (0, 255, 255),  # Yellow
@@ -40,13 +40,13 @@ def visualize_detections(
     show_boxes: bool = True,
     show_masks: bool = True,
     show_labels: bool = True,
-    show_scores: bool = True
+    show_scores: bool = True,
 ) -> None:
     """
     Visualize auto-labeling results on an image.
-    
+
     Draws bounding boxes and/or masks with class labels and confidence scores.
-    
+
     Args:
         image_path: Path to original image
         result: Detection result from label_single_image()
@@ -63,10 +63,10 @@ def visualize_detections(
         logger.warning(f"Could not load image for visualization: {image_path}")
         return
 
-    boxes = result.get('boxes', [])
-    masks = result.get('masks', [])
-    class_ids = result.get('class_ids', [])
-    scores = result.get('scores', [])
+    boxes = result.get("boxes", [])
+    masks = result.get("masks", [])
+    class_ids = result.get("class_ids", [])
+    scores = result.get("scores", [])
 
     # Draw masks first (so boxes appear on top)
     if show_masks and masks:
@@ -79,16 +79,10 @@ def visualize_detections(
             colored_mask = np.zeros_like(image)
             colored_mask[mask > 0] = color
             # Blend with original
-            mask_overlay = cv2.addWeighted(
-                mask_overlay, 1.0,
-                colored_mask, 0.4,
-                0
-            )
+            mask_overlay = cv2.addWeighted(mask_overlay, 1.0, colored_mask, 0.4, 0)
             # Draw mask contour
             contours, _ = cv2.findContours(
-                (mask > 0).astype(np.uint8),
-                cv2.RETR_EXTERNAL,
-                cv2.CHAIN_APPROX_SIMPLE
+                (mask > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
             cv2.drawContours(mask_overlay, contours, -1, color, 2)
         image = mask_overlay
@@ -111,29 +105,26 @@ def visualize_detections(
             if show_labels or show_scores:
                 label_parts = []
                 if show_labels:
-                    class_name = class_prompts[class_id] if class_id < len(class_prompts) else f"cls_{class_id}"
+                    class_name = (
+                        class_prompts[class_id] if class_id < len(class_prompts) else f"cls_{class_id}"
+                    )
                     label_parts.append(class_name)
                 if show_scores:
                     label_parts.append(f"{score:.2f}")
                 label_text = " ".join(label_parts)
-                
+
                 # Draw label background
-                (text_w, text_h), baseline = cv2.getTextSize(
-                    label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
-                )
-                cv2.rectangle(
-                    image,
-                    (x1, y1 - text_h - 8),
-                    (x1 + text_w + 4, y1),
-                    color,
-                    -1
-                )
+                (text_w, text_h), baseline = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                cv2.rectangle(image, (x1, y1 - text_h - 8), (x1 + text_w + 4, y1), color, -1)
                 # Draw label text
                 cv2.putText(
-                    image, label_text,
+                    image,
+                    label_text,
                     (x1 + 2, y1 - 4),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5, (255, 255, 255), 1
+                    0.5,
+                    (255, 255, 255),
+                    1,
                 )
 
     # Save visualization
@@ -148,18 +139,18 @@ def visualize_batch(
     results: List[Dict[str, Any]],
     class_prompts: List[str],
     output_dir: str,
-    output_mode: str = OUTPUT_BOXES_ONLY
+    output_mode: str = OUTPUT_BOXES_ONLY,
 ) -> int:
     """
     Visualize auto-labeling results for multiple images.
-    
+
     Args:
         image_paths: List of paths to original images
         results: List of detection results from label_single_image()
         class_prompts: List of class names
         output_dir: Directory to save visualizations
         output_mode: "boxes", "masks", or "both"
-        
+
     Returns:
         Number of images visualized
     """
@@ -180,7 +171,7 @@ def visualize_batch(
             class_prompts=class_prompts,
             output_path=save_path,
             show_boxes=show_boxes,
-            show_masks=show_masks
+            show_masks=show_masks,
         )
         count += 1
 

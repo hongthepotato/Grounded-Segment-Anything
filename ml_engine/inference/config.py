@@ -10,7 +10,6 @@ from typing import Optional
 
 import torch
 
-
 # Output mode options
 OUTPUT_BOXES_ONLY = "boxes"
 OUTPUT_MASKS_ONLY = "masks"

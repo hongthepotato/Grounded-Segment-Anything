@@ -20,12 +20,12 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 import redis.asyncio as _aredis
 from redis.exceptions import RedisError
 
-from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo
+from ml_engine.jobs.models import Job, JobProgress, JobStatus, WorkerInfo
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +88,15 @@ class AsyncRedisJobStore:
                 pipe.rpush(self.JOB_QUEUE_KEY, job.id)
             await pipe.execute()
             logger.info("Enqueued job %s (priority=%d)", job.id[:8], job.priority)
-            await self.publish_event(job.id, {
-                "type": "job_enqueued",
-                "job_id": job.id,
-                "status": job.status.value,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            await self.publish_event(
+                job.id,
+                {
+                    "type": "job_enqueued",
+                    "job_id": job.id,
+                    "status": job.status.value,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
         except RedisError as e:
             logger.error("Failed to enqueue job %s: %s", job.id[:8], e)
             raise
@@ -122,11 +125,14 @@ class AsyncRedisJobStore:
             else:
                 await self.redis.rpush(self.JOB_QUEUE_KEY, job_id)
             logger.info("Queued job %s (priority=%d)", job_id[:8], job.priority)
-            await self.publish_event(job_id, {
-                "type": "job_enqueued",
-                "job_id": job_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            await self.publish_event(
+                job_id,
+                {
+                    "type": "job_enqueued",
+                    "job_id": job_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
             return True
         except RedisError as e:
             logger.error("Failed to queue job %s: %s", job_id[:8], e)
@@ -216,12 +222,15 @@ class AsyncRedisJobStore:
                     pipe.sadd(self._status_key(new_status), job_id)
                 await pipe.execute()
 
-                await self.publish_event(job_id, {
-                    "type": "job_updated",
-                    "job_id": job_id,
-                    "updates": {k: str(v) for k, v in updates.items()},
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                await self.publish_event(
+                    job_id,
+                    {
+                        "type": "job_updated",
+                        "job_id": job_id,
+                        "updates": {k: str(v) for k, v in updates.items()},
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
 
                 logger.debug("Updated job %s: %s", job_id[:8], list(updates.keys()))
             return True
@@ -242,18 +251,13 @@ class AsyncRedisJobStore:
                 # O(matching) instead of O(all jobs). The index is maintained
                 # by enqueue_job, update_job, and delete_job.
                 raw_ids = await self.redis.smembers(self._status_key(status))
-                job_ids = [
-                    jid.decode() if isinstance(jid, bytes) else jid
-                    for jid in raw_ids
-                ]
-                jobs_or_none = await asyncio.gather(
-                    *[self.get_job(jid) for jid in job_ids]
-                )
+                job_ids = [jid.decode() if isinstance(jid, bytes) else jid for jid in raw_ids]
+                jobs_or_none = await asyncio.gather(*[self.get_job(jid) for jid in job_ids])
                 jobs: list[Job] = [j for j in jobs_or_none if j is not None]
                 if job_type:
                     jobs = [j for j in jobs if j.type == job_type]
                 jobs.sort(key=lambda j: j.created_at or datetime.min, reverse=True)
-                return jobs[offset:offset + limit]
+                return jobs[offset : offset + limit]
 
             # Full SCAN path: no status filter (list all jobs).
             job_keys: list = []
@@ -279,7 +283,7 @@ class AsyncRedisJobStore:
                 all_jobs.append(job)
 
             all_jobs.sort(key=lambda j: j.created_at or datetime.min, reverse=True)
-            return all_jobs[offset:offset + limit]
+            return all_jobs[offset : offset + limit]
         except RedisError as e:
             logger.error("Failed to list jobs: %s", e)
             return []
@@ -369,9 +373,7 @@ class AsyncRedisJobStore:
     async def update_worker_heartbeat(self, worker_id: str) -> bool:
         worker_key = f"{self.WORKER_PREFIX}{worker_id}"
         try:
-            await self.redis.hset(
-                worker_key, "last_heartbeat", datetime.now(timezone.utc).isoformat()
-            )
+            await self.redis.hset(worker_key, "last_heartbeat", datetime.now(timezone.utc).isoformat())
             return True
         except RedisError:
             return False
@@ -408,17 +410,9 @@ class AsyncRedisJobStore:
     async def list_workers(self, status: Optional[str] = None) -> List[WorkerInfo]:
         try:
             raw_ids = await self.redis.hkeys(self.WORKERS_KEY)
-            worker_ids = [
-                wid.decode() if isinstance(wid, bytes) else wid
-                for wid in raw_ids
-            ]
-            workers_or_none = await asyncio.gather(
-                *[self.get_worker(wid) for wid in worker_ids]
-            )
-            return [
-                w for w in workers_or_none
-                if w is not None and (status is None or w.status == status)
-            ]
+            worker_ids = [wid.decode() if isinstance(wid, bytes) else wid for wid in raw_ids]
+            workers_or_none = await asyncio.gather(*[self.get_worker(wid) for wid in worker_ids])
+            return [w for w in workers_or_none if w is not None and (status is None or w.status == status)]
         except RedisError as e:
             logger.error("Failed to list workers: %s", e)
             return []
@@ -437,6 +431,7 @@ class AsyncRedisJobStore:
                     removed += 1
                     logger.warning(
                         "Removed stale worker %s (last heartbeat: %ds ago)",
-                        worker.id, int(age),
+                        worker.id,
+                        int(age),
                     )
         return removed

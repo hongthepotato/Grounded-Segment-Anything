@@ -9,12 +9,12 @@ This module provides:
 """
 
 import logging
-from typing import Dict, Callable, Optional
+from typing import Callable, Dict, Optional
 
 import torch
 import torch.nn as nn
-from torch.amp import autocast, GradScaler
 import yaml
+from torch.amp import GradScaler, autocast
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +33,14 @@ def _deep_merge(base: dict, overrides: dict) -> dict:
 class TrainingManager:
     """
     Manages training dynamics: AMP, gradient clipping, accumulation.
-    
+
     Example:
         >>> manager = TrainingManager(
         >>>     model=model,
         >>>     optimizer=optimizer,
         >>>     config_path='configs/defaults/training_dynamics.yaml'
         >>> )
-        >>> 
+        >>>
         >>> for batch in dataloader:
         >>>     loss_dict = manager.training_step(batch, compute_loss_fn)
     """
@@ -66,15 +66,15 @@ class TrainingManager:
         is a per-batch primitive (AMP, clipping, accumulation). Epoch-level concerns
         like scheduler stepping belong in BaseModelTrainer / Trainer.
         """
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         # Deep-merge experiment-loop overrides over YAML defaults
         if config_overrides:
-            td_overrides = config_overrides.get('training_dynamics', config_overrides)
-            config = _deep_merge(config.get('training_dynamics', config), td_overrides)
+            td_overrides = config_overrides.get("training_dynamics", config_overrides)
+            config = _deep_merge(config.get("training_dynamics", config), td_overrides)
         else:
-            config = config.get('training_dynamics', config)
+            config = config.get("training_dynamics", config)
 
         self.model = model
         self.optimizer = optimizer
@@ -82,29 +82,30 @@ class TrainingManager:
         # Mixed precision — read dtype from config; gate GradScaler on float16.
         # bfloat16 shares FP32's exponent range, so gradients don't underflow;
         # loss scaling is unnecessary (and unsupported — GradScaler is FP16-only).
-        amp_cfg = config.get('mixed_precision', {})
-        self.use_amp = amp_cfg.get('enabled', False)
+        amp_cfg = config.get("mixed_precision", {})
+        self.use_amp = amp_cfg.get("enabled", False)
         _dtype_aliases = {
-            'bfloat16': torch.bfloat16, 'bf16': torch.bfloat16,
-            'float16': torch.float16, 'fp16': torch.float16, 'half': torch.float16,
+            "bfloat16": torch.bfloat16,
+            "bf16": torch.bfloat16,
+            "float16": torch.float16,
+            "fp16": torch.float16,
+            "half": torch.float16,
         }
-        dtype_str = str(amp_cfg.get('dtype', 'bfloat16')).lower()
+        dtype_str = str(amp_cfg.get("dtype", "bfloat16")).lower()
         if dtype_str not in _dtype_aliases:
             raise ValueError(
-                f"mixed_precision.dtype must be one of {sorted(_dtype_aliases)}, "
-                f"got {dtype_str!r}"
+                f"mixed_precision.dtype must be one of {sorted(_dtype_aliases)}, got {dtype_str!r}"
             )
         self.amp_dtype = _dtype_aliases[dtype_str]
 
         if self.use_amp and self.amp_dtype == torch.float16:
             self.scaler = GradScaler(
-                init_scale=amp_cfg.get('init_scale', 65536),
-                growth_factor=amp_cfg.get('growth_factor', 2.0),
-                backoff_factor=amp_cfg.get('backoff_factor', 0.5),
-                growth_interval=amp_cfg.get('growth_interval', 2000),
+                init_scale=amp_cfg.get("init_scale", 65536),
+                growth_factor=amp_cfg.get("growth_factor", 2.0),
+                backoff_factor=amp_cfg.get("backoff_factor", 0.5),
+                growth_interval=amp_cfg.get("growth_interval", 2000),
             )
-            logger.info("AMP enabled (dtype=float16, init_scale=%s)",
-                        amp_cfg.get('init_scale', 65536))
+            logger.info("AMP enabled (dtype=float16, init_scale=%s)", amp_cfg.get("init_scale", 65536))
         elif self.use_amp:
             self.scaler = None
             logger.info("AMP enabled (dtype=%s, no GradScaler)", dtype_str)
@@ -112,29 +113,33 @@ class TrainingManager:
             self.scaler = None
 
         # Gradient clipping
-        clip_cfg = config.get('gradient_clipping', {})
-        self.clip_enabled = clip_cfg.get('enabled', False)
-        self.clip_max_norm = clip_cfg.get('max_norm', 1.0)
-        self.clip_norm_type = clip_cfg.get('norm_type', 2.0)
-        self.clip_error_if_nonfinite = clip_cfg.get('error_if_nonfinite', False)
+        clip_cfg = config.get("gradient_clipping", {})
+        self.clip_enabled = clip_cfg.get("enabled", False)
+        self.clip_max_norm = clip_cfg.get("max_norm", 1.0)
+        self.clip_norm_type = clip_cfg.get("norm_type", 2.0)
+        self.clip_error_if_nonfinite = clip_cfg.get("error_if_nonfinite", False)
         if self.clip_enabled:
             logger.info(
                 "Gradient clipping enabled (max_norm=%s, error_if_nonfinite=%s)",
-                self.clip_max_norm, self.clip_error_if_nonfinite
+                self.clip_max_norm,
+                self.clip_error_if_nonfinite,
             )
 
         # Gradient accumulation
-        accum_cfg = config.get('gradient_accumulation', {})
-        self.accumulation_steps = max(1, accum_cfg.get('steps', 1))
+        accum_cfg = config.get("gradient_accumulation", {})
+        self.accumulation_steps = max(1, accum_cfg.get("steps", 1))
         if self.accumulation_steps > 1:
-            logger.info("Gradient accumulation: %d steps (effective batch ×%d)",
-                        self.accumulation_steps, self.accumulation_steps)
+            logger.info(
+                "Gradient accumulation: %d steps (effective batch ×%d)",
+                self.accumulation_steps,
+                self.accumulation_steps,
+            )
 
         # Freeze BatchNorm for LoRA training.
         # _freeze_bn is stored so training_step() can re-apply eval() after
         # each model.train() call (which would otherwise undo the freeze).
-        norm_cfg = config.get('normalization', {})
-        self._freeze_bn = norm_cfg.get('freeze_bn_teacher', False)
+        norm_cfg = config.get("normalization", {})
+        self._freeze_bn = norm_cfg.get("freeze_bn_teacher", False)
         if self._freeze_bn:
             self._freeze_batch_norm()
 
@@ -164,11 +169,11 @@ class TrainingManager:
     ) -> Dict[str, torch.Tensor]:
         """
         Execute one training step with AMP and gradient clipping.
-        
+
         Args:
             batch: Input batch
             compute_loss_fn: Function that computes loss given batch
-        
+
         Returns:
             Dict with loss and metrics
         """
@@ -189,7 +194,7 @@ class TrainingManager:
             device_type = next(self.model.parameters()).device.type
             with autocast(device_type=device_type, dtype=self.amp_dtype):
                 loss_dict = compute_loss_fn(batch)
-                loss = loss_dict['loss']
+                loss = loss_dict["loss"]
 
             # Scale loss for accumulation
             scaled_loss = loss / self.accumulation_steps
@@ -217,7 +222,7 @@ class TrainingManager:
                     self.optimizer.step()
         else:
             loss_dict = compute_loss_fn(batch)
-            loss = loss_dict['loss']
+            loss = loss_dict["loss"]
 
             scaled_loss = loss / self.accumulation_steps
             scaled_loss.backward()
@@ -234,6 +239,6 @@ class TrainingManager:
                 self.optimizer.step()
 
         self.global_step += 1
-        loss_dict['lr'] = self.optimizer.param_groups[0]['lr']
+        loss_dict["lr"] = self.optimizer.param_groups[0]["lr"]
 
         return loss_dict

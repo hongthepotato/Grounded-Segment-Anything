@@ -7,21 +7,17 @@ This module provides utilities for:
 - Loading and saving LoRA adapters
 """
 
-import os
 import logging
-import torch
-from torch import nn
-from peft import LoraConfig, get_peft_model
+import os
 from typing import Dict, List, Optional
+
+from peft import LoraConfig, get_peft_model
+from torch import nn
 
 logger = logging.getLogger(__name__)
 
 
-def apply_lora(
-    model: nn.Module,
-    lora_config: Dict,
-    target_modules: Optional[List[str]] = None
-) -> nn.Module:
+def apply_lora(model: nn.Module, lora_config: Dict, target_modules: Optional[List[str]] = None) -> nn.Module:
     """
     Apply LoRA to a model.
 
@@ -53,16 +49,16 @@ def apply_lora(
     # Override target modules if provided
     if target_modules is not None:
         lora_config = lora_config.copy()
-        lora_config['target_modules'] = target_modules
+        lora_config["target_modules"] = target_modules
 
     # Create LoRA config
     peft_config = LoraConfig(
-        r=lora_config.get('r', 16),
-        lora_alpha=lora_config.get('lora_alpha', 32),
-        target_modules=lora_config['target_modules'],
-        lora_dropout=lora_config.get('lora_dropout', 0.1),
-        bias=lora_config.get('bias', 'none'),
-        task_type=lora_config.get('task_type', 'FEATURE_EXTRACTION')
+        r=lora_config.get("r", 16),
+        lora_alpha=lora_config.get("lora_alpha", 32),
+        target_modules=lora_config["target_modules"],
+        lora_dropout=lora_config.get("lora_dropout", 0.1),
+        bias=lora_config.get("bias", "none"),
+        task_type=lora_config.get("task_type", "FEATURE_EXTRACTION"),
     )
 
     model = get_peft_model(model, peft_config)
@@ -121,7 +117,7 @@ def verify_freezing(model: nn.Module, strict: bool = True) -> Dict[str, int]:
             trainable_params += param_count
 
             # Check if this is a LoRA parameter
-            if 'lora' in name.lower():
+            if "lora" in name.lower():
                 lora_params += param_count
             else:
                 non_lora_trainable.append(name)
@@ -135,21 +131,18 @@ def verify_freezing(model: nn.Module, strict: bool = True) -> Dict[str, int]:
 
             # A frozen LoRA parameter is always a misconfiguration — it would
             # silently prevent the adapter from training regardless of strict mode.
-            if 'lora' in name.lower():
-                raise AssertionError(
-                    f"LoRA param is frozen: {name}\n"
-                    f"LoRA adapters should be trainable!"
-                )
+            if "lora" in name.lower():
+                raise AssertionError(f"LoRA param is frozen: {name}\nLoRA adapters should be trainable!")
 
     total_params = frozen_params + trainable_params
     trainable_ratio = 100 * trainable_params / total_params if total_params > 0 else 0
 
     stats = {
-        'frozen_params': frozen_params,
-        'trainable_params': trainable_params,
-        'lora_params': lora_params,
-        'total_params': total_params,
-        'trainable_ratio': trainable_ratio
+        "frozen_params": frozen_params,
+        "trainable_params": trainable_params,
+        "lora_params": lora_params,
+        "total_params": total_params,
+        "trainable_ratio": trainable_ratio,
     }
 
     logger.info("=" * 60)
@@ -173,11 +166,7 @@ def verify_freezing(model: nn.Module, strict: bool = True) -> Dict[str, int]:
     return stats
 
 
-def save_lora_adapters(
-    model: nn.Module,
-    output_dir: str,
-    safe_serialization: bool = True
-) -> None:
+def save_lora_adapters(model: nn.Module, output_dir: str, safe_serialization: bool = True) -> None:
     """
     Save only LoRA adapters (not the full model).
 
@@ -196,11 +185,8 @@ def save_lora_adapters(
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    if hasattr(model, 'save_pretrained'):
-        model.save_pretrained(
-            output_dir,
-            safe_serialization=safe_serialization
-        )
+    if hasattr(model, "save_pretrained"):
+        model.save_pretrained(output_dir, safe_serialization=safe_serialization)
         logger.info("Saved LoRA adapters to: %s", output_dir)
     else:
         raise ValueError(

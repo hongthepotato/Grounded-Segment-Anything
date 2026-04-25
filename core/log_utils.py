@@ -34,9 +34,7 @@ def log_config(logger: logging.Logger, config: dict, title: str = "Configuration
     logger.info("=" * 60)
 
 
-def log_metrics(
-    logger: logging.Logger, metrics: dict, epoch: Optional[int] = None, prefix: str = ""
-) -> None:
+def log_metrics(logger: logging.Logger, metrics: dict, epoch: Optional[int] = None, prefix: str = "") -> None:
     """
     Log metrics in a consistent format.
 
@@ -58,9 +56,7 @@ def log_metrics(
     if prefix:
         msg = f"{prefix} - {msg}"
 
-    metric_strs = [
-        f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in metrics.items()
-    ]
+    metric_strs = [f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in metrics.items()]
     msg += " | " + " | ".join(metric_strs)
 
     logger.info(msg)

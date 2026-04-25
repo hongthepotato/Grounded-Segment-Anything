@@ -95,9 +95,7 @@ class JobProgressSchema(BaseModel):
     total_steps: int = 0
     metrics: Dict[str, float] = Field(default_factory=dict)
     message: str = ""
-    overall_progress: float = Field(
-        default=0.0, description="Overall training progress (0.0 to 1.0)"
-    )
+    overall_progress: float = Field(default=0.0, description="Overall training progress (0.0 to 1.0)")
 
     class Config:
         from_attributes = True
@@ -124,9 +122,7 @@ class JobCreate(BaseModel):
     """
 
     job_type: str = Field(..., description="Type of job (teacher_training, student_distillation)")
-    config: Dict[str, Any] = Field(
-        ..., description="Job configuration (data paths, hyperparameters)"
-    )
+    config: Dict[str, Any] = Field(..., description="Job configuration (data paths, hyperparameters)")
     priority: int = Field(default=0, description="Job priority (higher = more urgent)")
     output_dir: Optional[str] = Field(
         default=None, description="Output directory (auto-generated if not provided)"
@@ -246,18 +242,10 @@ class AutoLabelRequest(BaseModel):
 
     image_paths: List[str] = Field(..., description="List of image paths")
     classes: List[str] = Field(..., description="List of class names to detect")
-    output_mode: str = Field(
-        default="boxes", description="Output mode: 'boxes', 'masks', or 'both'"
-    )
-    box_threshold: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="Detection confidence threshold"
-    )
-    text_threshold: float = Field(
-        default=0.5, ge=0.0, le=1.0, description="Text matching threshold"
-    )
-    nms_threshold: float = Field(
-        default=0.7, ge=0.0, le=1.0, description="Non-Maximum Suppression threshold"
-    )
+    output_mode: str = Field(default="boxes", description="Output mode: 'boxes', 'masks', or 'both'")
+    box_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Detection confidence threshold")
+    text_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Text matching threshold")
+    nms_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Non-Maximum Suppression threshold")
     output_dir: Optional[str] = Field(
         default=None, description="Output directory (auto-generated if not provided)"
     )
@@ -284,15 +272,11 @@ class DistillationRequest(BaseModel):
     student_model: Optional[str] = Field(
         default=None, description="Optional direct student model name override"
     )
-    student_size: Optional[str] = Field(
-        default=None, description="Optional student size enum: n/s/m/l/x"
-    )
+    student_size: Optional[str] = Field(default=None, description="Optional student size enum: n/s/m/l/x")
     split_config: Optional[Dict[str, float]] = Field(
         default=None, description="Dataset split ratios: train/val/test (sum=1.0)"
     )
-    training: Optional[Dict[str, Any]] = Field(
-        default=None, description="Training hyperparameter overrides"
-    )
+    training: Optional[Dict[str, Any]] = Field(default=None, description="Training hyperparameter overrides")
     priority: int = Field(default=0, description="Job priority (higher = more urgent)")
     output_dir: Optional[str] = Field(
         default=None, description="Output directory (auto-generated if not provided)"
@@ -316,9 +300,7 @@ class COCOAnnotationSchema(BaseModel):
     image_id: int = Field(..., description="Image ID")
     category_id: int = Field(..., description="Category ID")
     bbox: Optional[List[float]] = Field(default=None, description="Bounding box [x, y, w, h]")
-    segmentation: Optional[List[List[float]]] = Field(
-        default=None, description="Polygon segmentation"
-    )
+    segmentation: Optional[List[List[float]]] = Field(default=None, description="Polygon segmentation")
     area: Optional[float] = Field(default=None, description="Area in pixels")
     score: Optional[float] = Field(default=None, description="Detection confidence")
     iscrowd: int = Field(default=0, description="Is crowd annotation")

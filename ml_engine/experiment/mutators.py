@@ -56,13 +56,17 @@ class SimpleMutator:
         # Pick a key to mutate (avoid last key if stuck)
         candidates = list(self._mutable.keys())
         if not candidates:
-            raise ValueError("SimpleMutator: mutable_keys is empty — nothing to explore. Check experiment_loop.yaml.")
+            raise ValueError(
+                "SimpleMutator: mutable_keys is empty — nothing to explore. Check experiment_loop.yaml."
+            )
         if len(candidates) > 1 and self._last_key is not None:
             # If no improvement in last 3 non-baseline trials, try a different key
             recent = [t for t in trials[-3:] if t.overrides and t.primary_metric is not None]
             baseline = recent[0].primary_metric if recent else None
-            stagnant = len(recent) == 3 and baseline is not None and all(
-                math.isclose(t.primary_metric, baseline, rel_tol=1e-6) for t in recent
+            stagnant = (
+                len(recent) == 3
+                and baseline is not None
+                and all(math.isclose(t.primary_metric, baseline, rel_tol=1e-6) for t in recent)
             )
             if stagnant:
                 candidates = [k for k in candidates if k != self._last_key] or candidates

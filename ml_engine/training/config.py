@@ -71,7 +71,7 @@ def build_teacher_training_config(
     from core.constants import DEFAULT_CONFIGS_DIR
 
     # Load shared training defaults
-    shared_config = load_config(str(DEFAULT_CONFIGS_DIR / 'teacher_training.yaml'))
+    shared_config = load_config(str(DEFAULT_CONFIGS_DIR / "teacher_training.yaml"))
     logger.info("Loaded teacher_training.yaml defaults")
 
     # Load model-specific configs based on what the dataset needs
@@ -80,30 +80,28 @@ def build_teacher_training_config(
     logger.info("Required teacher models: %s", required_models)
 
     model_configs: Dict[str, Any] = {}
-    if 'grounding_dino' in required_models:
-        model_configs['grounding_dino'] = load_config(
-            str(DEFAULT_CONFIGS_DIR / 'teacher_grounding_dino_lora.yaml')
+    if "grounding_dino" in required_models:
+        model_configs["grounding_dino"] = load_config(
+            str(DEFAULT_CONFIGS_DIR / "teacher_grounding_dino_lora.yaml")
         )
         logger.info("Loaded teacher_grounding_dino_lora.yaml")
 
-    if 'sam' in required_models:
-        model_configs['sam'] = load_config(
-            str(DEFAULT_CONFIGS_DIR / 'teacher_sam_lora.yaml')
-        )
+    if "sam" in required_models:
+        model_configs["sam"] = load_config(str(DEFAULT_CONFIGS_DIR / "teacher_sam_lora.yaml"))
         logger.info("Loaded teacher_sam_lora.yaml")
 
     if not model_configs:
         raise ValueError("No models to train — dataset has no valid annotations.")
 
     config: Dict[str, Any] = {
-        **shared_config['training'],
-        'num_classes': dataset_info['num_classes'],
-        'class_names': list(dataset_info['class_mapping'].values()),
-        'class_mapping': dataset_info['class_mapping'],
-        'augmentation': shared_config.get('augmentation'),
-        'evaluation': shared_config.get('evaluation'),
-        'checkpointing': shared_config.get('checkpointing'),
-        'models': model_configs,
+        **shared_config["training"],
+        "num_classes": dataset_info["num_classes"],
+        "class_names": list(dataset_info["class_mapping"].values()),
+        "class_mapping": dataset_info["class_mapping"],
+        "augmentation": shared_config.get("augmentation"),
+        "evaluation": shared_config.get("evaluation"),
+        "checkpointing": shared_config.get("checkpointing"),
+        "models": model_configs,
     }
 
     if overrides:

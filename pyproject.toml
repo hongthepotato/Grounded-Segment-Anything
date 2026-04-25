@@ -159,7 +159,13 @@ groundingdino = { path = "GroundingDINO", editable = true }
 
 [tool.ruff]
 target-version = "py310"
-line-length = 100
+# 110 chars: the previous 100 was borderline tight for an ML codebase where
+# long type hints (Dict[str, Optional[List[ModelSpec]]]) and qualified
+# parameter names routinely produce honest lines in the 101-110 range. 110
+# leaves room for those without making 120-char wide lines acceptable. If
+# this number drifts up further over time, that's a smell — fix the lines,
+# don't keep raising the cap.
+line-length = 110
 # Vendored / third-party / research trees are not our lint scope. Our own
 # code lives in api, core, ml_engine, augmentation, cli, tests.
 extend-exclude = [
@@ -174,6 +180,11 @@ extend-exclude = [
     ".venv",
     "build",
     "dist",
+    # Jupyter notebooks aren't part of the lint-disciplined source tree —
+    # they're research/exploration artifacts. Linting them produces noise
+    # (cell-scoped imports trigger E402, redefinitions across cells trigger
+    # F811) that doesn't reflect real code-quality concerns.
+    "*.ipynb",
 ]
 
 [tool.ruff.lint]

@@ -65,17 +65,27 @@ DISTILLATION_GATE_STAGES = frozenset({"student_distillation", "distill_eval_gate
 
 # Valid transitions: state -> set of reachable states
 TRANSITIONS: Dict[str, List[str]] = {
-    "created":                      ["planning"],
-    "planning":                     ["pending_contract_approval", "failed_unrecoverable"],
-    "pending_contract_approval":    ["auto_labeling", "teacher_training", "cancelled"],
-    "auto_labeling":                ["label_review_gate", "failed_retrying", "failed_unrecoverable"],
-    "label_review_gate":            ["teacher_training", "auto_labeling", "escalated"],
-    "teacher_training":             ["training_eval_gate", "failed_retrying", "failed_unrecoverable"],
-    "training_eval_gate":           ["student_distillation", "pending_approval", "teacher_training", "escalated"],
-    "student_distillation":         ["distill_eval_gate", "failed_retrying", "failed_unrecoverable"],
-    "distill_eval_gate":            ["pending_approval", "student_distillation", "escalated"],
-    "pending_approval":             ["done", "teacher_training", "cancelled"],
-    "failed_retrying":              ["teacher_training", "auto_labeling", "student_distillation", "failed_unrecoverable"],
+    "created": ["planning"],
+    "planning": ["pending_contract_approval", "failed_unrecoverable"],
+    "pending_contract_approval": ["auto_labeling", "teacher_training", "cancelled"],
+    "auto_labeling": ["label_review_gate", "failed_retrying", "failed_unrecoverable"],
+    "label_review_gate": ["teacher_training", "auto_labeling", "escalated"],
+    "teacher_training": ["training_eval_gate", "failed_retrying", "failed_unrecoverable"],
+    "training_eval_gate": [
+        "student_distillation",
+        "pending_approval",
+        "teacher_training",
+        "escalated",
+    ],
+    "student_distillation": ["distill_eval_gate", "failed_retrying", "failed_unrecoverable"],
+    "distill_eval_gate": ["pending_approval", "student_distillation", "escalated"],
+    "pending_approval": ["done", "teacher_training", "cancelled"],
+    "failed_retrying": [
+        "teacher_training",
+        "auto_labeling",
+        "student_distillation",
+        "failed_unrecoverable",
+    ],
     # terminal states have no outbound transitions
 }
 
@@ -97,10 +107,7 @@ def _validate_transition(current: str, new_state: str, run_id: str) -> None:
         raise ValueError(f"Run {run_id} is in terminal state {current!r}")
     allowed = TRANSITIONS.get(current, [])
     if new_state not in allowed:
-        raise ValueError(
-            f"Invalid transition {current!r} -> {new_state!r}. "
-            f"Allowed: {allowed}"
-        )
+        raise ValueError(f"Invalid transition {current!r} -> {new_state!r}. Allowed: {allowed}")
 
 
 def _initial_state_mapping(run_id: str, contract: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -162,7 +169,8 @@ class StateMachine:
         from POST /api/agent/plan.
         """
         await self._r.hset(
-            self._key, mapping=_initial_state_mapping(self.run_id, contract),
+            self._key,
+            mapping=_initial_state_mapping(self.run_id, contract),
         )
         logger.info("Run %s initialized (state=created)", self.run_id)
 

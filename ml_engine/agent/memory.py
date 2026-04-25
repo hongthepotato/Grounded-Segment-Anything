@@ -24,9 +24,7 @@ MEMORY_TYPES = {"user", "project", "feedback", "reference"}
 
 def _validate_type(type_: str) -> None:
     if type_ not in MEMORY_TYPES:
-        raise ValueError(
-            f"Unknown memory type: {type_!r}. Must be one of {MEMORY_TYPES}"
-        )
+        raise ValueError(f"Unknown memory type: {type_!r}. Must be one of {MEMORY_TYPES}")
 
 
 def _build_record(type_: str, key: str, content: Dict[str, Any]) -> Dict[str, str]:
@@ -42,8 +40,7 @@ def _build_record(type_: str, key: str, content: Dict[str, Any]) -> Dict[str, st
 def _parse_record(raw: Dict) -> Dict[str, Any]:
     """Decode a raw Redis HASH into a typed record dict."""
     record = {
-        k.decode() if isinstance(k, bytes) else k:
-        v.decode() if isinstance(v, bytes) else v
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
         for k, v in raw.items()
     }
     content_str = record.get("content", "{}")
@@ -82,9 +79,7 @@ class MemoryStore:
             await pipe.execute()
         logger.debug("Memory written: %s/%s", type_, key)
 
-    async def read(
-        self, type_: str, key: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    async def read(self, type_: str, key: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Read memory records.
 

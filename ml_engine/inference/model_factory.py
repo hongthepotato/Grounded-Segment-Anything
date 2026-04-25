@@ -11,12 +11,12 @@ from pathlib import Path
 import torch
 
 from ml_engine.inference.config import (
-    GroundingDINOModelSpec,
-    SegmenterModelSpec,
-    DETECTOR_SOURCE_CHECKPOINT,
     DETECTOR_SOURCE_BASE_LORA,
+    DETECTOR_SOURCE_CHECKPOINT,
     SEGMENTER_MOBILE_SAM,
     SEGMENTER_SAM_HQ,
+    GroundingDINOModelSpec,
+    SegmenterModelSpec,
 )
 from ml_engine.inference.detectors.base import DetectorProtocol
 from ml_engine.inference.detectors.grounding_dino import GroundingDINODetector
@@ -58,9 +58,7 @@ class InferenceModelFactory:
             from ml_engine.inference.segmenters.mobile_sam import MobileSAMSegmenter
 
             if not spec.checkpoint_path:
-                raise ValueError(
-                    "segmenter.checkpoint_path is required when backend='mobile_sam'"
-                )
+                raise ValueError("segmenter.checkpoint_path is required when backend='mobile_sam'")
             return MobileSAMSegmenter(
                 checkpoint_path=spec.checkpoint_path,
                 device=self.device,

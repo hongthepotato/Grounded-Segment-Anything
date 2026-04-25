@@ -22,8 +22,8 @@ from typing import Any, Dict, Optional
 
 from ml_engine.agent.llm_client import LLMClient
 from ml_engine.agent.skills import SkillLoader
-from ml_engine.experiment.trial_log import TrialLog
 from ml_engine.experiment.mutators import SimpleMutator
+from ml_engine.experiment.trial_log import TrialLog
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,9 @@ class LLMProposeFn:
             self._consecutive_failures += 1
             logger.warning(
                 "LLMProposeFn: LLM call failed (%d/%d): %s -- using SimpleMutator",
-                self._consecutive_failures, self._MAX_CONSECUTIVE_FAILURES, e,
+                self._consecutive_failures,
+                self._MAX_CONSECUTIVE_FAILURES,
+                e,
             )
             return self._fallback.propose(trial_log)
 

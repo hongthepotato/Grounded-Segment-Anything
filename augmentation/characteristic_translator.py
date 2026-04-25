@@ -421,9 +421,7 @@ class CharacteristicTranslator:
                 },
                 "medium": {
                     "CoarseDropout": {
-                        "num_holes_range": RangeParameter.integer_range(
-                            1, 2
-                        ),  # Moderate occlusions
+                        "num_holes_range": RangeParameter.integer_range(1, 2),  # Moderate occlusions
                         "hole_height_range": RangeParameter(0.1, 0.2),  # Medium holes
                         "hole_width_range": RangeParameter(0.1, 0.2),
                         "p": RangeParameter.scalar(0.4),
@@ -1107,13 +1105,9 @@ class CharacteristicTranslator:
         new_prob = new_p.min_val if hasattr(new_p, "min_val") else new_p
 
         if new_prob > existing_prob:
-            logger.debug(
-                "Deduplication: Kept new with higher p=%.2f (vs %.2f)", new_prob, existing_prob
-            )
+            logger.debug("Deduplication: Kept new with higher p=%.2f (vs %.2f)", new_prob, existing_prob)
             return new
-        logger.debug(
-            "Deduplication: Kept existing with higher p=%.2f (vs %.2f)", existing_prob, new_prob
-        )
+        logger.debug("Deduplication: Kept existing with higher p=%.2f (vs %.2f)", existing_prob, new_prob)
         return existing
 
     def translate_from_characteristics(
@@ -1198,9 +1192,7 @@ class CharacteristicTranslator:
                 if env_rule_key in self.ENVIRONMENT_RULES:
                     rule = self.ENVIRONMENT_RULES[env_rule_key]
                     params_dict = rule.intensity_ranges[intensity]
-                    applied_rules.append(
-                        {"type": "environment", "name": env_rule_key, "reason": rule.reason}
-                    )
+                    applied_rules.append({"type": "environment", "name": env_rule_key, "reason": rule.reason})
                     # Merge augmentations inline
                     for aug_type, params in params_dict.items():
                         if aug_type in merged_augmentations:
@@ -1301,9 +1293,7 @@ class CharacteristicTranslator:
                 validation_result["errors"].append(f"Unknown environment key: {env_key}")
                 validation_result["valid"] = False
             elif env_value not in available_envs[env_key]:
-                validation_result["errors"].append(
-                    f"Unknown value '{env_value}' for environment '{env_key}'"
-                )
+                validation_result["errors"].append(f"Unknown value '{env_value}' for environment '{env_key}'")
                 validation_result["valid"] = False
 
         return validation_result

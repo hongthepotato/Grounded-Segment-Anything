@@ -94,7 +94,10 @@ def evaluate_gate(
         if retry_count < max_retries:
             return GateDecision(
                 verdict="retry",
-                reason=f"{name} {primary:.3f} below {threshold:.3f}, {_retries_left_str(max_retries - retry_count)}",
+                reason=(
+                    f"{name} {primary:.3f} below {threshold:.3f}, "
+                    f"{_retries_left_str(max_retries - retry_count)}"
+                ),
                 metrics=metrics,
                 retry_count=retry_count,
             )

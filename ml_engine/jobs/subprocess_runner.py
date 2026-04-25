@@ -15,24 +15,24 @@ Why subprocess isolation?
 Usage:
     runner = TrainingSubprocess(job, config, gpu_id)
     runner.start()
-    
+
     # Monitor progress
     while runner.is_alive():
         progress = runner.get_progress()
         if progress:
             forward_to_redis(progress)
-    
+
     # Cancel if needed
     runner.cancel()  # Kills process, all resources freed automatically
 """
 
-import sys
 import multiprocessing as mp
 import os
-import signal
 import queue
-from typing import Dict, Any, Optional
+import signal
+import sys
 from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 from core.logging_config import get_logger
 
@@ -48,6 +48,7 @@ EXIT_FAILED = 1
 @dataclass
 class SubprocessResult:
     """Result from training subprocess."""
+
     success: bool
     cancelled: bool
     error_message: Optional[str] = None
@@ -62,22 +63,22 @@ class SubprocessResult:
 class TrainingSubprocess:
     """
     Runs training in an isolated subprocess.
-    
+
     Process isolation guarantees:
     - All GPU memory freed on process exit
     - All DataLoader workers terminated
     - All file handles closed
     - No manual cleanup required
-    
+
     Example:
         >>> runner = TrainingSubprocess(job, config, gpu_id=0)
         >>> runner.start()
-        >>> 
+        >>>
         >>> while runner.is_alive():
         >>>     if progress := runner.get_progress():
         >>>         report_progress(progress)
         >>>     time.sleep(0.1)
-        >>> 
+        >>>
         >>> result = runner.get_result()
         >>> if result.success:
         >>>     mark_completed()
@@ -88,8 +89,8 @@ class TrainingSubprocess:
     """
 
     # Timeouts for graceful shutdown sequence
-    GRACEFUL_TIMEOUT = 5.0   # Wait for cancel_event to be checked
-    SIGTERM_TIMEOUT = 2.0    # Wait after SIGTERM before SIGKILL
+    GRACEFUL_TIMEOUT = 5.0  # Wait for cancel_event to be checked
+    SIGTERM_TIMEOUT = 2.0  # Wait after SIGTERM before SIGKILL
 
     def __init__(
         self,
@@ -97,11 +98,11 @@ class TrainingSubprocess:
         job_type: str,
         job_config: Dict[str, Any],
         output_dir: str,
-        gpu_id: int = 0
+        gpu_id: int = 0,
     ):
         """
         Initialize training subprocess wrapper.
-        
+
         Args:
             job_id: Unique job identifier
             job_type: Type of job (teacher_training, student_distillation)
@@ -127,7 +128,7 @@ class TrainingSubprocess:
     def start(self):
         """
         Spawn training subprocess.
-        
+
         The subprocess will:
         1. Set CUDA_VISIBLE_DEVICES to gpu_id
         2. Import and run TeacherTrainer
@@ -135,7 +136,7 @@ class TrainingSubprocess:
         4. Check cancel_event periodically
         """
         # Create IPC primitives
-        ctx = mp.get_context('spawn')  # Must use spawn for CUDA
+        ctx = mp.get_context("spawn")  # Must use spawn for CUDA
         self._progress_queue = ctx.Queue()
         self._result_queue = ctx.Queue()
         self._cancel_event = ctx.Event()
@@ -153,13 +154,15 @@ class TrainingSubprocess:
                 self._result_queue,
                 self._cancel_event,
             ),
-            daemon=False  # Not daemon - we want to wait for it
+            daemon=False,  # Not daemon - we want to wait for it
         )
         self._process.start()
 
         logger.info(
             "Spawned training subprocess (pid=%d, gpu=%d) for job %s",
-            self._process.pid, self.gpu_id, self.job_id[:8]
+            self._process.pid,
+            self.gpu_id,
+            self.job_id[:8],
         )
 
     def is_alive(self) -> bool:
@@ -169,7 +172,7 @@ class TrainingSubprocess:
     def get_progress(self) -> Optional[Dict[str, Any]]:
         """
         Get progress update from subprocess (non-blocking).
-        
+
         Returns:
             Progress dict or None if no update available
         """
@@ -184,12 +187,12 @@ class TrainingSubprocess:
     def cancel(self) -> bool:
         """
         Cancel training subprocess.
-        
+
         Shutdown sequence:
         1. Set cancel_event (graceful - wait 5s for trainer to check)
         2. Send SIGTERM (allow cleanup handlers)
         3. Send SIGKILL (force kill)
-        
+
         Returns:
             True if process was terminated, False if not running
         """
@@ -243,9 +246,9 @@ class TrainingSubprocess:
     def get_result(self) -> SubprocessResult:
         """
         Get the result of the training subprocess.
-        
+
         Must be called after process has exited.
-        
+
         Returns:
             SubprocessResult with success/cancelled/error status
         """
@@ -253,11 +256,7 @@ class TrainingSubprocess:
             return self._result
 
         if self._process is None:
-            return SubprocessResult(
-                success=False,
-                cancelled=False,
-                error_message="Process never started"
-            )
+            return SubprocessResult(success=False, cancelled=False, error_message="Process never started")
 
         # Make sure process has finished
         if self._process.is_alive():
@@ -278,43 +277,32 @@ class TrainingSubprocess:
             self._result = SubprocessResult(
                 success=True,
                 cancelled=False,
-                output_dir=result_from_queue.get('output_dir') if result_from_queue else self.output_dir,
-                outcome=result_from_queue.get('outcome', {}) if result_from_queue else {},
+                output_dir=result_from_queue.get("output_dir") if result_from_queue else self.output_dir,
+                outcome=result_from_queue.get("outcome", {}) if result_from_queue else {},
             )
         elif exit_code == EXIT_CANCELLED:
-            self._result = SubprocessResult(
-                success=False,
-                cancelled=True
-            )
+            self._result = SubprocessResult(success=False, cancelled=True)
         elif exit_code is None:
             # Process was killed externally
-            self._result = SubprocessResult(
-                success=False,
-                cancelled=True,
-                error_message="Process was killed"
-            )
+            self._result = SubprocessResult(success=False, cancelled=True, error_message="Process was killed")
         else:
             error_msg = "Unknown error"
-            if result_from_queue and 'error' in result_from_queue:
-                error_msg = result_from_queue['error']
+            if result_from_queue and "error" in result_from_queue:
+                error_msg = result_from_queue["error"]
             elif exit_code < 0:
                 # Negative exit code = killed by signal
                 error_msg = f"Process killed by signal {-exit_code}"
             else:
                 error_msg = f"Process exited with code {exit_code}"
 
-            self._result = SubprocessResult(
-                success=False,
-                cancelled=False,
-                error_message=error_msg
-            )
+            self._result = SubprocessResult(success=False, cancelled=False, error_message=error_msg)
 
         return self._result
 
     def cleanup(self):
         """
         Clean up IPC resources.
-        
+
         Should be called after process has exited.
         """
         # Drain and close queues
@@ -348,11 +336,11 @@ def _job_entry_point(
 ):
     """
     Entry point for training subprocess.
-    
+
     This function runs in an isolated process. All resources allocated here
     (GPU memory, file handles, child processes) are automatically freed
     when this process exits.
-    
+
     Args:
         job_id: Job identifier
         job_type: Type of training job
@@ -368,6 +356,7 @@ def _job_entry_point(
     # Do NOT add GroundingDINO/deps source dirs — those are installed as
     # proper packages in site-packages (with compiled CUDA extensions).
     from pathlib import Path
+
     project_root = str(Path(__file__).parent.parent.parent)
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
@@ -379,6 +368,7 @@ def _job_entry_point(
     if os.environ.get("DEBUG"):
         try:
             import debugpy
+
             debugpy.listen(("0.0.0.0", 5678))
             print("[DEBUG] debugpy listening on :5678, waiting for client...", flush=True)
             debugpy.wait_for_client()
@@ -389,6 +379,7 @@ def _job_entry_point(
     # Setup logging for subprocess using centralized configuration
     # This saves logs to {output_dir}/logs/training_{timestamp}.log
     from core.logging_config import configure_logging, get_job_logger
+
     configure_logging()  # Configure root logger first
     sub_logger = get_job_logger(job_id, output_dir, name="training")
 
@@ -397,17 +388,17 @@ def _job_entry_point(
 
     # Verify GPU mapping after torch import
     import torch
+
     if torch.cuda.is_available():
         sub_logger.info("PyTorch sees %d GPU(s)", torch.cuda.device_count())
-        sub_logger.info("PyTorch cuda:0 maps to physical GPU %d (%s)",
-                       gpu_id, torch.cuda.get_device_name(0))
+        sub_logger.info("PyTorch cuda:0 maps to physical GPU %d (%s)", gpu_id, torch.cuda.get_device_name(0))
     else:
         sub_logger.warning("CUDA not available in subprocess!")
 
     try:
         # Use handler registry to dispatch job
-        from ml_engine.jobs.registry import get_handler
         from ml_engine.jobs.handlers.base import TrainingCancelledError
+        from ml_engine.jobs.registry import get_handler
 
         handler = get_handler(job_type)
         handler.run(
@@ -418,24 +409,26 @@ def _job_entry_point(
         )
 
         # Read outcome.json written by the handler
-        from pathlib import Path
         import json as _json
-        outcome_path = Path(output_dir) / 'outcome.json'
+        from pathlib import Path
+
+        outcome_path = Path(output_dir) / "outcome.json"
         outcome = _json.loads(outcome_path.read_text()) if outcome_path.exists() else {}
 
-        result_queue.put({'success': True, 'output_dir': output_dir, 'outcome': outcome})
+        result_queue.put({"success": True, "output_dir": output_dir, "outcome": outcome})
         sub_logger.info("Job completed successfully")
         sys.exit(EXIT_SUCCESS)
 
     except TrainingCancelledError:
-        result_queue.put({'cancelled': True})
+        result_queue.put({"cancelled": True})
         sub_logger.info("Job cancelled by user")
         sys.exit(EXIT_CANCELLED)
 
     except Exception as e:
         import traceback
+
         error_msg = f"{type(e).__name__}: {str(e)}"
-        result_queue.put({'error': error_msg, 'traceback': traceback.format_exc()})
+        result_queue.put({"error": error_msg, "traceback": traceback.format_exc()})
         sub_logger.error("Job failed: %s", error_msg)
         sub_logger.debug("Traceback:\n%s", traceback.format_exc())
         sys.exit(EXIT_FAILED)

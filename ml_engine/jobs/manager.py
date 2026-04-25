@@ -11,26 +11,26 @@ Features:
 - List jobs with filtering
 Usage:
     from ml_engine.jobs import JobManager
-    
+
     manager = JobManager(redis_url="redis://localhost:6379")
-    
+
     # Submit a job
     job = manager.submit_job(
         job_type="teacher_training",
         config={"data_path": "data/annotations.json", ...}
     )
-    
+
     # Check status
     job = manager.get_job(job.id)
     print(job.status, job.progress)
-    
+
     # Cancel job
     manager.cancel_job(job.id)
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from ml_engine.jobs.models import Job, JobStatus, JobType, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
@@ -41,19 +41,19 @@ logger = logging.getLogger(__name__)
 class JobManager:
     """
     High-level job management API.
-    
+
     This class provides a clean interface for:
     - Job submission
     - Job cancellation
     - Status queries
     - Event subscription
-    
+
     Thread-safe: All operations delegate to RedisJobStore which handles
     thread safety via Redis atomic operations.
-    
+
     Example:
         >>> manager = JobManager()
-        >>> 
+        >>>
         >>> # Submit teacher training job
         >>> job = manager.submit_job(
         ...     job_type="teacher_training",
@@ -69,7 +69,7 @@ class JobManager:
     def __init__(self, redis_url: str = "redis://localhost:6379"):
         """
         Initialize JobManager.
-        
+
         Args:
             redis_url: Redis connection URL
         """
@@ -91,24 +91,24 @@ class JobManager:
         config: Dict[str, Any],
         priority: int = 0,
         output_dir: Optional[str] = None,
-        tags: Optional[List[str]] = None
+        tags: Optional[List[str]] = None,
     ) -> Job:
         """
         Submit a new training job.
-        
+
         Creates job, stores in Redis, and adds to queue.
         Returns immediately - job runs asynchronously.
-        
+
         Args:
             job_type: Type of job (teacher_training, student_distillation)
             config: Job configuration (data paths, hyperparameters)
             priority: Job priority (higher = more urgent)
             output_dir: Optional output directory (auto-generated if not provided)
             tags: Optional tags for filtering
-            
+
         Returns:
             Created Job object
-            
+
         Example:
             >>> job = manager.submit_job(
             ...     job_type="teacher_training",
@@ -134,11 +134,10 @@ class JobManager:
             config=config,
             priority=priority,
             output_dir=output_dir,
-            tags=tags or []
+            tags=tags or [],
         )
 
-        logger.info("Submitting job %s (type=%s, priority=%d)",
-                   job.id[:8], job_type, priority)
+        logger.info("Submitting job %s (type=%s, priority=%d)", job.id[:8], job_type, priority)
 
         # Enqueue (stores job and adds to queue atomically)
         self.store.enqueue_job(job)
@@ -152,14 +151,14 @@ class JobManager:
     def cancel_job(self, job_id: str) -> bool:
         """
         Request job cancellation.
-        
+
         - If PENDING: Removes from queue and marks CANCELLED
         - If RUNNING: Sets status to CANCELLING, worker will stop gracefully
         - If already terminal: Returns False
-        
+
         Args:
             job_id: Job ID to cancel
-            
+
         Returns:
             True if cancellation initiated, False if job not found or already terminal
         """
@@ -169,17 +168,12 @@ class JobManager:
             return False
 
         if job.is_terminal:
-            logger.info("Cannot cancel job %s: already in terminal state %s",
-                       job_id[:8], job.status.value)
+            logger.info("Cannot cancel job %s: already in terminal state %s", job_id[:8], job.status.value)
             return False
 
         if job.status == JobStatus.PENDING:
             # Job is in queue - mark as cancelled directly
-            self.store.update_job(
-                job_id,
-                status=JobStatus.CANCELLED,
-                finished_at=datetime.now(timezone.utc)
-            )
+            self.store.update_job(job_id, status=JobStatus.CANCELLED, finished_at=datetime.now(timezone.utc))
             # Note: Job will be skipped when worker tries to execute it
             logger.info("Cancelled pending job %s", job_id[:8])
 
@@ -193,11 +187,14 @@ class JobManager:
             logger.info("Job %s is already cancelling", job_id[:8])
 
         # Publish cancellation event
-        self.store.publish_event(job_id, {
-            "type": "cancel_requested",
-            "job_id": job_id,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+        self.store.publish_event(
+            job_id,
+            {
+                "type": "cancel_requested",
+                "job_id": job_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
         return True
 
@@ -208,10 +205,10 @@ class JobManager:
     def get_job(self, job_id: str) -> Optional[Job]:
         """
         Get job by ID.
-        
+
         Args:
             job_id: Job ID
-            
+
         Returns:
             Job object or None if not found
         """
@@ -222,17 +219,17 @@ class JobManager:
         status: Optional[str] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
     ) -> List[Job]:
         """
         List jobs with optional filtering.
-        
+
         Args:
             status: Filter by status (pending, running, completed, etc.)
             job_type: Filter by job type
             limit: Maximum number of jobs to return
             offset: Pagination offset
-            
+
         Returns:
             List of Job objects (sorted by created_at, newest first)
         """
@@ -244,20 +241,15 @@ class JobManager:
             except ValueError:
                 logger.warning("Invalid status filter: %s", status)
 
-        return self.store.list_jobs(
-            status=status_enum,
-            job_type=job_type,
-            limit=limit,
-            offset=offset
-        )
+        return self.store.list_jobs(status=status_enum, job_type=job_type, limit=limit, offset=offset)
 
     def get_job_count(self, status: Optional[str] = None) -> int:
         """
         Get count of jobs by status.
-        
+
         Args:
             status: Optional status filter
-            
+
         Returns:
             Number of jobs
         """
@@ -267,12 +259,12 @@ class JobManager:
     def delete_job(self, job_id: str) -> bool:
         """
         Delete a job from the store.
-        
+
         Only allows deletion of terminal jobs (completed, failed, cancelled).
-        
+
         Args:
             job_id: Job ID to delete
-            
+
         Returns:
             True if deleted, False otherwise
         """
@@ -281,8 +273,7 @@ class JobManager:
             return False
 
         if not job.is_terminal:
-            logger.warning("Cannot delete non-terminal job %s (status=%s)",
-                          job_id[:8], job.status.value)
+            logger.warning("Cannot delete non-terminal job %s (status=%s)", job_id[:8], job.status.value)
             return False
 
         return self.store.delete_job(job_id)
@@ -298,7 +289,7 @@ class JobManager:
     def get_queue_status(self) -> Dict[str, Any]:
         """
         Get overall queue status.
-        
+
         Returns:
             Dict with queue length, active workers, job counts by status
         """
@@ -311,7 +302,7 @@ class JobManager:
                 "completed": self.get_job_count("completed"),
                 "failed": self.get_job_count("failed"),
                 "cancelled": self.get_job_count("cancelled"),
-            }
+            },
         }
 
     # =========================================================================
@@ -321,10 +312,10 @@ class JobManager:
     def list_workers(self, status: Optional[str] = None) -> List[WorkerInfo]:
         """
         List registered workers.
-        
+
         Args:
             status: Optional status filter (idle, busy, offline)
-            
+
         Returns:
             List of WorkerInfo objects
         """
@@ -333,12 +324,12 @@ class JobManager:
     def cleanup_stale_workers(self, timeout_seconds: int = 60) -> int:
         """
         Remove workers that haven't sent heartbeat.
-        
+
         Also requeues any jobs those workers were running.
-        
+
         Args:
             timeout_seconds: Seconds since last heartbeat to consider stale
-            
+
         Returns:
             Number of workers removed
         """
@@ -352,10 +343,10 @@ _default_manager: Optional[JobManager] = None
 def get_job_manager(redis_url: str = "redis://localhost:6379") -> JobManager:
     """
     Get or create default JobManager instance.
-    
+
     Args:
         redis_url: Redis connection URL
-        
+
     Returns:
         JobManager instance
     """

@@ -23,9 +23,9 @@ class Skill:
     def __init__(self, name: str, description: str, tools: list, meta: Dict[str, Any], prompt: str):
         self.name = name
         self.description = description
-        self.tools = tools          # list of allowed tool names for this stage
+        self.tools = tools  # list of allowed tool names for this stage
         self.meta = meta
-        self.prompt = prompt        # the strategy prompt (markdown body)
+        self.prompt = prompt  # the strategy prompt (markdown body)
 
     def to_system_prompt(self) -> str:
         return f"# Stage: {self.name}\n\n{self.description}\n\n{self.prompt}"

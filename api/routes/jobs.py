@@ -216,8 +216,7 @@ def validate_job_config(job_type: str, config: Dict[str, Any]) -> List[str]:
         # Require teacher_dir + unlabeled_image_paths as a pair.
         if bool(teacher_dir) != bool(unlabeled):
             errors.append(
-                "'teacher_dir' and 'unlabeled_image_paths' must be provided together "
-                "(or both omitted)"
+                "'teacher_dir' and 'unlabeled_image_paths' must be provided together (or both omitted)"
             )
 
         if unlabeled is not None:
@@ -311,9 +310,7 @@ async def submit_job(request: JobCreate, manager: AsyncJobManager = Depends(get_
     # Validate config before accepting job
     validation_errors = validate_job_config(request.job_type, request.config)
     if validation_errors:
-        raise HTTPException(
-            status_code=422, detail=f"Invalid job config: {'; '.join(validation_errors)}"
-        )
+        raise HTTPException(status_code=422, detail=f"Invalid job config: {'; '.join(validation_errors)}")
 
     try:
         job = await manager.submit_job(
@@ -376,9 +373,7 @@ async def list_jobs(
         offset=offset,
     )
 
-    return JSONResponse(
-        status_code=200, content=success_response(data=response_data.model_dump(mode="json"))
-    )
+    return JSONResponse(status_code=200, content=success_response(data=response_data.model_dump(mode="json")))
 
 
 @router.get("/types")
@@ -485,6 +480,4 @@ async def get_queue_status(manager: AsyncJobManager = Depends(get_manager)):
         job_counts=status["job_counts"],
     )
 
-    return JSONResponse(
-        status_code=200, content=success_response(data=response_data.model_dump(mode="json"))
-    )
+    return JSONResponse(status_code=200, content=success_response(data=response_data.model_dump(mode="json")))

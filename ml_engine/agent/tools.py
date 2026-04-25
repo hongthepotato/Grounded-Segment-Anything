@@ -27,6 +27,7 @@ T = TypeVar("T", bound=BaseModel)
 
 class ToolResult(BaseModel):
     r"""Standardized result format for tool execution."""
+
     success: bool
     output: Any = None
     error: Optional[str] = None
@@ -34,6 +35,7 @@ class ToolResult(BaseModel):
 
 class RunContext(BaseModel):
     """Context passed to tool.execute(). Injected by the agent loop."""
+
     run_id: str
     redis_url: str
     contract: Optional[Dict[str, Any]] = None
@@ -48,6 +50,7 @@ class Tool(ABC, Generic[T]):
     Heavy dependencies must be imported inside execute() -- tools may run in
     a subprocess or across restarts.
     """
+
     name: str
     description: str
     input_schema: Type[T]

@@ -146,12 +146,8 @@ def _create_readme(
         # Use `is not None` instead of truthiness so a genuinely-zero metric
         # (catastrophic training failure: mAP50=0.0) renders as "0.0%" instead
         # of being silently misrepresented as "N/A". Same fix for mIoU.
-        "{map50}": (
-            f"{training_info['mAP50']:.1%}" if training_info.get("mAP50") is not None else "N/A"
-        ),
-        "{miou}": (
-            f"{training_info['mIoU']:.1%}" if training_info.get("mIoU") is not None else "N/A"
-        ),
+        "{map50}": (f"{training_info['mAP50']:.1%}" if training_info.get("mAP50") is not None else "N/A"),
+        "{miou}": (f"{training_info['mIoU']:.1%}" if training_info.get("mIoU") is not None else "N/A"),
         "{generation_date}": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 

@@ -46,9 +46,9 @@ from typing import Any, Dict, Optional
 import redis.asyncio as _aredis
 
 from ml_engine.agent.contracts import PipelineContract, StageSummary
-from ml_engine.agent.memory import MemoryStore
 from ml_engine.agent.gate import evaluate_gate
 from ml_engine.agent.loop import apublish_event
+from ml_engine.agent.memory import MemoryStore
 from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
 from ml_engine.agent.stream_consumer import StreamConsumer
 
@@ -73,7 +73,7 @@ class ExecutorWorker(StreamConsumer):
         self,
         redis_client: _aredis.Redis,
         run_id: str,
-        store,               # AsyncRedisJobStore -- typed loosely to avoid circular import
+        store,  # AsyncRedisJobStore -- typed loosely to avoid circular import
         contract: Optional[PipelineContract] = None,
     ):
         super().__init__(redis_client, run_id, self.CONSUMER_NAME)
@@ -98,9 +98,7 @@ class ExecutorWorker(StreamConsumer):
             pass  # State not initialized yet -- keep running
         return False
 
-    async def handle_event(
-        self, event: Dict[str, Any], entry_id_str: str
-    ) -> None:
+    async def handle_event(self, event: Dict[str, Any], entry_id_str: str) -> None:
         if event.get("type") != "dispatch_requested":
             return
         await self._handle_dispatch(event, entry_id_str)
@@ -137,14 +135,19 @@ class ExecutorWorker(StreamConsumer):
         if job is not None and job.dispatch_event_id == entry_id_str:
             logger.info(
                 "ExecutorWorker: idempotency hit for job %s (event=%s) -- skipping re-enqueue",
-                job_id[:8], entry_id_str,
+                job_id[:8],
+                entry_id_str,
             )
-            await apublish_event(self._r, self.run_id, {
-                "type": "stage_dispatched",
-                "job_id": job_id,
-                "stage": stage,
-                "run_id": self.run_id,
-            })
+            await apublish_event(
+                self._r,
+                self.run_id,
+                {
+                    "type": "stage_dispatched",
+                    "job_id": job_id,
+                    "stage": stage,
+                    "run_id": self.run_id,
+                },
+            )
             return
 
         # Validate contract constraints
@@ -152,15 +155,21 @@ class ExecutorWorker(StreamConsumer):
         if errors:
             logger.warning(
                 "Dispatch rejected for job %s (stage=%s): %s",
-                job_id[:8], stage, "; ".join(errors),
+                job_id[:8],
+                stage,
+                "; ".join(errors),
             )
-            await apublish_event(self._r, self.run_id, {
-                "type": "dispatch_rejected",
-                "job_id": job_id,
-                "stage": stage,
-                "run_id": self.run_id,
-                "errors": errors,
-            })
+            await apublish_event(
+                self._r,
+                self.run_id,
+                {
+                    "type": "dispatch_rejected",
+                    "job_id": job_id,
+                    "stage": stage,
+                    "run_id": self.run_id,
+                    "errors": errors,
+                },
+            )
             return
 
         # Stamp the dispatch event-id BEFORE enqueuing so that a crash between
@@ -172,21 +181,29 @@ class ExecutorWorker(StreamConsumer):
         success = await self._store.enqueue_by_id(job_id)
         if not success:
             logger.error("ExecutorWorker: enqueue_by_id failed for job %s", job_id[:8])
-            await apublish_event(self._r, self.run_id, {
-                "type": "dispatch_rejected",
+            await apublish_event(
+                self._r,
+                self.run_id,
+                {
+                    "type": "dispatch_rejected",
+                    "job_id": job_id,
+                    "stage": stage,
+                    "run_id": self.run_id,
+                    "errors": [f"Job {job_id[:8]} not found in store"],
+                },
+            )
+            return
+
+        await apublish_event(
+            self._r,
+            self.run_id,
+            {
+                "type": "stage_dispatched",
                 "job_id": job_id,
                 "stage": stage,
                 "run_id": self.run_id,
-                "errors": [f"Job {job_id[:8]} not found in store"],
-            })
-            return
-
-        await apublish_event(self._r, self.run_id, {
-            "type": "stage_dispatched",
-            "job_id": job_id,
-            "stage": stage,
-            "run_id": self.run_id,
-        })
+            },
+        )
         logger.info("ExecutorWorker: enqueued %s (job=%s)", stage, job_id[:8])
 
     # ------------------------------------------------------------------
@@ -212,8 +229,7 @@ class ExecutorWorker(StreamConsumer):
             max_retries = self._contract.budget.max_retries
             if retry_count >= max_retries:
                 errors.append(
-                    f"Retry budget exhausted for stage {stage!r}: "
-                    f"{retry_count}/{max_retries} retries used"
+                    f"Retry budget exhausted for stage {stage!r}: {retry_count}/{max_retries} retries used"
                 )
         except KeyError:
             pass  # No state yet, allow
@@ -239,6 +255,7 @@ class ExecutorWorker(StreamConsumer):
 # ---------------------------------------------------------------------------
 # Stage 3: EvaluatorWorker
 # ---------------------------------------------------------------------------
+
 
 class EvaluatorWorker(StreamConsumer):
     """
@@ -288,16 +305,12 @@ class EvaluatorWorker(StreamConsumer):
             pass
         return False
 
-    async def handle_event(
-        self, event: Dict[str, Any], entry_id_str: str
-    ) -> None:
+    async def handle_event(self, event: Dict[str, Any], entry_id_str: str) -> None:
         if event.get("type") != "evaluation_requested":
             return
         await self._handle_evaluation(event)
 
-    async def on_event_error(
-        self, event: Dict[str, Any], entry_id_str: str, exc: BaseException
-    ) -> None:
+    async def on_event_error(self, event: Dict[str, Any], entry_id_str: str, exc: BaseException) -> None:
         """
         Publish an escalation gate_decision so the pipeline doesn't silently stall.
 
@@ -306,14 +319,18 @@ class EvaluatorWorker(StreamConsumer):
         """
         if event.get("type") != "evaluation_requested":
             return
-        await apublish_event(self._r, self.run_id, {
-            "type": "gate_decision",
-            "stage": event.get("stage", "unknown"),
-            "verdict": "escalate",
-            "reason": f"Evaluator error: {exc}",
-            "metrics": {},
-            "run_id": self.run_id,
-        })
+        await apublish_event(
+            self._r,
+            self.run_id,
+            {
+                "type": "gate_decision",
+                "stage": event.get("stage", "unknown"),
+                "verdict": "escalate",
+                "reason": f"Evaluator error: {exc}",
+                "metrics": {},
+                "run_id": self.run_id,
+            },
+        )
 
     async def _handle_evaluation(self, event: Dict[str, Any]) -> None:
         """
@@ -335,14 +352,18 @@ class EvaluatorWorker(StreamConsumer):
         outcome_path = Path(output_dir) / "outcome.json"
         if not outcome_path.exists():
             logger.error("EvaluatorWorker: outcome.json not found at %s", output_dir)
-            await apublish_event(self._r, self.run_id, {
-                "type": "gate_decision",
-                "stage": stage,
-                "verdict": "escalate",
-                "reason": f"outcome.json not found at {output_dir}",
-                "metrics": {},
-                "run_id": self.run_id,
-            })
+            await apublish_event(
+                self._r,
+                self.run_id,
+                {
+                    "type": "gate_decision",
+                    "stage": stage,
+                    "verdict": "escalate",
+                    "reason": f"outcome.json not found at {output_dir}",
+                    "metrics": {},
+                    "run_id": self.run_id,
+                },
+            )
             return
 
         # asyncio.to_thread: outcome.json may live on a Docker volume or NFS mount;
@@ -370,7 +391,9 @@ class EvaluatorWorker(StreamConsumer):
 
         logger.info(
             "EvaluatorWorker gate for %s: %s (%s)",
-            stage, decision_verdict, decision_reason,
+            stage,
+            decision_verdict,
+            decision_reason,
         )
 
         # Build structured summary with the real verdict (Coordinator's copy is
@@ -390,17 +413,21 @@ class EvaluatorWorker(StreamConsumer):
 
         # Publish gate_decision for Coordinator to act on; attach summary so
         # any consumer gets structured stage outcome without re-reading outcome.json
-        await apublish_event(self._r, self.run_id, {
-            "type": "gate_decision",
-            "stage": stage,
-            "verdict": decision_verdict,
-            "reason": decision_reason,
-            "metrics": metrics,
-            "artifacts": artifacts,
-            "wall_time_seconds": wall_time,
-            "run_id": self.run_id,
-            "stage_summary": summary.to_dict(),
-        })
+        await apublish_event(
+            self._r,
+            self.run_id,
+            {
+                "type": "gate_decision",
+                "stage": stage,
+                "verdict": decision_verdict,
+                "reason": decision_reason,
+                "metrics": metrics,
+                "artifacts": artifacts,
+                "wall_time_seconds": wall_time,
+                "run_id": self.run_id,
+                "stage_summary": summary.to_dict(),
+            },
+        )
 
     async def _write_feedback_memory(
         self,

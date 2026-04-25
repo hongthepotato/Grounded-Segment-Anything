@@ -14,11 +14,11 @@ Benefits:
 """
 
 import logging
-from typing import Dict, List, Any, Optional, Callable
+from typing import Any, Callable, Dict, List, Optional
 
+from augmentation.augmentation_registry import get_augmentation_registry
 from ml_engine.data.loaders import TeacherDataset
 from ml_engine.data.preprocessing import create_preprocessor_from_models
-from augmentation.augmentation_registry import get_augmentation_registry
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class DatasetFactory:
     """
     Factory for creating PyTorch datasets with proper preprocessing and augmentation.
-    
+
     This is the single source of truth for DATASET CREATION.
     All trainers should use this factory to create datasets.
 
@@ -37,7 +37,7 @@ class DatasetFactory:
 
     Example:
         >>> from ml_engine.data.dataset_factory import DatasetFactory
-        >>> 
+        >>>
         >>> train_dataset = DatasetFactory.create_dataset(
         >>>     coco_data=data_manager.get_split('train'),
         >>>     image_path_resolver=data_manager.get_image_path,
@@ -56,11 +56,11 @@ class DatasetFactory:
         model_names: List[str],
         augmentation_config: Optional[Dict[str, Any]] = None,
         is_training: bool = True,
-        sam_single_object_sampling: bool = False
+        sam_single_object_sampling: bool = False,
     ) -> TeacherDataset:
         """
         Create a complete PyTorch dataset with preprocessing and augmentation.
-        
+
         This method handles all the complexity of dataset creation:
         1. Creates preprocessor based on model_names
         2. Creates augmentation pipeline based on config (only for training)
@@ -74,7 +74,7 @@ class DatasetFactory:
             model_names: List of model names requiring preprocessing
                         e.g., ['grounding_dino', 'sam']
             augmentation_config: Augmentation configuration dictionary
-                                Must contain: 'enabled', 'characteristics', 
+                                Must contain: 'enabled', 'characteristics',
                                 'environment', 'intensity'
                                 Pass None to disable augmentation
             is_training: Whether this is a training dataset
@@ -101,7 +101,7 @@ class DatasetFactory:
             >>>     },
             >>>     is_training=True
             >>> )
-            >>> 
+            >>>
             >>> # Validation dataset without augmentation
             >>> val_dataset = DatasetFactory.create_dataset(
             >>>     coco_data=val_data,
@@ -118,18 +118,18 @@ class DatasetFactory:
 
         # Create augmentation pipeline (only for training with enabled config)
         augmentation_pipeline = None
-        if is_training and augmentation_config and augmentation_config.get('enabled'):
+        if is_training and augmentation_config and augmentation_config.get("enabled"):
             registry = get_augmentation_registry()
             augmentation_pipeline = registry.get_pipeline(
-                characteristics=augmentation_config['characteristics'],
-                environment=augmentation_config['environment'],
-                intensity=augmentation_config['intensity']
+                characteristics=augmentation_config["characteristics"],
+                environment=augmentation_config["environment"],
+                intensity=augmentation_config["intensity"],
             )
             logger.debug(
                 "Created augmentation pipeline: %s/%s/%s",
-                augmentation_config['characteristics'],
-                augmentation_config['environment'],
-                augmentation_config['intensity']
+                augmentation_config["characteristics"],
+                augmentation_config["environment"],
+                augmentation_config["intensity"],
             )
 
         # Create dataset with all components
@@ -138,16 +138,13 @@ class DatasetFactory:
             image_path_resolver=image_path_resolver,
             preprocessor=preprocessor,
             augmentation_pipeline=augmentation_pipeline,
-            return_boxes=dataset_info['has_boxes'],
-            return_masks=dataset_info['has_masks'],
-            sam_single_object_sampling=sam_single_object_sampling
+            return_boxes=dataset_info["has_boxes"],
+            return_masks=dataset_info["has_masks"],
+            sam_single_object_sampling=sam_single_object_sampling,
         )
 
         split_type = "training" if is_training else "validation"
         aug_status = "with augmentation" if augmentation_pipeline else "without augmentation"
-        logger.info(
-            "Created %s dataset: %d samples, %s",
-            split_type, len(dataset), aug_status
-        )
+        logger.info("Created %s dataset: %d samples, %s", split_type, len(dataset), aug_status)
 
         return dataset

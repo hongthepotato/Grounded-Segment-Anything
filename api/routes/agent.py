@@ -278,8 +278,7 @@ async def get_status(run_id: str):
                 "retry_count": retry_count,
                 "stage_summaries": summaries,
                 "proposed_contract": proposed_contract,
-                "coordinator_active": run_id in _coordinator_tasks
-                and not _coordinator_tasks[run_id].done(),
+                "coordinator_active": run_id in _coordinator_tasks and not _coordinator_tasks[run_id].done(),
             }
         ),
     )
@@ -336,9 +335,7 @@ async def human_gate(run_id: str, action: str, body: GateActionRequest):
     logger.info("Human gate %s for run %s -> %s", action, run_id, target_state)
     return JSONResponse(
         status_code=200,
-        content=success_response(
-            data={"run_id": run_id, "action": action, "new_state": target_state}
-        ),
+        content=success_response(data={"run_id": run_id, "action": action, "new_state": target_state}),
     )
 
 

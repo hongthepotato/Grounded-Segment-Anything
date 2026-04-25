@@ -43,9 +43,7 @@ class ConfigurableAugmentationPipeline:
         # Build albumentations pipeline from configuration
         self.pipeline = self._create_pipeline()
 
-        logger.info(
-            "ConfigurableAugmentationPipeline initialized with %d augmentations", len(augmentations)
-        )
+        logger.info("ConfigurableAugmentationPipeline initialized with %d augmentations", len(augmentations))
 
     def _validate_augmentations(self, augmentations: Dict[str, Dict[str, Any]]) -> None:
         """
@@ -61,9 +59,7 @@ class ConfigurableAugmentationPipeline:
 
         # Type validation
         if not isinstance(augmentations, dict):
-            raise TypeError(
-                f"augmentations must be a dictionary, got {type(augmentations).__name__}"
-            )
+            raise TypeError(f"augmentations must be a dictionary, got {type(augmentations).__name__}")
 
         # Allow empty dict - will create identity pipeline (no-op)
         if len(augmentations) == 0:
@@ -78,9 +74,7 @@ class ConfigurableAugmentationPipeline:
 
             # Check params is dict
             if not isinstance(params, dict):
-                raise TypeError(
-                    f"Parameters for '{aug_type}' must be dict, got {type(params).__name__}"
-                )
+                raise TypeError(f"Parameters for '{aug_type}' must be dict, got {type(params).__name__}")
 
             # Check if augmentation exists in albumentations (cheap check)
             if not hasattr(A, aug_type):
@@ -155,9 +149,7 @@ class ConfigurableAugmentationPipeline:
                 raise TypeError(f"masks must be a list of numpy.ndarray, got {type(mask).__name__}")
 
             if mask.ndim != 2:
-                raise ValueError(
-                    f"masks must be a list of 2D numpy.ndarray (H, W), got {mask.shape}"
-                )
+                raise ValueError(f"masks must be a list of 2D numpy.ndarray (H, W), got {mask.shape}")
 
             if mask.shape[0] != image_h or mask.shape[1] != image_w:
                 raise ValueError(
@@ -198,9 +190,7 @@ class ConfigurableAugmentationPipeline:
                 raise TypeError(f"keypoint {i + 1} must be a list, got {type(kp).__name__}")
 
             if len(kp) != 2:
-                raise ValueError(
-                    f"keypoint {i + 1} must have exactly 2 coordinates (x, y), got {len(kp)}"
-                )
+                raise ValueError(f"keypoint {i + 1} must have exactly 2 coordinates (x, y), got {len(kp)}")
 
             x, y = kp
 
@@ -306,16 +296,14 @@ class ConfigurableAugmentationPipeline:
                         # Check if it's a float string
                         if "." in coord or "e" in coord.lower():
                             raise TypeError(
-                                f"bbox {i + 1} coordinates must be integers, "
-                                f"{name} is string-float '{coord}'"
+                                f"bbox {i + 1} coordinates must be integers, {name} is string-float '{coord}'"
                             )
                         coords.append(int(coord))
                     elif isinstance(coord, (int, np.integer)):
                         coords.append(int(coord))
                     else:
                         raise TypeError(
-                            f"bbox {i + 1} coordinates must be integers, "
-                            f"{name}={type(coord).__name__}"
+                            f"bbox {i + 1} coordinates must be integers, {name}={type(coord).__name__}"
                         )
 
                 x, y, w, h = coords
@@ -513,9 +501,7 @@ class ConfigurableAugmentationPipeline:
             if "masks" not in augmented or augmented["masks"] is None:
                 raise RuntimeError("Augmentation corrupted: provided masks but got none back.")
             if isinstance(augmented["masks"], np.ndarray) and augmented["masks"].ndim == 3:
-                result["masks"] = [
-                    augmented["masks"][i] for i in range(augmented["masks"].shape[0])
-                ]
+                result["masks"] = [augmented["masks"][i] for i in range(augmented["masks"].shape[0])]
             else:
                 result["masks"] = augmented["masks"]
             logger.debug("Processed %d masks", len(result["masks"]))
