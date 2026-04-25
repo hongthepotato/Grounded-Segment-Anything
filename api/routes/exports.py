@@ -49,7 +49,7 @@ def _find_model_packages(output_dir: Path) -> Dict[str, Path]:
 
 def _find_lora_adapters(output_dir: Path) -> Dict[str, Path]:
     """Scan for per-model lora_adapters/ directories."""
-    adapters = {}
+    adapters: Dict[str, Path] = {}
     if not output_dir.is_dir():
         return adapters
     for child in output_dir.iterdir():

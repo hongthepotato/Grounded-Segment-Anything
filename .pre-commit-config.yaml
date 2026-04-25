@@ -73,8 +73,18 @@ repos:
         types_or: [python, pyi]
 
       - id: mypy
-        name: mypy (staged files only, matches CI scope)
-        entry: uv run --no-sync mypy --ignore-missing-imports
+        name: mypy (staged files only — silent on transitive imports)
+        # `--follow-imports=silent`: load imported modules so type-checking
+        # CAN see their definitions (precise inference), but do NOT report
+        # errors in those imported files. Without this, every PR touching
+        # core/ml_engine/api transitively pulls in the WHOLE module graph
+        # and fails on errors in files outside the PR's scope. That breaks
+        # incremental cleanup (TODOS item 6 / Path A): each per-directory
+        # PR would be blocked on errors in directories not yet cleaned.
+        # CI runs the full `mypy core ml_engine api` separately — the gate
+        # there sees the full picture; the pre-commit hook just protects
+        # the files THIS commit touches.
+        entry: uv run --no-sync mypy --ignore-missing-imports --follow-imports=silent
         language: system
         types_or: [python]
         # Only check files under the three gated directories (same scope

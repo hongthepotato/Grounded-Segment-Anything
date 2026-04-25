@@ -182,7 +182,7 @@ def validate_job_config(job_type: str, config: Dict[str, Any]) -> List[str]:
     Returns:
         List of validation error messages (empty if valid)
     """
-    errors = []
+    errors: list[str] = []
 
     # Check if job type is known
     if job_type not in JOB_CONFIG_REQUIREMENTS:
@@ -440,8 +440,11 @@ async def cancel_job(job_id: str, manager: AsyncJobManager = Depends(get_manager
     if not success:
         raise HTTPException(status_code=500, detail="Failed to cancel job")
 
-    # Get updated job
+    # Get updated job. Should always be present (we just cancelled it, the
+    # store row still exists), but mypy can't see that — guard explicitly.
     job = await manager.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=500, detail=f"Job {job_id} disappeared after cancel")
     return JSONResponse(
         status_code=200, content=success_response(data=job_to_response(job).model_dump(mode="json"))
     )
