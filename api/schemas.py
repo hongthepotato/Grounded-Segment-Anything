@@ -11,27 +11,28 @@ This module defines:
 """
 
 from datetime import datetime
-from typing import Dict, Any, Optional, List, TypeVar, Generic
+from typing import Any, Dict, Generic, List, Optional, TypeVar
+
 from pydantic import BaseModel, Field
 
 # Generic type for wrapped data
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class ApiResponse(BaseModel, Generic[T]):
     """
     Unified API response wrapper.
-    
+
     All API responses are wrapped in this format for consistency.
     Frontend checks 'status' field to determine success or failure.
-    
+
     Success example:
         {
             "code": 200,
             "status": "succeed",
             "data": { "id": "abc123", ... }
         }
-    
+
     Error example:
         {
             "code": 422,
@@ -39,6 +40,7 @@ class ApiResponse(BaseModel, Generic[T]):
             "error": "Validation failed: invalid job type"
         }
     """
+
     code: int = Field(..., description="HTTP status code")
     status: str = Field(..., description="Business status: 'succeed' or 'failed'")
     data: Optional[T] = Field(default=None, description="Response data (present when succeed)")
@@ -51,11 +53,11 @@ class ApiResponse(BaseModel, Generic[T]):
 def success_response(data: Any = None, code: int = 200) -> dict:
     """
     Helper function to create a success response.
-    
+
     Args:
         data: Response data (task info, job details, etc.)
         code: HTTP status code (default 200)
-    
+
     Returns:
         {
             "code": 200,
@@ -63,21 +65,17 @@ def success_response(data: Any = None, code: int = 200) -> dict:
             "data": { ... }
         }
     """
-    return {
-        "code": code,
-        "status": "succeed",
-        "data": data
-    }
+    return {"code": code, "status": "succeed", "data": data}
 
 
 def error_response(error: str, code: int = 400) -> dict:
     """
     Helper function to create an error response.
-    
+
     Args:
         error: Error message describing what went wrong
         code: HTTP status code (default 400)
-    
+
     Returns:
         {
             "code": 422,
@@ -85,22 +83,21 @@ def error_response(error: str, code: int = 400) -> dict:
             "error": "Error message here"
         }
     """
-    return {
-        "code": code,
-        "status": "failed",
-        "error": error
-    }
+    return {"code": code, "status": "failed", "error": error}
 
 
 class JobProgressSchema(BaseModel):
     """Progress information during training."""
+
     current_epoch: int = 0
     total_epochs: int = 0
     current_step: int = 0
     total_steps: int = 0
     metrics: Dict[str, float] = Field(default_factory=dict)
     message: str = ""
-    overall_progress: float = Field(default=0.0, description="Overall training progress (0.0 to 1.0)")
+    overall_progress: float = Field(
+        default=0.0, description="Overall training progress (0.0 to 1.0)"
+    )
 
     class Config:
         from_attributes = True
@@ -109,7 +106,7 @@ class JobProgressSchema(BaseModel):
 class JobCreate(BaseModel):
     """
     Request body for job submission.
-    
+
     Example:
         {
             "job_type": "teacher_training",
@@ -125,32 +122,22 @@ class JobCreate(BaseModel):
             "tags": ["experiment1"]
         }
     """
-    job_type: str = Field(
-        ...,
-        description="Type of job (teacher_training, student_distillation)"
-    )
+
+    job_type: str = Field(..., description="Type of job (teacher_training, student_distillation)")
     config: Dict[str, Any] = Field(
-        ...,
-        description="Job configuration (data paths, hyperparameters)"
+        ..., description="Job configuration (data paths, hyperparameters)"
     )
-    priority: int = Field(
-        default=0,
-        description="Job priority (higher = more urgent)"
-    )
+    priority: int = Field(default=0, description="Job priority (higher = more urgent)")
     output_dir: Optional[str] = Field(
-        default=None,
-        description="Output directory (auto-generated if not provided)"
+        default=None, description="Output directory (auto-generated if not provided)"
     )
-    tags: List[str] = Field(
-        default_factory=list,
-        description="Optional tags for filtering"
-    )
+    tags: List[str] = Field(default_factory=list, description="Optional tags for filtering")
 
 
 class JobResponse(BaseModel):
     """
     Response body for job details.
-    
+
     Example:
         {
             "id": "a1b2c3d4-...",
@@ -162,6 +149,7 @@ class JobResponse(BaseModel):
             ...
         }
     """
+
     id: str = Field(..., description="Job UUID")
     type: str = Field(..., description="Job type")
     status: str = Field(..., description="Job status")
@@ -172,8 +160,12 @@ class JobResponse(BaseModel):
     finished_at: Optional[datetime] = Field(default=None, description="Completion timestamp")
     error_message: Optional[str] = Field(default=None, description="Error message if failed")
     output_dir: Optional[str] = Field(default=None, description="Output directory")
-    duration_seconds: Optional[float] = Field(default=None, description="Elapsed seconds (started_at to finished_at)")
-    accuracy: Optional[float] = Field(default=None, description="Model accuracy score (0-100) from evaluation")
+    duration_seconds: Optional[float] = Field(
+        default=None, description="Elapsed seconds (started_at to finished_at)"
+    )
+    accuracy: Optional[float] = Field(
+        default=None, description="Model accuracy score (0-100) from evaluation"
+    )
     # Commented out - not needed by frontend for now
     # priority: int = Field(default=0, description="Job priority")
     # tags: List[str] = Field(default_factory=list, description="Job tags")
@@ -184,6 +176,7 @@ class JobResponse(BaseModel):
 
 class JobListResponse(BaseModel):
     """Response body for job list."""
+
     jobs: List[JobResponse] = Field(..., description="List of jobs")
     total: int = Field(..., description="Total number of jobs matching filter")
     limit: int = Field(..., description="Pagination limit")
@@ -192,6 +185,7 @@ class JobListResponse(BaseModel):
 
 class WorkerResponse(BaseModel):
     """Response body for worker details."""
+
     id: str = Field(..., description="Worker ID")
     gpu_id: int = Field(..., description="GPU device ID")
     hostname: str = Field(..., description="Machine hostname")
@@ -206,6 +200,7 @@ class WorkerResponse(BaseModel):
 
 class QueueStatusResponse(BaseModel):
     """Response body for queue status."""
+
     queue_length: int = Field(..., description="Number of pending jobs in queue")
     workers: List[WorkerResponse] = Field(..., description="Active workers")
     job_counts: Dict[str, int] = Field(..., description="Job counts by status")
@@ -213,11 +208,13 @@ class QueueStatusResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     """Error response body."""
+
     detail: str = Field(..., description="Error message")
 
 
 class WebSocketEvent(BaseModel):
     """WebSocket event message."""
+
     type: str = Field(..., description="Event type")
     job_id: str = Field(..., description="Job ID")
     timestamp: str = Field(..., description="Event timestamp (ISO format)")
@@ -230,10 +227,11 @@ class WebSocketEvent(BaseModel):
 # Auto-Labeling Schemas
 # =============================================================================
 
+
 class AutoLabelRequest(BaseModel):
     """
     Request body for auto-labeling job submission.
-    
+
     Example:
         {
             "image_paths": [
@@ -245,48 +243,26 @@ class AutoLabelRequest(BaseModel):
             "box_threshold": 0.5
         }
     """
-    image_paths: List[str] = Field(
-        ...,
-        description="List of image paths"
-    )
-    classes: List[str] = Field(
-        ...,
-        description="List of class names to detect"
-    )
+
+    image_paths: List[str] = Field(..., description="List of image paths")
+    classes: List[str] = Field(..., description="List of class names to detect")
     output_mode: str = Field(
-        default="boxes",
-        description="Output mode: 'boxes', 'masks', or 'both'"
+        default="boxes", description="Output mode: 'boxes', 'masks', or 'both'"
     )
     box_threshold: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="Detection confidence threshold"
+        default=0.5, ge=0.0, le=1.0, description="Detection confidence threshold"
     )
     text_threshold: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="Text matching threshold"
+        default=0.5, ge=0.0, le=1.0, description="Text matching threshold"
     )
     nms_threshold: float = Field(
-        default=0.7,
-        ge=0.0,
-        le=1.0,
-        description="Non-Maximum Suppression threshold"
+        default=0.7, ge=0.0, le=1.0, description="Non-Maximum Suppression threshold"
     )
     output_dir: Optional[str] = Field(
-        default=None,
-        description="Output directory (auto-generated if not provided)"
+        default=None, description="Output directory (auto-generated if not provided)"
     )
-    priority: int = Field(
-        default=0,
-        description="Job priority (higher = more urgent)"
-    )
-    tags: List[str] = Field(
-        default_factory=list,
-        description="Optional tags for filtering"
-    )
+    priority: int = Field(default=0, description="Job priority (higher = more urgent)")
+    tags: List[str] = Field(default_factory=list, description="Optional tags for filtering")
 
 
 class DistillationRequest(BaseModel):
@@ -300,39 +276,33 @@ class DistillationRequest(BaseModel):
     data_path: str = Field(..., description="Path to labeled COCO annotations JSON")
     image_paths: List[str] = Field(..., description="Labeled image file paths")
     teacher_dir: Optional[str] = Field(
-        default=None,
-        description="Teacher output directory (required with unlabeled_image_paths)"
+        default=None, description="Teacher output directory (required with unlabeled_image_paths)"
     )
     unlabeled_image_paths: Optional[List[str]] = Field(
-        default=None,
-        description="Unlabeled image file paths (required with teacher_dir)"
+        default=None, description="Unlabeled image file paths (required with teacher_dir)"
     )
     student_model: Optional[str] = Field(
-        default=None,
-        description="Optional direct student model name override"
+        default=None, description="Optional direct student model name override"
     )
     student_size: Optional[str] = Field(
-        default=None,
-        description="Optional student size enum: n/s/m/l/x"
+        default=None, description="Optional student size enum: n/s/m/l/x"
     )
     split_config: Optional[Dict[str, float]] = Field(
-        default=None,
-        description="Dataset split ratios: train/val/test (sum=1.0)"
+        default=None, description="Dataset split ratios: train/val/test (sum=1.0)"
     )
     training: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Training hyperparameter overrides"
+        default=None, description="Training hyperparameter overrides"
     )
     priority: int = Field(default=0, description="Job priority (higher = more urgent)")
     output_dir: Optional[str] = Field(
-        default=None,
-        description="Output directory (auto-generated if not provided)"
+        default=None, description="Output directory (auto-generated if not provided)"
     )
     tags: List[str] = Field(default_factory=list, description="Optional tags for filtering")
 
 
 class COCOImageSchema(BaseModel):
     """COCO image entry."""
+
     id: int = Field(..., description="Image ID")
     file_name: str = Field(..., description="Image filename")
     width: int = Field(..., description="Image width")
@@ -341,11 +311,14 @@ class COCOImageSchema(BaseModel):
 
 class COCOAnnotationSchema(BaseModel):
     """COCO annotation entry."""
+
     id: int = Field(..., description="Annotation ID")
     image_id: int = Field(..., description="Image ID")
     category_id: int = Field(..., description="Category ID")
     bbox: Optional[List[float]] = Field(default=None, description="Bounding box [x, y, w, h]")
-    segmentation: Optional[List[List[float]]] = Field(default=None, description="Polygon segmentation")
+    segmentation: Optional[List[List[float]]] = Field(
+        default=None, description="Polygon segmentation"
+    )
     area: Optional[float] = Field(default=None, description="Area in pixels")
     score: Optional[float] = Field(default=None, description="Detection confidence")
     iscrowd: int = Field(default=0, description="Is crowd annotation")
@@ -353,6 +326,7 @@ class COCOAnnotationSchema(BaseModel):
 
 class COCOCategorySchema(BaseModel):
     """COCO category entry."""
+
     id: int = Field(..., description="Category ID")
     name: str = Field(..., description="Category name")
 
@@ -360,9 +334,10 @@ class COCOCategorySchema(BaseModel):
 class AutoLabelResultResponse(BaseModel):
     """
     COCO-format annotations response.
-    
+
     Contains complete COCO JSON structure with images, annotations, and categories.
     """
+
     images: List[COCOImageSchema] = Field(..., description="List of images")
     annotations: List[COCOAnnotationSchema] = Field(..., description="List of annotations")
     categories: List[COCOCategorySchema] = Field(..., description="List of categories")
@@ -370,6 +345,7 @@ class AutoLabelResultResponse(BaseModel):
 
 class VisualizationInfo(BaseModel):
     """Information about a single visualization image."""
+
     filename: str = Field(..., description="Visualization filename")
     original: str = Field(..., description="Original image filename")
     annotation_count: int = Field(..., description="Number of annotations in this image")
@@ -377,6 +353,7 @@ class VisualizationInfo(BaseModel):
 
 class VisualizationListResponse(BaseModel):
     """List of visualization images for an auto-label job."""
+
     job_id: str = Field(..., description="Job ID")
     total: int = Field(..., description="Total number of visualizations")
     images: List[VisualizationInfo] = Field(..., description="List of visualization info")

@@ -5,15 +5,15 @@ Provides:
 - POST /api/distillation - Submit student distillation job
 """
 
-import os
 import logging
-from typing import Dict, Any
+import os
+from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
+from api.routes.jobs import job_to_response, validate_job_config
 from api.schemas import DistillationRequest, success_response
-from api.routes.jobs import validate_job_config, job_to_response
 from ml_engine.jobs import AsyncJobManager, get_async_job_manager
 
 logger = logging.getLogger(__name__)
@@ -29,8 +29,7 @@ def get_manager() -> AsyncJobManager:
 
 @router.post("", status_code=200)
 async def submit_distillation(
-    request: DistillationRequest,
-    manager: AsyncJobManager = Depends(get_manager)
+    request: DistillationRequest, manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Submit a student distillation job.
@@ -58,8 +57,7 @@ async def submit_distillation(
     validation_errors = validate_job_config("student_distillation", config)
     if validation_errors:
         raise HTTPException(
-            status_code=422,
-            detail=f"Invalid distillation config: {'; '.join(validation_errors)}"
+            status_code=422, detail=f"Invalid distillation config: {'; '.join(validation_errors)}"
         )
 
     try:
@@ -73,10 +71,7 @@ async def submit_distillation(
         logger.info("Submitted distillation job %s", job.id[:8])
         return JSONResponse(
             status_code=200,
-            content=success_response(
-                data=job_to_response(job).model_dump(mode='json'),
-                code=200
-            )
+            content=success_response(data=job_to_response(job).model_dump(mode="json"), code=200),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

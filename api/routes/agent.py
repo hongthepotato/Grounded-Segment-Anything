@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -32,6 +32,7 @@ ws_router = APIRouter(tags=["agent-ws"])
 # ---------------------------------------------------------------------------
 # Request / response schemas
 # ---------------------------------------------------------------------------
+
 
 class PlanRequest(BaseModel):
     intent: str
@@ -78,8 +79,8 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
         logger.info("Coordinator already running for run %s", run_id)
         return
 
-    from ml_engine.agent.coordinator import Coordinator
     from ml_engine.agent.contracts import PipelineContract
+    from ml_engine.agent.coordinator import Coordinator
     from ml_engine.agent.llm_client import LLMClient
 
     r = _get_async_redis()
@@ -122,8 +123,10 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
 # Dependency: redis client
 # ---------------------------------------------------------------------------
 
+
 def _get_async_redis():
     from ml_engine.agent.redis_clients import get_async_redis_client
+
     url = os.environ.get("REDIS_URL", "redis://localhost:6379")
     return get_async_redis_client(url)
 
@@ -131,6 +134,7 @@ def _get_async_redis():
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.post("/plan", response_model=PlanResponse)
 async def propose_plan(body: PlanRequest):
@@ -148,8 +152,8 @@ async def propose_plan(body: PlanRequest):
         PipelineContract,
         TargetSpec,
     )
-    from ml_engine.agent.state_machine import StateMachine
     from ml_engine.agent.loop import apublish_event
+    from ml_engine.agent.state_machine import StateMachine
 
     run_id = str(uuid.uuid4())
     contract = PipelineContract(
@@ -174,19 +178,25 @@ async def propose_plan(body: PlanRequest):
     # the client caching the HTTP response from this endpoint.
     await sm.initialize(contract=contract.to_dict())
 
-    await apublish_event(r, run_id, {
-        "type": "plan_proposed",
-        "run_id": run_id,
-        "contract": contract.to_dict(),
-    })
+    await apublish_event(
+        r,
+        run_id,
+        {
+            "type": "plan_proposed",
+            "run_id": run_id,
+            "contract": contract.to_dict(),
+        },
+    )
 
     logger.info("Plan proposed: run_id=%s intent=%r", run_id, body.intent[:60])
     return JSONResponse(
         status_code=200,
-        content=success_response(data=PlanResponse(
-            run_id=run_id,
-            contract=contract.to_dict(),
-        ).model_dump()),
+        content=success_response(
+            data=PlanResponse(
+                run_id=run_id,
+                contract=contract.to_dict(),
+            ).model_dump()
+        ),
     )
 
 
@@ -203,8 +213,8 @@ async def approve_plan(body: ApproveRequest):
     the user can modify budget, acceptance_criteria, or stage_configs before
     approving.
     """
-    from ml_engine.agent.state_machine import StateMachine
     from ml_engine.agent.loop import apublish_event
+    from ml_engine.agent.state_machine import StateMachine
 
     r = _get_async_redis()
     sm = StateMachine(run_id=body.run_id, redis_async=r)
@@ -214,11 +224,15 @@ async def approve_plan(body: ApproveRequest):
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    await apublish_event(r, body.run_id, {
-        "type": "contract_approved",
-        "run_id": body.run_id,
-        "contract": body.contract,
-    })
+    await apublish_event(
+        r,
+        body.run_id,
+        {
+            "type": "contract_approved",
+            "run_id": body.run_id,
+            "contract": body.contract,
+        },
+    )
 
     # Start the Coordinator task (idempotent -- no-op if already running)
     _start_coordinator(body.run_id, body.contract)
@@ -257,14 +271,17 @@ async def get_status(run_id: str):
 
     return JSONResponse(
         status_code=200,
-        content=success_response(data={
-            "run_id": run_id,
-            "state": state,
-            "retry_count": retry_count,
-            "stage_summaries": summaries,
-            "proposed_contract": proposed_contract,
-            "coordinator_active": run_id in _coordinator_tasks and not _coordinator_tasks[run_id].done(),
-        }),
+        content=success_response(
+            data={
+                "run_id": run_id,
+                "state": state,
+                "retry_count": retry_count,
+                "stage_summaries": summaries,
+                "proposed_contract": proposed_contract,
+                "coordinator_active": run_id in _coordinator_tasks
+                and not _coordinator_tasks[run_id].done(),
+            }
+        ),
     )
 
 
@@ -278,8 +295,8 @@ async def human_gate(run_id: str, action: str, body: GateActionRequest):
     approve -> transitions to "done"
     reject  -> transitions to "escalated" with reason
     """
-    from ml_engine.agent.state_machine import StateMachine
     from ml_engine.agent.loop import apublish_event
+    from ml_engine.agent.state_machine import StateMachine
 
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
@@ -304,24 +321,31 @@ async def human_gate(run_id: str, action: str, body: GateActionRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    await apublish_event(r, run_id, {
-        "type": "gate_approved" if action == "approve" else "gate_rejected",
-        "run_id": run_id,
-        "action": action,
-        "reason": body.reason,
-        "new_state": target_state,
-    })
+    await apublish_event(
+        r,
+        run_id,
+        {
+            "type": "gate_approved" if action == "approve" else "gate_rejected",
+            "run_id": run_id,
+            "action": action,
+            "reason": body.reason,
+            "new_state": target_state,
+        },
+    )
 
     logger.info("Human gate %s for run %s -> %s", action, run_id, target_state)
     return JSONResponse(
         status_code=200,
-        content=success_response(data={"run_id": run_id, "action": action, "new_state": target_state}),
+        content=success_response(
+            data={"run_id": run_id, "action": action, "new_state": target_state}
+        ),
     )
 
 
 # ---------------------------------------------------------------------------
 # WebSocket: live event stream
 # ---------------------------------------------------------------------------
+
 
 @ws_router.websocket("/ws/agent/{run_id}")
 async def agent_websocket(websocket: WebSocket, run_id: str):
@@ -337,8 +361,8 @@ async def agent_websocket(websocket: WebSocket, run_id: str):
 
     r = _get_async_redis()
 
-    from ml_engine.agent.stream_consumer import stream_key
     from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
+    from ml_engine.agent.stream_consumer import stream_key
 
     key = stream_key(run_id)
     last_id = "0-0"
