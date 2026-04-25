@@ -122,19 +122,19 @@ class StreamConsumer(ABC):
     ) -> None:
         """Block on the Stream and dispatch each event to ``handle_event``."""
         await ensure_consumer_group(self._r, self.run_id, self.CONSUMER_GROUP)
-        key = stream_key(self.run_id) # agent:{run_id}:events
+        key = stream_key(self.run_id)  # agent:{run_id}:events
         events_processed = 0
 
-        await self.on_start() # subclass hook for one-shot setup before the main loop
+        await self.on_start()  # subclass hook for one-shot setup before the main loop
 
         logger.info(
             "%s started for run %s (consumer=%s)",
-            type(self).__name__, self.run_id, self._consumer_name,
+            type(self).__name__,
+            self.run_id,
+            self._consumer_name,
         )
 
-        events_processed = await self._drain_pel(
-            key, events_processed, cancel_check, max_events
-        )
+        events_processed = await self._drain_pel(key, events_processed, cancel_check, max_events)
 
         while True:
             if cancel_check and cancel_check():
@@ -145,7 +145,8 @@ class StreamConsumer(ABC):
             if await self.should_stop():
                 logger.info(
                     "%s stop condition met for run %s",
-                    type(self).__name__, self.run_id,
+                    type(self).__name__,
+                    self.run_id,
                 )
                 break
 
@@ -165,9 +166,7 @@ class StreamConsumer(ABC):
             if not entries:
                 continue
 
-            events_processed = await self._process_entries(
-                entries, key, events_processed
-            )
+            events_processed = await self._process_entries(entries, key, events_processed)
 
     # ------------------------------------------------------------------
     # PEL reclamation
@@ -197,13 +196,18 @@ class StreamConsumer(ABC):
 
             try:
                 pending = await self._r.xpending_range(
-                    key, self.CONSUMER_GROUP,
-                    min="-", max="+", count=self.BATCH_SIZE * 2,
+                    key,
+                    self.CONSUMER_GROUP,
+                    min="-",
+                    max="+",
+                    count=self.BATCH_SIZE * 2,
                     consumername=self._consumer_name,
                 )
             except redis.RedisError as e:
                 logger.error(
-                    "%s Redis error reading PEL: %s", type(self).__name__, e,
+                    "%s Redis error reading PEL: %s",
+                    type(self).__name__,
+                    e,
                 )
                 return events_processed
 
@@ -214,13 +218,17 @@ class StreamConsumer(ABC):
 
             try:
                 claimed = await self._r.xclaim(
-                    key, self.CONSUMER_GROUP, self._consumer_name,
+                    key,
+                    self.CONSUMER_GROUP,
+                    self._consumer_name,
                     min_idle_time=0,
                     message_ids=ids,
                 )
             except redis.RedisError as e:
                 logger.error(
-                    "%s Redis error claiming PEL: %s", type(self).__name__, e,
+                    "%s Redis error claiming PEL: %s",
+                    type(self).__name__,
+                    e,
                 )
                 return events_processed
 
@@ -229,13 +237,13 @@ class StreamConsumer(ABC):
 
             logger.info(
                 "%s reclaiming %d PEL entries for consumer %s",
-                type(self).__name__, len(claimed), self._consumer_name,
+                type(self).__name__,
+                len(claimed),
+                self._consumer_name,
             )
             # xclaim returns [(id, data), ...] -- wrap to match xreadgroup shape
             wrapped = [(key, claimed)]
-            events_processed = await self._process_entries(
-                wrapped, key, events_processed
-            )
+            events_processed = await self._process_entries(wrapped, key, events_processed)
 
     # ------------------------------------------------------------------
     # Entry processing
@@ -250,9 +258,7 @@ class StreamConsumer(ABC):
         """Decode each message, dispatch to handle_event, ACK. Returns counter."""
         for _, messages in entries:
             for entry_id, entry_data in messages:
-                entry_id_str = (
-                    entry_id.decode() if isinstance(entry_id, bytes) else entry_id
-                )
+                entry_id_str = entry_id.decode() if isinstance(entry_id, bytes) else entry_id
                 raw = entry_data.get(b"data", entry_data.get("data", "{}"))
                 if isinstance(raw, bytes):
                     raw = raw.decode()
@@ -281,7 +287,10 @@ class StreamConsumer(ABC):
         except Exception as e:
             logger.error(
                 "%s handler error for event %s: %s",
-                type(self).__name__, entry_id_str, e, exc_info=True,
+                type(self).__name__,
+                entry_id_str,
+                e,
+                exc_info=True,
             )
             try:
                 await self.on_event_error(event, entry_id_str, e)
@@ -290,7 +299,9 @@ class StreamConsumer(ABC):
             except Exception as inner:
                 logger.error(
                     "%s on_event_error raised: %s",
-                    type(self).__name__, inner, exc_info=True,
+                    type(self).__name__,
+                    inner,
+                    exc_info=True,
                 )
         # Handler succeeded or raised non-cancellation -> ACK.
         await self._r.xack(key, self.CONSUMER_GROUP, entry_id_str)
@@ -308,14 +319,10 @@ class StreamConsumer(ABC):
         return False
 
     @abstractmethod
-    async def handle_event(
-        self, event: Dict[str, Any], entry_id_str: str
-    ) -> None:
+    async def handle_event(self, event: Dict[str, Any], entry_id_str: str) -> None:
         """Subclass event dispatch. Event has been JSON-decoded."""
         raise NotImplementedError
 
-    async def on_event_error(
-        self, event: Dict[str, Any], entry_id_str: str, exc: BaseException
-    ) -> None:
+    async def on_event_error(self, event: Dict[str, Any], entry_id_str: str, exc: BaseException) -> None:
         """Hook called when handle_event raises. Default: no-op (error is logged)."""
         return None

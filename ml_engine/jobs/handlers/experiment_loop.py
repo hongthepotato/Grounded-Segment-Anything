@@ -14,11 +14,10 @@ import json
 import logging
 import multiprocessing as mp
 import queue
-import time
 from pathlib import Path
 from typing import Any, Dict
 
-from ml_engine.jobs.handlers.base import JobHandler, TrainingCancelledError
+from ml_engine.jobs.handlers.base import JobHandler
 from ml_engine.jobs.models import JobOutcome
 
 logger = logging.getLogger(__name__)
@@ -115,6 +114,7 @@ class ExperimentLoopHandler(JobHandler):
 
         if use_llm:
             from ml_engine.experiment.llm_propose import LLMProposeFn
+
             fallback = SimpleMutator(mutable_keys=mutable_keys)
             proposer = LLMProposeFn(
                 mutable_keys=mutable_keys,

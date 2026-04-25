@@ -7,9 +7,9 @@ JSON persistence on disk. Readable by the LLM Executor at Stage 4.
 import json
 import logging
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +17,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrialRecord:
     r"""Data class for a single trial record in the experiment log."""
+
     trial_id: str
     overrides: Dict[str, Any]
     primary_metric: Optional[float]
     all_metrics: Dict[str, float]
-    status: str                  # "keep", "skip", "crashed", "oom"
+    status: str  # "keep", "skip", "crashed", "oom"
     description: str
     wall_time_seconds: float = 0.0
     error_message: Optional[str] = None

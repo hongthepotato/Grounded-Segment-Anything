@@ -1,35 +1,36 @@
 """
 Utility functions for COCO data processing.
 """
-from typing import Dict, Any, List
+
+from typing import Dict
+
 
 def has_valid_numeric_field(data: Dict, field: str, min_value: float = 0) -> bool:
     """
     Check if a field exists and has a valid numeric value.
-    
+
     Valid means: key exists, value is not None, and value > min_value.
-    
+
     Args:
         data: Dictionary to check
         field: Field name to validate
         min_value: Minimum valid value (exclusive)
-    
+
     Returns:
         True if field has valid numeric value, False otherwise
-    
+
     Example:
         >>> ann = {'area': 150.5}
         >>> has_valid_numeric_field(ann, 'area')  # True
-        >>> 
+        >>>
         >>> ann = {'area': 0}
         >>> has_valid_numeric_field(ann, 'area')  # False
-        >>> 
+        >>>
         >>> ann = {'area': None}
         >>> has_valid_numeric_field(ann, 'area')  # False
     """
-    return (field in data and
-            data[field] is not None and
-            data[field] > min_value)
+    return field in data and data[field] is not None and data[field] > min_value
+
 
 # def build_id_lookup(items: List[Dict], id_field: str = 'id') -> Dict[Any, Dict]:
 #     """

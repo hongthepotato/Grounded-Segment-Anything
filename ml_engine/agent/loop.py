@@ -26,8 +26,10 @@ import redis.asyncio as _aredis
 
 from ml_engine.agent.stream_consumer import (
     StreamConsumer,
-    ensure_consumer_group as _ensure_consumer_group_shared,
     stream_key,
+)
+from ml_engine.agent.stream_consumer import (
+    ensure_consumer_group as _ensure_consumer_group_shared,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ __all__ = [
 @dataclass
 class LoopState:
     """Persisted agent loop state. Survives Docker restarts."""
+
     run_id: str
     messages: List[Dict[str, Any]] = field(default_factory=list)
     last_event_id: str = "0-0"
@@ -93,9 +96,7 @@ def state_key(run_id: str) -> str:
     return f"{_STATE_PREFIX}{run_id}{_STATE_SUFFIX}"
 
 
-async def apublish_event(
-    redis_client: _aredis.Redis, run_id: str, event: Dict[str, Any]
-) -> str:
+async def apublish_event(redis_client: _aredis.Redis, run_id: str, event: Dict[str, Any]) -> str:
     """Publish an event to the pipeline's Redis Stream."""
     key = stream_key(run_id)
     entry_id = await redis_client.xadd(key, {"data": json.dumps(event)})
@@ -149,23 +150,25 @@ class AgentLoop(StreamConsumer):
     async def on_start(self) -> None:
         self._state = await self._load_state()
 
-    async def handle_event(
-        self, event: Dict[str, Any], entry_id_str: str
-    ) -> None:
+    async def handle_event(self, event: Dict[str, Any], entry_id_str: str) -> None:
         assert self._state is not None, "on_start must run before handle_event"
         state = self._state
         logger.info(
             "Run %s received event: %s (id=%s)",
-            self.run_id, event.get("type"), entry_id_str,
+            self.run_id,
+            event.get("type"),
+            entry_id_str,
         )
 
         # Inject event into loop state and persist BEFORE handler runs,
         # so the event trace survives handler crashes. Costs one extra
         # HSET per event; worth it for debuggability.
-        state.messages.append({
-            "role": "user",
-            "content": f"[EVENT] {json.dumps(event)}",
-        })
+        state.messages.append(
+            {
+                "role": "user",
+                "content": f"[EVENT] {json.dumps(event)}",
+            }
+        )
         state.last_event_id = entry_id_str
         await self._save_state(state)
 
@@ -181,8 +184,7 @@ class AgentLoop(StreamConsumer):
         if not raw:
             return LoopState(run_id=self.run_id)
         decoded = {
-            k.decode() if isinstance(k, bytes) else k:
-            v.decode() if isinstance(v, bytes) else v
+            k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
             for k, v in raw.items()
         }
         return LoopState.from_dict(decoded)

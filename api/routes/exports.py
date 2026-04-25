@@ -66,9 +66,7 @@ async def _validate_completed_job(job_id: str, manager: AsyncJobManager):
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     if job.status.value != "completed":
-        raise HTTPException(
-            status_code=400, detail=f"Job is not completed (status: {job.status.value})"
-        )
+        raise HTTPException(status_code=400, detail=f"Job is not completed (status: {job.status.value})")
     return job
 
 
@@ -122,9 +120,7 @@ async def list_exports(job_id: str, manager: AsyncJobManager = Depends(get_manag
 @router.get("/{job_id}/export")
 async def download_model(
     job_id: str,
-    format: str = Query(
-        default="merged_pth", description="Export format: merged_pth, lora_adapters"
-    ),
+    format: str = Query(default="merged_pth", description="Export format: merged_pth, lora_adapters"),
     model: Optional[str] = Query(
         default=None, description="Model name (grounding_dino, sam). Auto-detected if omitted."
     ),

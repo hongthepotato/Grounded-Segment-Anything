@@ -15,31 +15,32 @@ import json
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
+from typing import Any, Callable, Dict, Optional
 
 import torch
 from tqdm import tqdm
 
+from core.config import save_config
+from core.constants import GROUNDING_DINO, SAM
+from core.log_utils import log_config, log_metrics
+from ml_engine.data.dataset_factory import DatasetFactory
 from ml_engine.data.loaders import create_dataloader
 from ml_engine.data.manager import DataManager
-from ml_engine.data.dataset_factory import DatasetFactory
 from ml_engine.evaluation import PredictionVisualizer
 from ml_engine.evaluation.evaluator import ModelEvaluator
 from ml_engine.evaluation.report import ModelReportGenerator
 from ml_engine.export import create_export_package
-from core.constants import GROUNDING_DINO, SAM
-from core.config import save_config
-from core.log_utils import log_config, log_metrics
 
+from .model_trainers.base import BaseModelTrainer
 from .model_trainers.grounding_dino import GroundingDINOTrainer
 from .model_trainers.sam import SAMTrainer
-from .model_trainers.base import BaseModelTrainer
 
 logger = logging.getLogger(__name__)
 
 
 class TrainingCancelledException(Exception):
     """Raised when training is cancelled by user request."""
+
     pass
 
 
@@ -53,23 +54,23 @@ TRAINER_REGISTRY: Dict[str, type] = {
 class Trainer:
     """
     Main trainer for teacher models with data-driven model loading.
-    
+
     This class coordinates training of multiple models (DINO, SAM) by:
     - Creating appropriate model trainers based on dataset requirements
     - Running training/validation epochs
     - Coordinating checkpointing across models
     - Running test evaluation and creating export packages
-    
+
     Example:
         >>> from ml_engine.data.manager import DataManager
         >>> from ml_engine.training import Trainer
-        >>> 
+        >>>
         >>> manager = DataManager(
         >>>     data_path='data/annotations.json',
         >>>     image_paths=[...],
         >>>     split_config={'train': 0.7, 'val': 0.2, 'test': 0.1}
         >>> )
-        >>> 
+        >>>
         >>> trainer = Trainer(
         >>>     data_manager=manager,
         >>>     output_dir='experiments/exp1',
@@ -85,11 +86,11 @@ class Trainer:
         config: Dict[str, Any],
         resume_from: Optional[str] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-        cancel_check: Optional[Callable[[], bool]] = None
+        cancel_check: Optional[Callable[[], bool]] = None,
     ):
         """
         Initialize the Trainer.
-        
+
         Args:
             data_manager: DataManager instance with train/val/test splits
             output_dir: Output directory for checkpoints and logs
@@ -109,12 +110,12 @@ class Trainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save config for reproducibility
-        config_path = self.output_dir / 'teacher_config.yaml'
+        config_path = self.output_dir / "teacher_config.yaml"
         save_config(config, str(config_path))
         logger.info("Saved config to: %s", config_path)
 
         # Setup device
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         logger.info("Using device: %s", self.device)
         if torch.cuda.is_available():
             logger.info("GPU: %s", torch.cuda.get_device_name(0))
@@ -123,10 +124,12 @@ class Trainer:
         self.dataset_info = data_manager.get_dataset_info()
         self.required_models = data_manager.get_required_models()
 
-        logger.info("Dataset: boxes=%s, masks=%s, classes=%d",
-                   self.dataset_info['has_boxes'],
-                   self.dataset_info['has_masks'],
-                   self.dataset_info['num_classes'])
+        logger.info(
+            "Dataset: boxes=%s, masks=%s, classes=%d",
+            self.dataset_info["has_boxes"],
+            self.dataset_info["has_masks"],
+            self.dataset_info["num_classes"],
+        )
         logger.info("Required models: %s", self.required_models)
 
         # Initialize components
@@ -140,24 +143,24 @@ class Trainer:
 
     def _init_datasets(self) -> None:
         """Initialize datasets and dataloaders."""
-        train_data = self.data_manager.get_split('train')
-        val_data = self.data_manager.get_split('val')
-        
+        train_data = self.data_manager.get_split("train")
+        val_data = self.data_manager.get_split("val")
+
         # Check SAM single object sampling
-        sam_config = self.config.get('models', {}).get('sam', {})
-        sam_single_object_sampling = sam_config.get('training', {}).get('single_object_sampling', False)
-        
+        sam_config = self.config.get("models", {}).get("sam", {})
+        sam_single_object_sampling = sam_config.get("training", {}).get("single_object_sampling", False)
+
         # Create datasets
         self.train_dataset = DatasetFactory.create_dataset(
             coco_data=train_data,
             image_path_resolver=self.data_manager.get_image_path,
             dataset_info=self.dataset_info,
             model_names=self.required_models,
-            augmentation_config=self.config.get('augmentation'),
+            augmentation_config=self.config.get("augmentation"),
             is_training=True,
-            sam_single_object_sampling=sam_single_object_sampling
+            sam_single_object_sampling=sam_single_object_sampling,
         )
-        
+
         self.val_dataset = DatasetFactory.create_dataset(
             coco_data=val_data,
             image_path_resolver=self.data_manager.get_image_path,
@@ -165,22 +168,22 @@ class Trainer:
             model_names=self.required_models,
             augmentation_config=None,
             is_training=False,
-            sam_single_object_sampling=False
+            sam_single_object_sampling=False,
         )
-        
+
         # Create dataloaders
-        batch_size = self.config.get('batch_size', 8)
-        num_workers = self.config.get('num_workers', 4)
-        
+        batch_size = self.config.get("batch_size", 8)
+        num_workers = self.config.get("num_workers", 4)
+
         self.train_loader = create_dataloader(
             self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
         )
         self.val_loader = create_dataloader(
             self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
         )
-        
+
         logger.info("✓ Datasets: %d train, %d val", len(self.train_dataset), len(self.val_dataset))
-    
+
     def _init_trainers(self) -> None:
         """Create model trainers based on required models."""
         self.trainers: Dict[str, BaseModelTrainer] = {}
@@ -190,37 +193,37 @@ class Trainer:
                 raise ValueError(f"Unknown model: {model_name}. Available: {list(TRAINER_REGISTRY.keys())}")
 
             trainer_cls = TRAINER_REGISTRY[model_name]
-            model_config = self.config['models'][model_name]
+            model_config = self.config["models"][model_name]
 
             # Add shared config values. training_dynamics must be forwarded from the
             # top-level config so HPO mutations to training_dynamics.* reach TrainingManager.
             model_config = {
                 **model_config,
-                'epochs': self.config.get('epochs', 50),
-                'training_dynamics': self.config.get('training_dynamics'),
+                "epochs": self.config.get("epochs", 50),
+                "training_dynamics": self.config.get("training_dynamics"),
             }
 
             self.trainers[model_name] = trainer_cls(
                 config=model_config,
                 device=self.device,
                 output_dir=self.output_dir,
-                dataset_info=self.dataset_info
+                dataset_info=self.dataset_info,
             )
 
         logger.info("✓ Created %d model trainers", len(self.trainers))
-    
+
     def _init_visualizer(self) -> None:
         """Initialize prediction visualizer."""
-        save_predictions = self.config.get('evaluation', {}).get('save_predictions', False)
+        save_predictions = self.config.get("evaluation", {}).get("save_predictions", False)
         if save_predictions:
             self.visualizer = PredictionVisualizer(
-                output_dir=str(self.output_dir / 'predictions'),
+                output_dir=str(self.output_dir / "predictions"),
                 max_samples_per_epoch=8,
-                enabled=True
+                enabled=True,
             )
         else:
             self.visualizer = None
-    
+
     def train(self) -> Dict[str, float]:
         """
         Main training loop.
@@ -232,7 +235,7 @@ class Trainer:
         Raises:
             TrainingCancelledException: If cancel_check returns True
         """
-        epochs = self.config.get('epochs', 50)
+        epochs = self.config.get("epochs", 50)
         last_val_metrics: Dict[str, float] = {}
 
         logger.info("=" * 60)
@@ -254,7 +257,7 @@ class Trainer:
                 train_metrics = self._train_epoch(epoch)
 
                 # Validate (at specified interval)
-                eval_interval = self.config.get('evaluation', {}).get('interval', 1)
+                eval_interval = self.config.get("evaluation", {}).get("interval", 1)
                 if (epoch + 1) % eval_interval == 0:
                     val_metrics = self._validate_epoch(epoch)
                     if val_metrics:
@@ -263,15 +266,15 @@ class Trainer:
                     val_metrics = {}
 
                 # Merge metrics
-                all_metrics = {**train_metrics, **val_metrics, 'epoch': epoch}
+                all_metrics = {**train_metrics, **val_metrics, "epoch": epoch}
 
                 # Save checkpoints and log
                 stop_training = False
                 for name, trainer in self.trainers.items():
                     trainer.save_checkpoint(epoch, all_metrics)
-                    trainer.log_metrics(train_metrics, epoch, prefix='train')
+                    trainer.log_metrics(train_metrics, epoch, prefix="train")
                     if val_metrics:
-                        trainer.log_metrics(val_metrics, epoch, prefix='val')
+                        trainer.log_metrics(val_metrics, epoch, prefix="val")
 
                     if trainer.should_stop:
                         logger.info("Early stopping triggered for %s", name)
@@ -283,13 +286,15 @@ class Trainer:
 
                 # Report progress
                 if self.progress_callback:
-                    self.progress_callback({
-                        'current_epoch': epoch + 1,
-                        'total_epochs': epochs,
-                        'train_metrics': train_metrics,
-                        'val_metrics': val_metrics,
-                        'message': f"Completed epoch {epoch + 1}/{epochs}"
-                    })
+                    self.progress_callback(
+                        {
+                            "current_epoch": epoch + 1,
+                            "total_epochs": epochs,
+                            "train_metrics": train_metrics,
+                            "val_metrics": val_metrics,
+                            "message": f"Completed epoch {epoch + 1}/{epochs}",
+                        }
+                    )
 
             logger.info("=" * 60)
             logger.info("Training Completed!")
@@ -306,7 +311,7 @@ class Trainer:
                 trainer.close()
 
         return last_val_metrics
-    
+
     def _train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train for one epoch across all models."""
         metrics_acc = defaultdict(list)
@@ -327,7 +332,7 @@ class Trainer:
             # Update progress bar
             postfix = {}
             for k, v in metrics_acc.items():
-                if 'total_loss' in k:
+                if "total_loss" in k:
                     postfix[k] = f"{v[-1]:.4f}"
             pbar.set_postfix(postfix)
 
@@ -335,14 +340,16 @@ class Trainer:
             if self.progress_callback and total_steps > 0:
                 report_interval = max(1, total_steps // 10)
                 if step % report_interval == 0:
-                    self.progress_callback({
-                        'current_epoch': epoch + 1,
-                        'total_epochs': self.config.get('epochs', 50),
-                        'current_step': step + 1,
-                        'total_steps': total_steps,
-                        'message': f"Epoch {epoch + 1}, Step {step + 1}/{total_steps}"
-                    })
-        
+                    self.progress_callback(
+                        {
+                            "current_epoch": epoch + 1,
+                            "total_epochs": self.config.get("epochs", 50),
+                            "current_step": step + 1,
+                            "total_steps": total_steps,
+                            "message": f"Epoch {epoch + 1}, Step {step + 1}/{total_steps}",
+                        }
+                    )
+
         # Step LR schedulers once per epoch (correct granularity for CosineAnnealingWarmRestarts
         # with T_0 set in epochs). Stepping per optimizer-update inside TrainingManager would
         # compress the schedule by a factor of accumulation_steps * batches_per_epoch.
@@ -350,11 +357,11 @@ class Trainer:
             trainer.step_scheduler()
 
         # Average metrics
-        train_metrics = {f'train_{k}': sum(v) / len(v) for k, v in metrics_acc.items()}
+        train_metrics = {f"train_{k}": sum(v) / len(v) for k, v in metrics_acc.items()}
         log_metrics(logger, train_metrics, epoch, prefix="Train")
 
         return train_metrics
-    
+
     @torch.no_grad()
     def _validate_epoch(self, epoch: int) -> Dict[str, float]:
         """Validate for one epoch across all models."""
@@ -369,15 +376,15 @@ class Trainer:
 
             postfix = {}
             for k, v in metrics_acc.items():
-                if 'total_loss' in k:
+                if "total_loss" in k:
                     postfix[k] = f"{v[-1]:.4f}"
             pbar.set_postfix(postfix)
 
-        val_metrics = {f'val_{k}': sum(v) / len(v) for k, v in metrics_acc.items()}
+        val_metrics = {f"val_{k}": sum(v) / len(v) for k, v in metrics_acc.items()}
         log_metrics(logger, val_metrics, epoch, prefix="Val")
 
         return val_metrics
-    
+
     def _save_adapters(self) -> None:
         """Save LoRA adapters for all models."""
         artifacts = {}
@@ -388,30 +395,33 @@ class Trainer:
                 artifacts[model_name] = str(rel_path)
 
         from ml_engine.artifacts import BundleManifest
+
         bundle_manifest = BundleManifest(
             bundle_type="teacher_training_output",
             artifacts=artifacts,
-            lineage={"job_id": None,},
-            merged_checkpoints=None
+            lineage={
+                "job_id": None,
+            },
+            merged_checkpoints=None,
         )
         bundle_manifest.save(self.output_dir / "bundle.manifest.json")
-    
+
     def _evaluate_on_test_set(self) -> None:
         """Evaluate on held-out test set."""
         try:
-            test_data = self.data_manager.get_split('test')
+            test_data = self.data_manager.get_split("test")
         except ValueError:
             logger.warning("No test split available. Skipping evaluation.")
             return
-        
-        if not test_data.get('images'):
+
+        if not test_data.get("images"):
             logger.warning("Test split is empty. Skipping evaluation.")
             return
-        
+
         logger.info("=" * 60)
         logger.info("Running Test Set Evaluation")
         logger.info("=" * 60)
-        
+
         # Create test dataloader
         test_dataset = DatasetFactory.create_dataset(
             coco_data=test_data,
@@ -419,119 +429,123 @@ class Trainer:
             dataset_info=self.dataset_info,
             model_names=self.required_models,
             augmentation_config=None,
-            is_training=False
+            is_training=False,
         )
-        
+
         test_loader = create_dataloader(
             test_dataset,
-            batch_size=self.config.get('batch_size', 8),
+            batch_size=self.config.get("batch_size", 8),
             shuffle=False,
-            num_workers=self.config.get('num_workers', 4)
+            num_workers=self.config.get("num_workers", 4),
         )
-        
+
         logger.info("Test set: %d images", len(test_dataset))
-        
+
         # Initialize evaluator
         evaluator = ModelEvaluator(
             device=str(self.device),
-            confidence_threshold=self.config.get('evaluation', {}).get('confidence_threshold', 0.3)
+            confidence_threshold=self.config.get("evaluation", {}).get("confidence_threshold", 0.3),
         )
         report_generator = ModelReportGenerator()
-        class_names = list(self.dataset_info['class_mapping'].values())
-        
+        class_names = list(self.dataset_info["class_mapping"].values())
+
         all_reports = []
-        
+
         for name, trainer in self.trainers.items():
             logger.info("Evaluating %s...", name)
-            
+
             # Load best checkpoint
             best_path = trainer.get_checkpoint_manager().get_best_checkpoint_path()
             if best_path.exists():
                 trainer.load_checkpoint(str(best_path))
-            
+
             # Evaluate
             model = trainer.get_model()
             if name == GROUNDING_DINO:
                 results = evaluator.evaluate_detection(
-                    model=model, dataloader=test_loader,
-                    class_names=class_names, dataset_info=self.dataset_info
+                    model=model,
+                    dataloader=test_loader,
+                    class_names=class_names,
+                    dataset_info=self.dataset_info,
                 )
             elif name == SAM:
                 results = evaluator.evaluate_segmentation(
-                    model=model, dataloader=test_loader,
-                    class_names=class_names, dataset_info=self.dataset_info
+                    model=model,
+                    dataloader=test_loader,
+                    class_names=class_names,
+                    dataset_info=self.dataset_info,
                 )
             else:
                 continue
-            
+
             # Generate report
             report = report_generator.generate_report(
                 evaluation_results=results,
                 model_name=name,
                 test_set_size=len(test_dataset),
-                extra_info={'config': self.config['models'][name]}
+                extra_info={"config": self.config["models"][name]},
             )
-            
-            report_path = self.output_dir / 'evaluation' / f'{name}_report.json'
+
+            report_path = self.output_dir / "evaluation" / f"{name}_report.json"
             report_generator.save_report(report, str(report_path))
-            
+
             summary = report_generator.generate_summary_text(report)
             logger.info("\n%s", summary)
-            
+
             all_reports.append(report)
-        
+
         if len(all_reports) > 1:
             combined = report_generator.combine_reports(all_reports)
-            combined_path = self.output_dir / 'evaluation' / 'combined_report.json'
+            combined_path = self.output_dir / "evaluation" / "combined_report.json"
             report_generator.save_report(combined, str(combined_path))
-        
-        logger.info("Reports saved to: %s", self.output_dir / 'evaluation')
-    
+
+        logger.info("Reports saved to: %s", self.output_dir / "evaluation")
+
     def _create_export_package(self) -> None:
         """Create downloadable export packages."""
         logger.info("Creating export packages...")
-        
-        class_names = list(self.dataset_info['class_mapping'].values())
-        
+
+        class_names = list(self.dataset_info["class_mapping"].values())
+
         for name, trainer in self.trainers.items():
             try:
-                model_config = self.config['models'][name]
+                model_config = self.config["models"][name]
                 training_info = {
-                    'epochs': self.config.get('epochs'),
-                    'batch_size': self.config.get('batch_size'),
-                    'learning_rate': model_config.get('learning_rate')
+                    "epochs": self.config.get("epochs"),
+                    "batch_size": self.config.get("batch_size"),
+                    "learning_rate": model_config.get("learning_rate"),
                 }
 
-                report_path = self.output_dir / 'evaluation' / f'{name}_report.json'
+                report_path = self.output_dir / "evaluation" / f"{name}_report.json"
                 if report_path.exists():
-                    with open(report_path, 'r', encoding='utf-8') as f:
+                    with open(report_path, "r", encoding="utf-8") as f:
                         report = json.load(f)
-                        metrics = report.get('technical_metrics', {})
-                        training_info['mAP50'] = metrics.get('mAP50', 0)
-                        training_info['mIoU'] = metrics.get('mIoU', 0)
+                        metrics = report.get("technical_metrics", {})
+                        training_info["mAP50"] = metrics.get("mAP50", 0)
+                        training_info["mIoU"] = metrics.get("mIoU", 0)
 
                 zip_path = create_export_package(
                     model=trainer.get_model(),
                     output_dir=self.output_dir,
                     class_names=class_names,
                     model_name=name,
-                    training_info=training_info
+                    training_info=training_info,
                 )
                 logger.info("✓ Export package: %s", zip_path)
 
             except Exception as e:
                 logger.error("Failed to create export for %s: %s", name, e)
-    
+
     def _resume_from_checkpoint(self, checkpoint_path: str) -> None:
         """Resume training from checkpoint."""
         logger.info("Resuming from: %s", checkpoint_path)
         for name, trainer in self.trainers.items():
-            if checkpoint_path in ('best', 'last'):
+            if checkpoint_path in ("best", "last"):
                 # Each checkpoint manager resolves this relative to its own output_dir
                 trainer.load_checkpoint(checkpoint_path)
             else:
                 # Treat as experiment root; each model saves under output_dir/{name}/
-                model_path = Path(checkpoint_path) / name / 'best.pth'
+                model_path = Path(checkpoint_path) / name / "best.pth"
                 if model_path.exists():
                     trainer.load_checkpoint(str(model_path))
                 else:

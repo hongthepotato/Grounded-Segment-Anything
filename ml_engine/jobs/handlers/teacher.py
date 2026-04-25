@@ -9,7 +9,7 @@ import multiprocessing as mp
 import queue
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 from ml_engine.jobs.handlers.base import JobHandler, TrainingCancelledError
 from ml_engine.jobs.models import JobOutcome
@@ -18,7 +18,7 @@ from ml_engine.jobs.models import JobOutcome
 class TeacherTrainingHandler(JobHandler):
     """
     Handler for teacher model training jobs.
-    
+
     Trains GroundingDINO and/or SAM models with LoRA adapters on custom datasets.
     """
 
@@ -31,7 +31,7 @@ class TeacherTrainingHandler(JobHandler):
     ) -> None:
         """
         Execute teacher training job.
-        
+
         Args:
             job_config: Configuration containing:
                 - data_path: Path to dataset
@@ -43,9 +43,9 @@ class TeacherTrainingHandler(JobHandler):
             cancel_event: Cancellation signal
         """
         # Late imports - these load in subprocess, not parent
-        from ml_engine.training import Trainer, TrainingCancelledException
-        from ml_engine.data.manager import DataManager
         from core.constants import transform_image_path
+        from ml_engine.data.manager import DataManager
+        from ml_engine.training import Trainer, TrainingCancelledException
 
         # Extract paths from config
         data_path_raw = job_config.get("data_path")
@@ -61,13 +61,12 @@ class TeacherTrainingHandler(JobHandler):
         # Note: Normalization (bbox from masks, etc.) is always applied during loading
         split_config = job_config.get("split_config", {"train": 0.7, "val": 0.15, "test": 0.15})
         data_manager = DataManager.from_file(
-            data_path=data_path,
-            image_paths=image_paths,
-            split_config=split_config
+            data_path=data_path, image_paths=image_paths, split_config=split_config
         )
 
         # Build config
         from ml_engine.training.config import build_teacher_training_config
+
         config = build_teacher_training_config(data_manager, job_config.get("training"))
 
         # Progress callback that sends to queue
@@ -87,7 +86,7 @@ class TeacherTrainingHandler(JobHandler):
             output_dir=output_dir,
             config=config,
             progress_callback=progress_callback,
-            cancel_check=cancel_check
+            cancel_check=cancel_check,
         )
 
         started_at = time.monotonic()

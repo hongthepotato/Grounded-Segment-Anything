@@ -5,15 +5,16 @@ This module provides PyTorch Dataset classes for loading COCO format
 datasets with support for multiple model types (Grounding DINO, SAM, YOLO).
 """
 
-from typing import Dict, List, Any, Callable, Optional
-from pathlib import Path
 import random
-import torch
-from torch.utils.data import Dataset
-from PIL import Image
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
 import numpy as np
-from pycocotools import mask as mask_utils
+import torch
 from groundingdino.util.misc import nested_tensor_from_tensor_list
+from PIL import Image
+from pycocotools import mask as mask_utils
+from torch.utils.data import Dataset
 
 from augmentation import ConfigurableAugmentationPipeline
 from ml_engine.data.preprocessing import MultiModelPreprocessor
@@ -22,20 +23,20 @@ from ml_engine.data.preprocessing import MultiModelPreprocessor
 class COCODataset(Dataset):
     """
     COCO format dataset with multi-model support.
-    
+
     This dataset class:
     - Receives pre-loaded COCO data
     - Loads images using a path resolver function
     - Supports boxes, masks
     - Returns data in a format suitable for multiple models
     - Handles missing annotations gracefully
-    
+
     Args:
         coco_data: Pre-loaded COCO format dictionary (from DataManager)
         image_path_resolver: Function that takes file_name and returns actual filesystem path
         return_boxes: Whether to return bounding boxes
         return_masks: Whether to return segmentation masks
-    
+
     Example:
         >>> from ml_engine.data.manager import DataManager
         >>> manager = DataManager('train.json', image_paths=[...])
@@ -60,26 +61,26 @@ class COCODataset(Dataset):
         self.return_boxes = return_boxes
         self.return_masks = return_masks
 
-        self.images = self.coco_data['images']
-        self.annotations = self.coco_data['annotations']
-        self.categories = self.coco_data['categories']
+        self.images = self.coco_data["images"]
+        self.annotations = self.coco_data["annotations"]
+        self.categories = self.coco_data["categories"]
 
         # Create lookup tables
         self._create_lookup_tables()
 
-        sorted_categories = sorted(self.categories, key=lambda x: x['id'])
-        self.class_names = [cat['name'] for cat in sorted_categories]
+        sorted_categories = sorted(self.categories, key=lambda x: x["id"])
+        self.class_names = [cat["name"] for cat in sorted_categories]
         # Example: ['ear', 'defect', 'label'] at indices [0, 1, 2]
 
     def _create_lookup_tables(self):
         """Create lookup tables for images and annotations."""
         # Image ID to image metadata
-        self.image_id_to_info = {img['id']: img for img in self.images}
+        self.image_id_to_info = {img["id"]: img for img in self.images}
 
         # Image ID to list of annotations
         self.image_id_to_anns = {}
         for ann in self.annotations:
-            image_id = ann['image_id']
+            image_id = ann["image_id"]
             if image_id not in self.image_id_to_anns:
                 self.image_id_to_anns[image_id] = []
             self.image_id_to_anns[image_id].append(ann)
@@ -90,7 +91,7 @@ class COCODataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """
         Get a dataset sample.
-        
+
         Returns RAW list formats for flexibility
         Returns:
             Dictionary containing:
@@ -104,14 +105,14 @@ class COCODataset(Dataset):
         """
         # Get image metadata
         img_info = self.images[idx]
-        image_id, file_name = img_info['id'], img_info['file_name']
+        image_id, file_name = img_info["id"], img_info["file_name"]
 
         # Load image using path resolver
         image_path = Path(self.image_path_resolver(file_name))
         if not image_path.exists():
             raise FileNotFoundError(f"Image not found: {image_path}")
 
-        image = Image.open(image_path).convert('RGB')
+        image = Image.open(image_path).convert("RGB")
         orig_width, orig_height = image.size
 
         # Get annotations for this image
@@ -119,39 +120,40 @@ class COCODataset(Dataset):
 
         # Prepare output dictionary
         sample = {
-            'image': image,
-            'image_id': image_id,
-            'file_name': file_name,
-            'image_size': (orig_width, orig_height),
-            'labels': []
+            "image": image,
+            "image_id": image_id,
+            "file_name": file_name,
+            "image_size": (orig_width, orig_height),
+            "labels": [],
         }
 
         # Process annotations
         if self.return_boxes:
-            sample['boxes'] = []
+            sample["boxes"] = []
         if self.return_masks:
-            sample['masks'] = []
+            sample["masks"] = []
 
         for ann in anns:
-            cat_id = ann['category_id']
-            sample['labels'].append(cat_id)
+            cat_id = ann["category_id"]
+            sample["labels"].append(cat_id)
 
             # Bounding box
-            if self.return_boxes and 'bbox' in ann:
-                bbox = ann['bbox']  # [x, y, width, height]
-                sample['boxes'].append(bbox)
+            if self.return_boxes and "bbox" in ann:
+                bbox = ann["bbox"]  # [x, y, width, height]
+                sample["boxes"].append(bbox)
 
             # Segmentation mask
             # Data is normalized to compressed RLE by normalize_coco_annotations
-            if self.return_masks and 'segmentation' in ann:
-                segmentation = ann['segmentation']
+            if self.return_masks and "segmentation" in ann:
+                segmentation = ann["segmentation"]
 
                 # Debug assertion to catch non-normalized data
-                assert isinstance(segmentation, dict) and isinstance(segmentation.get('counts'), bytes), \
+                assert isinstance(segmentation, dict) and isinstance(segmentation.get("counts"), bytes), (
                     f"Segmentation not normalized - must be compressed RLE, got {type(segmentation)}"
+                )
 
                 mask = mask_utils.decode(segmentation)
-                sample['masks'].append(mask)
+                sample["masks"].append(mask)
 
         return sample
 
@@ -159,25 +161,25 @@ class COCODataset(Dataset):
 class TeacherDataset(COCODataset):
     """
     Dataset specifically for teacher model training.
-    
+
     This variant includes additional preprocessing and formatting
     specific to teacher models
-    
+
     Data Flow:
         1. COCODataset returns raw lists:
            - boxes: [[x,y,w,h], ...] (COCO format)
            - masks: [mask1(H,W), mask2(H,W), ...] (list of arrays)
            - labels: [0, 1, 2, ...]
-           
+
         2. If augmentation enabled:
            - Apply augmentation in COCO format
            - Annotations remain in augmented image space
-           
+
         3. For each model:
            - Apply model-specific preprocessing (resize + pad)
            - Transform annotations using metadata
            - Store per-model: {image_tensor, boxes, masks, labels, metadata}
-           
+
         4. Result structure:
            sample['preprocessed'] = {
                'grounding_dino': {
@@ -195,7 +197,7 @@ class TeacherDataset(COCODataset):
                    'metadata': {...}
                }
            }
-    
+
     Args:
         coco_data: Pre-loaded COCO format dictionary
         image_path_resolver: Function that takes file_name and returns actual filesystem path
@@ -203,7 +205,7 @@ class TeacherDataset(COCODataset):
         augmentation_pipeline: ConfigurableAugmentationPipeline instance
         return_boxes: Whether to return bounding boxes
         return_masks: Whether to return segmentation masks
-    
+
     Example:
         >>> # Use DataManager to create this dataset
         >>> manager = DataManager('train.json', image_paths=[...])
@@ -218,17 +220,17 @@ class TeacherDataset(COCODataset):
         self,
         coco_data: Dict,
         image_path_resolver: Callable[[str], str],
-        preprocessor: MultiModelPreprocessor=None,
-        augmentation_pipeline: ConfigurableAugmentationPipeline=None,
+        preprocessor: MultiModelPreprocessor = None,
+        augmentation_pipeline: ConfigurableAugmentationPipeline = None,
         return_boxes: bool = True,
         return_masks: bool = True,
-        sam_single_object_sampling: bool = False
+        sam_single_object_sampling: bool = False,
     ):
         super().__init__(
             coco_data=coco_data,
             image_path_resolver=image_path_resolver,
             return_boxes=return_boxes,
-            return_masks=return_masks
+            return_masks=return_masks,
         )
 
         self.preprocessor = preprocessor
@@ -239,12 +241,12 @@ class TeacherDataset(COCODataset):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """
         Get sample with teacher-specific preprocessing.
-        
+
         1. Get base sample (COCO format)
         2. Apply augmentation (optional)
         3. Preprocess for each model using OFFICIAL implementations
         4. Return ONLY preprocessed data per model
-        
+
         Returns:
             Dict with:
                 - image_id: int
@@ -259,20 +261,20 @@ class TeacherDataset(COCODataset):
         # Apply augmentation if enabled
         if self.augmentation_pipeline is not None:
             augmented = self.augmentation_pipeline(
-                image=np.array(sample['image']),
-                masks=sample.get('masks'),
-                bboxes=sample.get('boxes')
+                image=np.array(sample["image"]),
+                masks=sample.get("masks"),
+                bboxes=sample.get("boxes"),
             )
 
             # Update sample with augmented data
-            sample['image'] = Image.fromarray(augmented['image'])
-            sample['masks'] = augmented.get('masks')  # Still list format
-            sample['boxes'] = augmented.get('bboxes')
+            sample["image"] = Image.fromarray(augmented["image"])
+            sample["masks"] = augmented.get("masks")  # Still list format
+            sample["boxes"] = augmented.get("bboxes")
 
         # Prepare annotations for preprocessing
-        sample_boxes = sample.get('boxes')
-        sample_masks = sample.get('masks')
-        sample_labels = sample.get('labels')
+        sample_boxes = sample.get("boxes")
+        sample_masks = sample.get("masks")
+        sample_labels = sample.get("labels")
 
         # Convert to numpy arrays for preprocessing
         boxes_np = np.array(sample_boxes, dtype=np.float32) if sample_boxes else None
@@ -280,26 +282,24 @@ class TeacherDataset(COCODataset):
 
         # Preprocess image + boxes + masks for all models in one step
         preprocessed_dict = self.preprocessor.preprocess_batch(
-            sample['image'],
-            boxes=boxes_np,
-            masks=masks_np
+            sample["image"], boxes=boxes_np, masks=masks_np
         )
 
         # Build output - just pick/slice from already-processed data
         preprocessed_data = {}
         for model_name, data in preprocessed_dict.items():
-            image_tensor = data['image']
-            metadata = data['metadata']
-            all_boxes = data['boxes']
-            all_masks = data['masks']
+            image_tensor = data["image"]
+            metadata = data["metadata"]
+            all_boxes = data["boxes"]
+            all_masks = data["masks"]
 
             # Determine which annotations to use for this model
-            if model_name == 'sam' and self.sam_single_object_sampling:
+            if model_name == "sam" and self.sam_single_object_sampling:
                 # SAM single object sampling: pick 1 random object from pre-transformed data
                 if all_masks is not None and len(all_masks) > 0:
                     idx = random.randint(0, len(all_masks) - 1)
-                    model_boxes = all_boxes[idx:idx+1] if all_boxes is not None else None
-                    model_masks = all_masks[idx:idx+1]
+                    model_boxes = all_boxes[idx : idx + 1] if all_boxes is not None else None
+                    model_masks = all_masks[idx : idx + 1]
                     use_labels = [sample_labels[idx]] if sample_labels else []
                 else:
                     model_boxes, model_masks, use_labels = None, None, []
@@ -314,39 +314,39 @@ class TeacherDataset(COCODataset):
                 model_boxes = np.zeros((0, 4), dtype=np.float32)
 
             if not self.return_masks or model_masks is None:
-                h, w = metadata['final_size']
+                h, w = metadata["final_size"]
                 model_masks = np.zeros((0, h, w), dtype=np.float32)
 
             preprocessed_data[model_name] = {
-                'image': image_tensor,
-                'boxes': model_boxes,
-                'masks': model_masks,
-                'labels': np.array(use_labels if use_labels else [], dtype=np.int64),
-                'metadata': metadata
+                "image": image_tensor,
+                "boxes": model_boxes,
+                "masks": model_masks,
+                "labels": np.array(use_labels if use_labels else [], dtype=np.int64),
+                "metadata": metadata,
             }
 
         return {
-            'image_id': sample['image_id'],
-            'file_name': sample['file_name'],
-            'image_size': sample['image_size'],
-            'preprocessed': preprocessed_data
+            "image_id": sample["image_id"],
+            "file_name": sample["file_name"],
+            "image_size": sample["image_size"],
+            "preprocessed": preprocessed_data,
         }
 
 
 def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Custom collate function for preprocessed teacher data.
-    
+
     Handles per-model data with different characteristics:
     - DINO: Variable image sizes → create NestedTensor with padding masks
     - SAM: Fixed 1024×1024 → stack directly
     - Both: Variable objects per image → pad to max_objs
-    
+
     Args:
         batch: List of samples from dataset, each with:
             - image_id, file_name, image_size (metadata)
             - preprocessed: Dict[model_name, Dict[str, Any]]
-    
+
     Returns:
         Dict with:
             - image_ids, file_names, image_sizes (metadata lists)
@@ -357,22 +357,22 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
                 - labels: [B, max_objs] (padded with -1)
     """
     # Extract metadata
-    image_ids = [item['image_id'] for item in batch]
-    file_names = [item['file_name'] for item in batch]
-    image_sizes = [item['image_size'] for item in batch]
+    image_ids = [item["image_id"] for item in batch]
+    file_names = [item["file_name"] for item in batch]
+    image_sizes = [item["image_size"] for item in batch]
 
     # Get list of models present in this batch
-    available_models = list(batch[0]['preprocessed'].keys())
+    available_models = list(batch[0]["preprocessed"].keys())
 
     # Process each model's data separately
     preprocessed_batch = {}
 
     for model_name in available_models:
         # Extract this model's data from all items
-        model_data = [item['preprocessed'][model_name] for item in batch]
+        model_data = [item["preprocessed"][model_name] for item in batch]
 
         # Get max number of objects for this model's data
-        max_objs = max(len(d['boxes']) for d in model_data)
+        max_objs = max(len(d["boxes"]) for d in model_data)
         if max_objs == 0:
             max_objs = 1  # Avoid empty tensors
 
@@ -384,14 +384,14 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         # Determine mask size from first non-empty mask, or use default 256x256
         mask_h, mask_w = 256, 256
         for d in model_data:
-            if d['masks'] is not None and len(d['masks']) > 0:
-                mask_h, mask_w = d['masks'].shape[-2:]
+            if d["masks"] is not None and len(d["masks"]) > 0:
+                mask_h, mask_w = d["masks"].shape[-2:]
                 break
 
         for i, data in enumerate(model_data):
-            boxes = data['boxes']
-            masks = data['masks']
-            labels = data['labels']
+            boxes = data["boxes"]
+            masks = data["masks"]
+            labels = data["labels"]
 
             num_objs = len(boxes)
             num_masks = len(masks) if masks is not None and len(masks) > 0 else 0
@@ -425,34 +425,34 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
             padded_labels.append(labels_tensor)
 
         # Handle images: create NestedTensor for DINO, stack SAM
-        if model_name == 'grounding_dino':
+        if model_name == "grounding_dino":
             # DINO: Variable-sized images
-            images = [d['image'] for d in model_data]
+            images = [d["image"] for d in model_data]
             batched_images = nested_tensor_from_tensor_list(images)
-        elif model_name == 'sam':
+        elif model_name == "sam":
             # SAM: Fixed 1024×1024 - just stack
-            images = [d['image'] for d in model_data]
+            images = [d["image"] for d in model_data]
             batched_images = torch.stack(images)
         else:
             # Default: just stack
-            images = [d['image'] for d in model_data]
+            images = [d["image"] for d in model_data]
             batched_images = torch.stack(images)
 
         # Store batched data for this model
         preprocessed_batch[model_name] = {
-            'images': batched_images,                  # NestedTensor for DINO, [B, C, H, W] for others
-            'boxes': torch.stack(padded_boxes),        # [B, max_objs, 4]
-            'masks': torch.stack(padded_masks),        # [B, max_objs, H, W]
-            'labels': torch.stack(padded_labels),      # [B, max_objs]
-            'metadata': [d['metadata'] for d in model_data]  # List of metadata dicts per image
+            "images": batched_images,  # NestedTensor for DINO, [B, C, H, W] for others
+            "boxes": torch.stack(padded_boxes),  # [B, max_objs, 4]
+            "masks": torch.stack(padded_masks),  # [B, max_objs, H, W]
+            "labels": torch.stack(padded_labels),  # [B, max_objs]
+            "metadata": [d["metadata"] for d in model_data],  # List of metadata dicts per image
         }
 
     # Return metadata + per-model batched data
     return {
-        'image_ids': image_ids,
-        'file_names': file_names,
-        'image_sizes': image_sizes,
-        'preprocessed': preprocessed_batch
+        "image_ids": image_ids,
+        "file_names": file_names,
+        "image_sizes": image_sizes,
+        "preprocessed": preprocessed_batch,
     }
 
 
@@ -461,22 +461,22 @@ def create_dataloader(
     batch_size: int = 8,
     shuffle: bool = True,
     num_workers: int = 4,
-    pin_memory: bool = True
+    pin_memory: bool = True,
 ) -> torch.utils.data.DataLoader:
     """
     Create a DataLoader with appropriate settings.
-    
+
     CRITICAL: Uses 'spawn' multiprocessing context to ensure worker processes
     correctly inherit CUDA_VISIBLE_DEVICES. With 'fork' (default on Linux),
     workers inherit the parent's CUDA context, which causes GPU conflicts.
-    
+
     Args:
         dataset: PyTorch Dataset instance
         batch_size: Batch size
         shuffle: Whether to shuffle data
         num_workers: Number of worker processes
         pin_memory: Whether to use pinned memory
-    
+
     Returns:
         DataLoader instance
     """
@@ -484,7 +484,7 @@ def create_dataloader(
 
     # Use 'spawn' to ensure clean CUDA context in workers
     # This is critical when CUDA_VISIBLE_DEVICES is set programmatically
-    mp_context = mp.get_context('spawn') if num_workers > 0 else None
+    mp_context = mp.get_context("spawn") if num_workers > 0 else None
 
     return torch.utils.data.DataLoader(
         dataset,
@@ -493,5 +493,5 @@ def create_dataloader(
         num_workers=num_workers,
         pin_memory=pin_memory,
         collate_fn=collate_fn,
-        multiprocessing_context=mp_context  # Use spawn, not fork
+        multiprocessing_context=mp_context,  # Use spawn, not fork
     )

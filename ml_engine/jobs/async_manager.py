@@ -19,12 +19,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 import redis.asyncio as _aredis
 
-from ml_engine.jobs.models import Job, JobStatus, JobType, WorkerInfo
 from ml_engine.jobs.async_redis_store import AsyncRedisJobStore
+from ml_engine.jobs.models import Job, JobStatus, JobType, WorkerInfo
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +60,7 @@ class AsyncJobManager:
             JobType(job_type)
         except ValueError as e:
             valid_types = [t.value for t in JobType]
-            raise ValueError(
-                f"Invalid job type: {job_type}. Must be one of: {valid_types}"
-            ) from e
+            raise ValueError(f"Invalid job type: {job_type}. Must be one of: {valid_types}") from e
 
         job = Job(
             type=job_type,
@@ -74,7 +72,9 @@ class AsyncJobManager:
         )
         logger.info(
             "Submitting job %s (type=%s, priority=%d)",
-            job.id[:8], job_type, priority,
+            job.id[:8],
+            job_type,
+            priority,
         )
         await self.store.enqueue_job(job)
         return job
@@ -91,7 +91,8 @@ class AsyncJobManager:
         if job.is_terminal:
             logger.info(
                 "Cannot cancel job %s: already in terminal state %s",
-                job_id[:8], job.status.value,
+                job_id[:8],
+                job.status.value,
             )
             return False
 
@@ -110,11 +111,14 @@ class AsyncJobManager:
             logger.info("Job %s is already cancelling", job_id[:8])
             return True  # Already in progress -- no second cancel_requested event
 
-        await self.store.publish_event(job_id, {
-            "type": "cancel_requested",
-            "job_id": job_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        await self.store.publish_event(
+            job_id,
+            {
+                "type": "cancel_requested",
+                "job_id": job_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         return True
 
     # =========================================================================
@@ -155,7 +159,8 @@ class AsyncJobManager:
         if not job.is_terminal:
             logger.warning(
                 "Cannot delete non-terminal job %s (status=%s)",
-                job_id[:8], job.status.value,
+                job_id[:8],
+                job.status.value,
             )
             return False
         return await self.store.delete_job(job_id)

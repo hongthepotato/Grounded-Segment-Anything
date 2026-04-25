@@ -52,8 +52,7 @@ class TransformParameterBuilder:
                     suggestions.append(m)
 
             raise ValueError(
-                f"{transform_name} missing required parameters: {suggestions}. "
-                f"Provided: {provided_keys}"
+                f"{transform_name} missing required parameters: {suggestions}. Provided: {provided_keys}"
             )
 
         # Check parameter types
@@ -87,9 +86,7 @@ class TransformParameterBuilder:
             "p": params["p"].sample(),
         }
 
-    def build_piecewise_affine_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_piecewise_affine_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for PiecewiseAffine
 
         Args:
@@ -102,9 +99,7 @@ class TransformParameterBuilder:
 
         return {"scale": params["scale"].to_albumentations_format(), "p": params["p"].sample()}
 
-    def build_random_scale_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_random_scale_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for RandomScale
 
         Args:
@@ -125,9 +120,7 @@ class TransformParameterBuilder:
         Returns:
             Parameters for the Affine (translate_percent, scale, rotate, shear, p)
         """
-        self._validate_params(
-            params, ["translate_percent", "scale", "rotate", "shear", "p"], "Affine"
-        )
+        self._validate_params(params, ["translate_percent", "scale", "rotate", "shear", "p"], "Affine")
 
         return {
             "translate_percent": params["translate_percent"].to_albumentations_format(),
@@ -137,9 +130,7 @@ class TransformParameterBuilder:
             "p": params["p"].sample(),
         }
 
-    def build_perspective_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_perspective_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for Perspective
 
         Args:
@@ -152,9 +143,7 @@ class TransformParameterBuilder:
 
         return {"scale": params["scale"].to_albumentations_format(), "p": params["p"].sample()}
 
-    def build_safe_rotation_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_safe_rotation_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for Rotate
 
         Args:
@@ -183,9 +172,7 @@ class TransformParameterBuilder:
         Returns:
             Parameters for the RandomBrightnessContrast (brightness_limit, contrast_limit, p)
         """
-        self._validate_params(
-            params, ["brightness_limit", "contrast_limit", "p"], "RandomBrightnessContrast"
-        )
+        self._validate_params(params, ["brightness_limit", "contrast_limit", "p"], "RandomBrightnessContrast")
 
         return {
             "brightness_limit": params["brightness_limit"].to_albumentations_format(),
@@ -193,17 +180,13 @@ class TransformParameterBuilder:
             "p": params["p"].sample(),
         }
 
-    def build_color_jitter_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_color_jitter_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for ColorJitter
 
         Args:
             params: Parameters for the ColorJitter (brightness, contrast, saturation, hue, p)
         """
-        self._validate_params(
-            params, ["brightness", "contrast", "saturation", "hue", "p"], "ColorJitter"
-        )
+        self._validate_params(params, ["brightness", "contrast", "saturation", "hue", "p"], "ColorJitter")
 
         return {
             "brightness": params["brightness"].to_albumentations_format(),
@@ -228,9 +211,7 @@ class TransformParameterBuilder:
             "p": params["p"].sample(),
         }
 
-    def build_random_gamma_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_random_gamma_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for RandomGamma
 
         Args:
@@ -246,9 +227,7 @@ class TransformParameterBuilder:
             "p": params["p"].sample(),
         }
 
-    def build_hue_saturation_value_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_hue_saturation_value_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for HueSaturationValue
 
         Args:
@@ -310,9 +289,7 @@ class TransformParameterBuilder:
     # NOISE AND BLUR TRANSFORMS
     # ============================================
 
-    def build_gauss_noise_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_gauss_noise_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for GaussNoise
 
         Args:
@@ -329,9 +306,7 @@ class TransformParameterBuilder:
             "p": params["p"].sample(),
         }
 
-    def build_motion_blur_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_motion_blur_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for MotionBlur
 
         Args:
@@ -384,9 +359,7 @@ class TransformParameterBuilder:
             "p": params["p"].sample(),
         }
 
-    def build_random_shadow_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_random_shadow_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for RandomShadow
 
         Args:
@@ -404,9 +377,7 @@ class TransformParameterBuilder:
             "p": params["p"].sample(),
         }
 
-    def build_random_sun_flare_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_random_sun_flare_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for RandomSunFlare
 
         Args:
@@ -427,9 +398,7 @@ class TransformParameterBuilder:
     # OCCLUSION TRANSFORMS
     # ============================================
 
-    def build_coarse_dropout_params(
-        self, params: Dict[str, AlbumentationsParameter]
-    ) -> Dict[str, Any]:
+    def build_coarse_dropout_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """
         Build parameters for CoarseDropout
         Required params: num_holes_range (integer range), hole_height_range, hole_width_range, p

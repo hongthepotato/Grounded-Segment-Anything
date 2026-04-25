@@ -31,7 +31,7 @@ class LLMClient:
 
     def __init__(
         self,
-        provider: str = "anthropic",   # "anthropic" | "openai"
+        provider: str = "anthropic",  # "anthropic" | "openai"
         model: Optional[str] = None,
         timeout: float = LLM_TIMEOUT_SECONDS,
         base_url: Optional[str] = None,
@@ -88,6 +88,7 @@ class LLMClient:
             if not api_key:
                 raise RuntimeError("ANTHROPIC_API_KEY not set")
             import anthropic
+
             self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
         return self._anthropic_client
 
@@ -111,10 +112,7 @@ class LLMClient:
 
         response = await client.messages.create(**kwargs)
         return {
-            "content": [
-                {"type": block.type, **self._block_to_dict(block)}
-                for block in response.content
-            ],
+            "content": [{"type": block.type, **self._block_to_dict(block)} for block in response.content],
             "stop_reason": response.stop_reason,
             "model": response.model,
         }
@@ -127,6 +125,7 @@ class LLMClient:
             if not api_key:
                 raise RuntimeError(f"{env_var} not set")
             from openai import AsyncOpenAI
+
             client_kwargs: Dict[str, Any] = {"api_key": api_key}
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
@@ -173,11 +172,13 @@ class LLMClient:
                                 for b in tc
                                 if isinstance(b, dict) and b.get("type") == "text"
                             )
-                        out.append({
-                            "role": "tool",
-                            "tool_call_id": block.get("tool_use_id", ""),
-                            "content": tc if isinstance(tc, str) else json.dumps(tc),
-                        })
+                        out.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": block.get("tool_use_id", ""),
+                                "content": tc if isinstance(tc, str) else json.dumps(tc),
+                            }
+                        )
                     elif btype == "text":
                         text_parts.append(block.get("text", ""))
                 if text_parts:
@@ -191,14 +192,16 @@ class LLMClient:
                     if btype == "text":
                         text_parts.append(block.get("text", ""))
                     elif btype == "tool_use":
-                        tool_calls.append({
-                            "id": block.get("id", ""),
-                            "type": "function",
-                            "function": {
-                                "name": block.get("name", ""),
-                                "arguments": json.dumps(block.get("input", {})),
-                            },
-                        })
+                        tool_calls.append(
+                            {
+                                "id": block.get("id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": block.get("name", ""),
+                                    "arguments": json.dumps(block.get("input", {})),
+                                },
+                            }
+                        )
                 oai_msg: Dict[str, Any] = {
                     "role": "assistant",
                     "content": "".join(text_parts) if text_parts else None,
@@ -229,7 +232,14 @@ class LLMClient:
         if tools:
             # Convert Anthropic tool schema to OpenAI function format
             kwargs["tools"] = [
-                {"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t["description"],
+                        "parameters": t["input_schema"],
+                    },
+                }
                 for t in tools
             ]
 
@@ -242,12 +252,14 @@ class LLMClient:
             content_blocks.append({"type": "text", "text": choice.message.content})
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
-                content_blocks.append({
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.function.name,
-                    "input": json.loads(tc.function.arguments),
-                })
+                content_blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": json.loads(tc.function.arguments),
+                    }
+                )
         # Always include at least one text block for callers that expect it
         if not content_blocks:
             content_blocks.append({"type": "text", "text": ""})

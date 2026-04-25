@@ -1,9 +1,10 @@
 import logging
-from typing import Dict, Any, Set, List, Optional
-from pathlib import Path
 import os
 import random
 from collections import defaultdict
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+
 import yaml
 
 from core.constants import transform_image_path
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 """
 COCO dataset merger for combining GT labels with teacher pseudo-labels.
 """
+
 
 def merge_coco_datasets(
     labeled_coco: Dict[str, Any],
@@ -33,16 +35,14 @@ def merge_coco_datasets(
     Returns:
         Merged COCO dict with unified images, annotations, and categories
     """
-    gt_filenames: Set[str] = {
-        img['file_name'] for img in labeled_coco.get('images', [])
-    }
+    gt_filenames: Set[str] = {img["file_name"] for img in labeled_coco.get("images", [])}
 
-    categories = labeled_coco.get('categories', [])
-    cat_names_gt = {c['name'] for c in categories}
-    for cat in pseudo_coco.get('categories', []):
-        if cat['name'] not in cat_names_gt:
+    categories = labeled_coco.get("categories", [])
+    cat_names_gt = {c["name"] for c in categories}
+    for cat in pseudo_coco.get("categories", []):
+        if cat["name"] not in cat_names_gt:
             categories.append(cat)
-            cat_names_gt.add(cat['name'])
+            cat_names_gt.add(cat["name"])
 
     merged_images = []
     merged_annotations = []
@@ -51,53 +51,60 @@ def merge_coco_datasets(
 
     old_to_new_image = {}
 
-    for img in labeled_coco.get('images', []):
+    for img in labeled_coco.get("images", []):
         new_id = next_image_id
-        old_to_new_image[(img['id'], 'gt')] = new_id
-        merged_images.append({**img, 'id': new_id})
+        old_to_new_image[(img["id"], "gt")] = new_id
+        merged_images.append({**img, "id": new_id})
         next_image_id += 1
 
-    for ann in labeled_coco.get('annotations', []):
-        new_img_id = old_to_new_image.get((ann['image_id'], 'gt'))
+    for ann in labeled_coco.get("annotations", []):
+        new_img_id = old_to_new_image.get((ann["image_id"], "gt"))
         if new_img_id is None:
             continue
-        merged_annotations.append({
-            **ann,
-            'id': next_ann_id,
-            'image_id': new_img_id,
-        })
+        merged_annotations.append(
+            {
+                **ann,
+                "id": next_ann_id,
+                "image_id": new_img_id,
+            }
+        )
         next_ann_id += 1
 
     pseudo_added = 0
-    for img in pseudo_coco.get('images', []):
-        if img['file_name'] in gt_filenames:
+    for img in pseudo_coco.get("images", []):
+        if img["file_name"] in gt_filenames:
             continue
         new_id = next_image_id
-        old_to_new_image[(img['id'], 'pseudo')] = new_id
-        merged_images.append({**img, 'id': new_id})
+        old_to_new_image[(img["id"], "pseudo")] = new_id
+        merged_images.append({**img, "id": new_id})
         next_image_id += 1
         pseudo_added += 1
 
-    for ann in pseudo_coco.get('annotations', []):
-        new_img_id = old_to_new_image.get((ann['image_id'], 'pseudo'))
+    for ann in pseudo_coco.get("annotations", []):
+        new_img_id = old_to_new_image.get((ann["image_id"], "pseudo"))
         if new_img_id is None:
             continue
-        merged_annotations.append({
-            **ann,
-            'id': next_ann_id,
-            'image_id': new_img_id,
-        })
+        merged_annotations.append(
+            {
+                **ann,
+                "id": next_ann_id,
+                "image_id": new_img_id,
+            }
+        )
         next_ann_id += 1
 
     logger.info(
         "Merged datasets: %d GT images + %d pseudo images = %d total, %d annotations",
-        len(gt_filenames), pseudo_added, len(merged_images), len(merged_annotations)
+        len(gt_filenames),
+        pseudo_added,
+        len(merged_images),
+        len(merged_annotations),
     )
 
     return {
-        'images': merged_images,
-        'annotations': merged_annotations,
-        'categories': categories,
+        "images": merged_images,
+        "annotations": merged_annotations,
+        "categories": categories,
     }
 
 
@@ -152,51 +159,51 @@ def convert_coco_to_yolo_seg(
         Absolute path to the generated ``data.yaml``.
     """
     if split_ratios is None:
-        split_ratios = {'train': 0.7, 'val': 0.15, 'test': 0.15}
+        split_ratios = {"train": 0.7, "val": 0.15, "test": 0.15}
 
     out = Path(output_dir)
-    categories = coco_data.get('categories', [])
-    images = coco_data.get('images', [])
-    annotations = coco_data.get('annotations', [])
+    categories = coco_data.get("categories", [])
+    images = coco_data.get("images", [])
+    annotations = coco_data.get("annotations", [])
 
     if class_names is None:
-        class_names = [c['name'] for c in sorted(categories, key=lambda c: c['id'])]
+        class_names = [c["name"] for c in sorted(categories, key=lambda c: c["id"])]
 
-    cat_id_to_idx = {c['id']: idx for idx, c in enumerate(sorted(categories, key=lambda c: c['id']))}
+    cat_id_to_idx = {c["id"]: idx for idx, c in enumerate(sorted(categories, key=lambda c: c["id"]))}
 
     anns_by_image: Dict[int, List[Dict]] = defaultdict(list)
     for ann in annotations:
-        anns_by_image[ann['image_id']].append(ann)
+        anns_by_image[ann["image_id"]].append(ann)
 
     random.seed(seed)
     shuffled = list(images)
     random.shuffle(shuffled)
 
     n = len(shuffled)
-    n_train = int(n * split_ratios.get('train', 0.7))
-    n_val = int(n * split_ratios.get('val', 0.15))
+    n_train = int(n * split_ratios.get("train", 0.7))
+    n_val = int(n * split_ratios.get("val", 0.15))
 
     splits = {}
     for img in shuffled[:n_train]:
-        splits[img['id']] = 'train'
-    for img in shuffled[n_train:n_train + n_val]:
-        splits[img['id']] = 'val'
-    for img in shuffled[n_train + n_val:]:
-        splits[img['id']] = 'test'
+        splits[img["id"]] = "train"
+    for img in shuffled[n_train : n_train + n_val]:
+        splits[img["id"]] = "val"
+    for img in shuffled[n_train + n_val :]:
+        splits[img["id"]] = "test"
 
     split_names = sorted(set(splits.values()))
     for split in split_names:
-        (out / 'images' / split).mkdir(parents=True, exist_ok=True)
-        (out / 'labels' / split).mkdir(parents=True, exist_ok=True)
+        (out / "images" / split).mkdir(parents=True, exist_ok=True)
+        (out / "labels" / split).mkdir(parents=True, exist_ok=True)
 
     converted = 0
     skipped = 0
 
     for img in images:
-        img_id = img['id']
-        split = splits.get(img_id, 'train')
-        file_name = img['file_name']
-        w, h = img['width'], img['height']
+        img_id = img["id"]
+        split = splits.get(img_id, "train")
+        file_name = img["file_name"]
+        w, h = img["width"], img["height"]
 
         src_path = transform_image_path(file_name)
         if src_path is None:
@@ -204,53 +211,57 @@ def convert_coco_to_yolo_seg(
             skipped += 1
             continue
 
-        dst_image = out / 'images' / split / os.path.basename(file_name)
+        dst_image = out / "images" / split / os.path.basename(file_name)
         if not dst_image.exists():
             try:
                 os.symlink(os.path.abspath(src_path), str(dst_image))
             except OSError:
                 import shutil
+
                 shutil.copy2(src_path, str(dst_image))
 
         img_anns = anns_by_image.get(img_id, [])
-        label_name = Path(os.path.basename(file_name)).stem + '.txt'
-        label_path = out / 'labels' / split / label_name
+        label_name = Path(os.path.basename(file_name)).stem + ".txt"
+        label_path = out / "labels" / split / label_name
 
         lines = []
         for ann in img_anns:
-            cat_idx = cat_id_to_idx.get(ann.get('category_id'))
+            cat_idx = cat_id_to_idx.get(ann.get("category_id"))
             if cat_idx is None:
                 continue
 
-            segs = ann.get('segmentation', [])
+            segs = ann.get("segmentation", [])
             if segs and isinstance(segs, list) and isinstance(segs[0], list):
                 for polygon in segs:
                     yolo_poly = _polygon_to_yolo_seg(polygon, w, h)
                     if yolo_poly:
-                        coords_str = ' '.join(str(c) for c in yolo_poly)
+                        coords_str = " ".join(str(c) for c in yolo_poly)
                         lines.append(f"{cat_idx} {coords_str}")
 
-        with open(label_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+        with open(label_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
 
         converted += 1
 
     data_yaml = {
-        'path': str(out.resolve()),
-        'train': 'images/train',
-        'val': 'images/val',
-        'names': dict(enumerate(class_names)),
+        "path": str(out.resolve()),
+        "train": "images/train",
+        "val": "images/val",
+        "names": dict(enumerate(class_names)),
     }
-    if 'test' in split_names:
-        data_yaml['test'] = 'images/test'
+    if "test" in split_names:
+        data_yaml["test"] = "images/test"
 
-    yaml_path = out / 'data.yaml'
-    with open(yaml_path, 'w', encoding='utf-8') as f:
+    yaml_path = out / "data.yaml"
+    with open(yaml_path, "w", encoding="utf-8") as f:
         yaml.dump(data_yaml, f, default_flow_style=False, sort_keys=False)
 
     logger.info(
         "COCO->YOLO: %d images converted, %d skipped, %d classes, saved to %s",
-        converted, skipped, len(class_names), yaml_path
+        converted,
+        skipped,
+        len(class_names),
+        yaml_path,
     )
 
     return str(yaml_path.resolve())

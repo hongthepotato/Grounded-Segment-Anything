@@ -30,10 +30,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExperimentBudget:
     max_trials: int = 20
-    epochs_per_trial: int = 5       # validated for LoRA convergence
+    epochs_per_trial: int = 5  # validated for LoRA convergence
     max_wall_time_seconds: Optional[int] = None
     metric_name: str = "val_mAP50"  # direct detection quality, not proxy loss
-    metric_mode: str = "max"        # "min" or "max"
+    metric_mode: str = "max"  # "min" or "max"
 
 
 @dataclass
@@ -141,16 +141,19 @@ class ExperimentLoop:
                     if not guard_result:
                         logger.warning(
                             "Trial %s skipped (guard rejected): %s",
-                            trial_id, guard_result.errors,
+                            trial_id,
+                            guard_result.errors,
                         )
-                        trial_log.append(TrialRecord(
-                            trial_id=trial_id,
-                            overrides=overrides,
-                            primary_metric=None,
-                            all_metrics={},
-                            status="skip",
-                            description=f"guard_rejected: {guard_result.errors}",
-                        ))
+                        trial_log.append(
+                            TrialRecord(
+                                trial_id=trial_id,
+                                overrides=overrides,
+                                primary_metric=None,
+                                all_metrics={},
+                                status="skip",
+                                description=f"guard_rejected: {guard_result.errors}",
+                            )
+                        )
                         trials_run += 1
                         continue
 
@@ -187,16 +190,18 @@ class ExperimentLoop:
                     is_best = True
 
             status = "keep" if (result.status == "completed") else result.status
-            trial_log.append(TrialRecord(
-                trial_id=trial_id,
-                overrides=overrides,
-                primary_metric=result.primary_metric,
-                all_metrics=result.metrics,
-                status=status,
-                description=description,
-                wall_time_seconds=result.wall_time_seconds,
-                error_message=result.error_message,
-            ))
+            trial_log.append(
+                TrialRecord(
+                    trial_id=trial_id,
+                    overrides=overrides,
+                    primary_metric=result.primary_metric,
+                    all_metrics=result.metrics,
+                    status=status,
+                    description=description,
+                    wall_time_seconds=result.wall_time_seconds,
+                    error_message=result.error_message,
+                )
+            )
 
             if result.status == "completed" and is_best:
                 best_config = copy.deepcopy(result.config)
@@ -205,7 +210,10 @@ class ExperimentLoop:
                     yaml.safe_dump(best_config, f)
                 logger.info(
                     "Trial %s is new best: %s=%.4f -> %s",
-                    trial_id, budget.metric_name, result.primary_metric, best_path,
+                    trial_id,
+                    budget.metric_name,
+                    result.primary_metric,
+                    best_path,
                 )
 
         wall_time = time.monotonic() - t_start
@@ -213,9 +221,7 @@ class ExperimentLoop:
 
         # Write feedback.json for MemoryStore at Stage 4
         feedback_path = Path(output_dir) / "feedback.json"
-        feedback_path.write_text(
-            json.dumps(trial_log.to_feedback_record(), indent=2), encoding="utf-8"
-        )
+        feedback_path.write_text(json.dumps(trial_log.to_feedback_record(), indent=2), encoding="utf-8")
 
         return ExperimentResult(
             run_id=run_id,

@@ -38,10 +38,10 @@ from ml_engine.agent.contracts import (
     StageSummary,
     TargetSpec,
 )
-from ml_engine.agent.loop import AgentLoop, LoopState, apublish_event
-from ml_engine.agent.skills import SkillLoader
 from ml_engine.agent.llm_client import LLMClient
+from ml_engine.agent.loop import AgentLoop, LoopState, apublish_event
 from ml_engine.agent.memory import MemoryStore
+from ml_engine.agent.skills import SkillLoader
 from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
 from ml_engine.agent.tools import RunContext, Tool, ToolRegistry, ToolResult
 
@@ -53,22 +53,22 @@ HUMAN_GATE_STAGES = {"pending_contract_approval", "pending_approval"}
 # Map pipeline state -> skill file name for per-stage LLM prompts.
 # SkillLoader reads configs/agent/skills/{name}.md.
 _STATE_TO_SKILL = {
-    "auto_labeling":        "auto_label",
-    "label_review_gate":    "auto_label",
-    "teacher_training":     "teacher_training",
-    "training_eval_gate":   "teacher_training",
+    "auto_labeling": "auto_label",
+    "label_review_gate": "auto_label",
+    "teacher_training": "teacher_training",
+    "training_eval_gate": "teacher_training",
     "student_distillation": "student_distillation",
-    "distill_eval_gate":    "student_distillation",
-    "pending_approval":     "student_distillation",
+    "distill_eval_gate": "student_distillation",
+    "pending_approval": "student_distillation",
 }
 
 # Normalize stage names from events to skill file names.
 _STAGE_TO_SKILL = {
-    "auto_labeling":        "auto_label",
-    "auto_label":           "auto_label",
-    "teacher_training":     "teacher_training",
+    "auto_labeling": "auto_label",
+    "auto_label": "auto_label",
+    "teacher_training": "teacher_training",
     "student_distillation": "student_distillation",
-    "experiment_loop":      "teacher_training",
+    "experiment_loop": "teacher_training",
 }
 
 _SYSTEM_PROMPT = """\
@@ -112,8 +112,10 @@ Constraints:
 # Tool argument schemas
 # ---------------------------------------------------------------------------
 
+
 class ProposePlanArgs(BaseModel):
     r"""Input contract for propose_plan tool."""
+
     intent: str
     data_path: str
     image_paths: List[str]
@@ -123,23 +125,27 @@ class ProposePlanArgs(BaseModel):
 
 class InspectStatusArgs(BaseModel):
     r"""Input contract for inspect_status tool."""
+
     run_id: str
 
 
 class ReadMemoryArgs(BaseModel):
     r"""Input contract for read_memory tool."""
+
     types: List[str] = ["feedback", "project"]
     query: Optional[str] = None
 
 
 class DispatchStageArgs(BaseModel):
     r"""Input contract for dispatch_stage tool."""
-    stage: str              # "auto_labeling" | "teacher_training" | "student_distillation"
+
+    stage: str  # "auto_labeling" | "teacher_training" | "student_distillation"
     overrides: Dict[str, Any] = {}
 
 
 class RequestEvaluationArgs(BaseModel):
     r"""Input contract for request_evaluation tool."""
+
     stage: str
     job_id: str
     output_dir: str
@@ -147,6 +153,7 @@ class RequestEvaluationArgs(BaseModel):
 
 class AdvanceGateArgs(BaseModel):
     r"""Input contract for advance_gate tool."""
+
     target_state: str
     reason: str
 
@@ -155,8 +162,10 @@ class AdvanceGateArgs(BaseModel):
 # Tool implementations
 # ---------------------------------------------------------------------------
 
+
 class ProposePlanTool(Tool[ProposePlanArgs]):
     r"""Generate a PipelineContract from user intent and memory context."""
+
     name = "propose_plan"
     description = "Generate a PipelineContract from user intent and memory context."
     input_schema = ProposePlanArgs
@@ -182,15 +191,19 @@ class ProposePlanTool(Tool[ProposePlanArgs]):
             budget=BudgetSpec(),
             lineage=LineageSpec(),
         )
-        return ToolResult(success=True, output={
-            "contract": contract.to_dict(),
-            "memory_applied": bool(memory_ctx),
-            "note": "Contract pending human approval at POST /api/agent/approve",
-        })
+        return ToolResult(
+            success=True,
+            output={
+                "contract": contract.to_dict(),
+                "memory_applied": bool(memory_ctx),
+                "note": "Contract pending human approval at POST /api/agent/approve",
+            },
+        )
 
 
 class InspectStatusTool(Tool[InspectStatusArgs]):
     r"""Read pipeline state, job status, and latest metrics."""
+
     name = "inspect_status"
     description = "Read pipeline state, job status, and latest metrics."
     input_schema = InspectStatusArgs
@@ -204,16 +217,20 @@ class InspectStatusTool(Tool[InspectStatusArgs]):
         try:
             data = await sm.load()
             summaries = json.loads(data.get("stage_summaries", "[]"))
-            return ToolResult(success=True, output={
-                "state": data,
-                "stage_summaries": summaries,
-            })
+            return ToolResult(
+                success=True,
+                output={
+                    "state": data,
+                    "stage_summaries": summaries,
+                },
+            )
         except KeyError:
             return ToolResult(success=False, error=f"No state for run {args.run_id}")
 
 
 class ReadMemoryTool(Tool[ReadMemoryArgs]):
     r"""Load memory records (feedback, project, user, reference)."""
+
     name = "read_memory"
     description = "Load memory records (feedback, project, user, reference)."
     input_schema = ReadMemoryArgs
@@ -231,6 +248,7 @@ class ReadMemoryTool(Tool[ReadMemoryArgs]):
 
 class DispatchStageTool(Tool[DispatchStageArgs]):
     r"""Submit a job for the next pipeline stage via JobManager."""
+
     name = "dispatch_stage"
     description = "Submit a job for the next pipeline stage via JobManager."
     input_schema = DispatchStageArgs
@@ -253,7 +271,9 @@ class DispatchStageTool(Tool[DispatchStageArgs]):
             return ToolResult(success=False, error=f"Unknown stage: {args.stage!r}")
 
         if context.contract is None:
-            return ToolResult(success=False, error="No contract -- cannot dispatch without an approved contract")
+            return ToolResult(
+                success=False, error="No contract -- cannot dispatch without an approved contract"
+            )
 
         contract_data = context.contract.get("data", {})
         job_config: Dict[str, Any] = {
@@ -275,28 +295,38 @@ class DispatchStageTool(Tool[DispatchStageArgs]):
         # then calls store.enqueue_by_id(job_id) to move it into the work queue.
         await manager.store.store_job(job)
 
-        await apublish_event(self._r, context.run_id, {
-            "type": "dispatch_requested",
-            "stage": args.stage,
-            "job_id": job.id,
-            "job_type": job_type,
-            "run_id": context.run_id,
-        })
+        await apublish_event(
+            self._r,
+            context.run_id,
+            {
+                "type": "dispatch_requested",
+                "stage": args.stage,
+                "job_id": job.id,
+                "job_type": job_type,
+                "run_id": context.run_id,
+            },
+        )
 
         logger.info(
             "Dispatch requested for %s (job_id=%s, run_id=%s)",
-            args.stage, job.id[:8], context.run_id,
+            args.stage,
+            job.id[:8],
+            context.run_id,
         )
-        return ToolResult(success=True, output={
-            "job_id": job.id,
-            "stage": args.stage,
-            "status": "dispatch_requested",
-            "note": "ExecutorWorker will validate and enqueue",
-        })
+        return ToolResult(
+            success=True,
+            output={
+                "job_id": job.id,
+                "stage": args.stage,
+                "status": "dispatch_requested",
+                "note": "ExecutorWorker will validate and enqueue",
+            },
+        )
 
 
 class RequestEvaluationTool(Tool[RequestEvaluationArgs]):
     r"""Request evaluation of a completed stage by the EvaluatorWorker."""
+
     name = "request_evaluation"
     description = (
         "Request metric-based evaluation of a completed stage. "
@@ -316,27 +346,36 @@ class RequestEvaluationTool(Tool[RequestEvaluationArgs]):
         publishes gate_decision back to the Stream. The Coordinator then
         picks up gate_decision on its next event turn.
         """
-        await apublish_event(self._r, context.run_id, {
-            "type": "evaluation_requested",
-            "stage": args.stage,
-            "job_id": args.job_id,
-            "output_dir": args.output_dir,
-            "run_id": context.run_id,
-        })
+        await apublish_event(
+            self._r,
+            context.run_id,
+            {
+                "type": "evaluation_requested",
+                "stage": args.stage,
+                "job_id": args.job_id,
+                "output_dir": args.output_dir,
+                "run_id": context.run_id,
+            },
+        )
 
         logger.info(
             "Evaluation requested for stage=%s job=%s",
-            args.stage, args.job_id[:8] if args.job_id else "?",
+            args.stage,
+            args.job_id[:8] if args.job_id else "?",
         )
-        return ToolResult(success=True, output={
-            "status": "evaluation_requested",
-            "stage": args.stage,
-            "note": "EvaluatorWorker will publish gate_decision",
-        })
+        return ToolResult(
+            success=True,
+            output={
+                "status": "evaluation_requested",
+                "stage": args.stage,
+                "note": "EvaluatorWorker will publish gate_decision",
+            },
+        )
 
 
 class AdvanceGateTool(Tool[AdvanceGateArgs]):
     r"""Advance the pipeline state machine to the next state."""
+
     name = "advance_gate"
     description = "Advance the pipeline state machine to the next state."
     input_schema = AdvanceGateArgs
@@ -348,12 +387,16 @@ class AdvanceGateTool(Tool[AdvanceGateArgs]):
         sm = StateMachine(run_id=context.run_id, redis_async=self._r)
         try:
             await sm.transition(args.target_state)
-            await apublish_event(self._r, context.run_id, {
-                "type": "state_changed",
-                "new_state": args.target_state,
-                "reason": args.reason,
-                "run_id": context.run_id,
-            })
+            await apublish_event(
+                self._r,
+                context.run_id,
+                {
+                    "type": "state_changed",
+                    "new_state": args.target_state,
+                    "reason": args.reason,
+                    "run_id": context.run_id,
+                },
+            )
             return ToolResult(success=True, output={"new_state": args.target_state})
         except ValueError as e:
             return ToolResult(success=False, error=str(e))
@@ -362,6 +405,7 @@ class AdvanceGateTool(Tool[AdvanceGateArgs]):
 # ---------------------------------------------------------------------------
 # Coordinator
 # ---------------------------------------------------------------------------
+
 
 class Coordinator:
     """
@@ -392,8 +436,8 @@ class Coordinator:
         Makes at most MAX_TURNS_PER_EVENT LLM calls.
         Falls back gracefully on LLM timeout.
         """
-        from ml_engine.agent.loop import MAX_TURNS_PER_EVENT
         from ml_engine.agent.compact import compact_stage
+        from ml_engine.agent.loop import MAX_TURNS_PER_EVENT
 
         event_type = event.get("type", "unknown")
         sm = StateMachine(run_id=self.run_id, redis_async=self._r)
@@ -432,9 +476,11 @@ class Coordinator:
         # Stage-boundary compaction on job_completed
         if event_type == "job_completed" and state.stage_just_completed:
             outcome_metrics = event.get("outcome", {}).get("metrics", {})
-            key_decisions = [
-                f"{k}={v}" for k, v in state.stage_dispatch_overrides.items()
-            ] if state.stage_dispatch_overrides else []
+            key_decisions = (
+                [f"{k}={v}" for k, v in state.stage_dispatch_overrides.items()]
+                if state.stage_dispatch_overrides
+                else []
+            )
             summary = StageSummary(
                 stage=state.stage_just_completed,
                 status="pass",
@@ -462,12 +508,18 @@ class Coordinator:
                     tools=self._tools.all_schemas(),
                 )
             except asyncio.TimeoutError:
-                logger.warning("LLM timeout on run %s (turn %d), publishing llm_unavailable", self.run_id, turn)
-                await apublish_event(self._r, self.run_id, {
-                    "type": "llm_unavailable",
-                    "run_id": self.run_id,
-                    "event_type": event_type,
-                })
+                logger.warning(
+                    "LLM timeout on run %s (turn %d), publishing llm_unavailable", self.run_id, turn
+                )
+                await apublish_event(
+                    self._r,
+                    self.run_id,
+                    {
+                        "type": "llm_unavailable",
+                        "run_id": self.run_id,
+                        "event_type": event_type,
+                    },
+                )
                 return
             except Exception as e:
                 logger.error("LLM error: %s", e)
@@ -497,11 +549,13 @@ class Coordinator:
                     result = ToolResult(success=False, error=str(e))
                     logger.error("Tool %s error: %s", tool_name, e)
 
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc.get("id"),
-                    "content": json.dumps(result.model_dump()),
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tc.get("id"),
+                        "content": json.dumps(result.model_dump()),
+                    }
+                )
                 logger.debug("Tool %s -> success=%s", tool_name, result.success)
 
                 # Track which stage was dispatched so compaction fires on job_completed.
@@ -534,8 +588,8 @@ class Coordinator:
 
         Blocks until the pipeline reaches a terminal state or cancel_check() returns True.
         """
-        from ml_engine.jobs import get_async_job_manager
         from ml_engine.agent.workers import EvaluatorWorker, ExecutorWorker
+        from ml_engine.jobs import get_async_job_manager
 
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 

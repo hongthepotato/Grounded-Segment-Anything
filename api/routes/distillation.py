@@ -28,9 +28,7 @@ def get_manager() -> AsyncJobManager:
 
 
 @router.post("", status_code=200)
-async def submit_distillation(
-    request: DistillationRequest, manager: AsyncJobManager = Depends(get_manager)
-):
+async def submit_distillation(request: DistillationRequest, manager: AsyncJobManager = Depends(get_manager)):
     """
     Submit a student distillation job.
 

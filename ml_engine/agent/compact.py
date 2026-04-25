@@ -61,7 +61,10 @@ def compact_stage(
     chars_saved = sum(len(str(m)) for m in messages) - sum(len(str(m)) for m in result)
     logger.info(
         "Compacted stage %s: %d -> %d messages (~%d chars saved)",
-        stage_summary.stage, len(messages), len(result), chars_saved,
+        stage_summary.stage,
+        len(messages),
+        len(result),
+        chars_saved,
     )
     return result
 

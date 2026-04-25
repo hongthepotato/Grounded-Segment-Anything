@@ -23,8 +23,7 @@ class AugmentationRegistry:
         valid_intensities = {"low", "medium", "high"}
         if intensity not in valid_intensities:
             raise ValueError(
-                f"Invalid intensity '{intensity}'. "
-                f"Must be one of: {', '.join(sorted(valid_intensities))}"
+                f"Invalid intensity '{intensity}'. Must be one of: {', '.join(sorted(valid_intensities))}"
             )
 
     def __init__(self):
@@ -124,9 +123,7 @@ class AugmentationRegistry:
         Returns:
             Pipeline information without creating actual pipeline
         """
-        config = self.translator.translate_from_characteristics(
-            characteristics, environment, intensity
-        )
+        config = self.translator.translate_from_characteristics(characteristics, environment, intensity)
 
         # Extract pipeline information
         augmentation_types = list(config["augmentations"].keys())

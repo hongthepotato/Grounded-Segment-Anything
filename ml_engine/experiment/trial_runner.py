@@ -9,10 +9,9 @@ import json
 import logging
 import multiprocessing as mp
 import queue
-import sys
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -22,12 +21,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrialResult:
     trial_id: str
-    config: Dict[str, Any]          # full merged config used
-    overrides: Dict[str, Any]       # only the overrides applied
-    metrics: Dict[str, float]       # all val metrics
-    primary_metric: Optional[float] # the single scalar for comparison (mAP50)
+    config: Dict[str, Any]  # full merged config used
+    overrides: Dict[str, Any]  # only the overrides applied
+    metrics: Dict[str, float]  # all val metrics
+    primary_metric: Optional[float]  # the single scalar for comparison (mAP50)
     wall_time_seconds: float
-    status: str                      # "completed", "crashed", "oom"
+    status: str  # "completed", "crashed", "oom"
     error_message: Optional[str] = None
     output_dir: str = ""
 
@@ -45,8 +44,8 @@ def _trial_subprocess(
     primary_metric_key: str = _PRIMARY_METRIC_KEY,
 ) -> None:
     """Entry point for per-trial subprocess."""
-    from pathlib import Path as _Path
     import sys as _sys
+    from pathlib import Path as _Path
 
     # Same sys.path setup as main subprocess_runner
     project_root = str(_Path(__file__).parent.parent.parent)
@@ -76,17 +75,20 @@ def _trial_subprocess(
 
         # Try to read mAP50 from evaluation report (more reliable than val_metrics)
         primary = _extract_primary_metric(output_dir, val_metrics, primary_metric_key)
-        result_queue.put({
-            "status": "completed",
-            "metrics": val_metrics,
-            "primary_metric": primary,
-        })
+        result_queue.put(
+            {
+                "status": "completed",
+                "metrics": val_metrics,
+                "primary_metric": primary,
+            }
+        )
     except TrainingCancelledException:
         result_queue.put({"status": "cancelled"})
     except MemoryError as e:
         result_queue.put({"status": "oom", "error": str(e)})
     except Exception as e:
         import traceback
+
         result_queue.put({"status": "crashed", "error": f"{type(e).__name__}: {e}\n{traceback.format_exc()}"})
 
 
@@ -179,8 +181,15 @@ class TrialRunner:
 
         proc = ctx.Process(
             target=_trial_subprocess,
-            args=(data_manager, config, trial_output_dir, result_q, progress_q, cancel_ev,
-                  primary_metric_key),
+            args=(
+                data_manager,
+                config,
+                trial_output_dir,
+                result_q,
+                progress_q,
+                cancel_ev,
+                primary_metric_key,
+            ),
             daemon=False,
         )
         proc.start()
@@ -236,7 +245,10 @@ class TrialRunner:
             result_payload = None
 
         if timed_out and result_payload is None:
-            result_payload = {"status": "crashed", "error": f"Trial exceeded wall-time limit ({timeout}s)"}
+            result_payload = {
+                "status": "crashed",
+                "error": f"Trial exceeded wall-time limit ({timeout}s)",
+            }
 
         # Cleanup queues
         for q in (result_q, progress_q):
@@ -248,7 +260,9 @@ class TrialRunner:
 
         wall_time = time.monotonic() - t0
         status = result_payload.get("status", "crashed") if result_payload else "crashed"
-        error_msg = result_payload.get("error") if result_payload else f"Subprocess exited with code {proc.exitcode}"
+        error_msg = (
+            result_payload.get("error") if result_payload else f"Subprocess exited with code {proc.exitcode}"
+        )
 
         return TrialResult(
             trial_id=trial_id,

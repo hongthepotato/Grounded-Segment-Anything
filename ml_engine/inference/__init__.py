@@ -16,43 +16,40 @@ Extensibility:
 """
 
 # Configuration
+# Main coordinator
+from ml_engine.inference.auto_labeler import AutoLabeler
 from ml_engine.inference.config import (
+    OUTPUT_BOTH,
+    OUTPUT_BOXES_ONLY,
+    OUTPUT_MASKS_ONLY,
     AutoLabelerConfig,
     DetectionThresholds,
     GroundingDINOModelSpec,
     SegmenterModelSpec,
-    OUTPUT_BOXES_ONLY,
-    OUTPUT_MASKS_ONLY,
-    OUTPUT_BOTH,
 )
-
-# Main coordinator
-from ml_engine.inference.auto_labeler import AutoLabeler
 
 # Exporters
 from ml_engine.inference.exporters.coco import COCOExporter
 
 # Visualization
 from ml_engine.inference.visualizer import (
-    visualize_detections,
     visualize_batch,
+    visualize_detections,
 )
 
 __all__ = [
     # Main API
-    'AutoLabeler',
-    'AutoLabelerConfig',
-    'DetectionThresholds',
-    'GroundingDINOModelSpec',
-    'SegmenterModelSpec',
-    'COCOExporter',
-
+    "AutoLabeler",
+    "AutoLabelerConfig",
+    "DetectionThresholds",
+    "GroundingDINOModelSpec",
+    "SegmenterModelSpec",
+    "COCOExporter",
     # Visualization
-    'visualize_detections',
-    'visualize_batch',
-
+    "visualize_detections",
+    "visualize_batch",
     # Constants
-    'OUTPUT_BOXES_ONLY',
-    'OUTPUT_MASKS_ONLY',
-    'OUTPUT_BOTH',
+    "OUTPUT_BOXES_ONLY",
+    "OUTPUT_MASKS_ONLY",
+    "OUTPUT_BOTH",
 ]

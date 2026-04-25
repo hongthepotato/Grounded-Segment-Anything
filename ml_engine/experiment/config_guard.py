@@ -64,14 +64,18 @@ class ConfigGuard:
         for key, value in proposed_overrides.items():
             # Immutable check
             if key in self._immutable:
-                errors.append(f"'{key}' is immutable and cannot be changed \
-                              by the experiment loop")
+                errors.append(
+                    f"'{key}' is immutable and cannot be changed \
+                              by the experiment loop"
+                )
                 continue
 
             # Must be in mutable_keys
             if key not in self._mutable:
-                errors.append(f"'{key}' is not in mutable_keys — \
-                              add it explicitly to allow HPO mutations")
+                errors.append(
+                    f"'{key}' is not in mutable_keys — \
+                              add it explicitly to allow HPO mutations"
+                )
                 continue
 
             schema = self._mutable[key]

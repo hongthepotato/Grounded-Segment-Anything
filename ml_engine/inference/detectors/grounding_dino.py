@@ -13,13 +13,12 @@ import logging
 from typing import Dict, List
 
 import cv2
+import groundingdino.datasets.transforms as T
 import numpy as np
 import torch
+from groundingdino.util.inference import load_model, preprocess_caption
 from PIL import Image
 from torchvision.ops import box_convert, nms
-
-import groundingdino.datasets.transforms as T
-from groundingdino.util.inference import load_model, preprocess_caption
 
 from ml_engine.inference.detectors.base import DetectionResult
 
@@ -43,9 +42,7 @@ def build_positive_map(
     Returns:
         ``{class_idx: [token_pos, ...], ...}``
     """
-    special_ids = set(
-        tokenizer.convert_tokens_to_ids(["[CLS]", "[SEP]", ".", "?"])
-    )
+    special_ids = set(tokenizer.convert_tokens_to_ids(["[CLS]", "[SEP]", ".", "?"]))
     input_ids = tokenizer(caption)["input_ids"]
 
     positive_map: Dict[int, List[int]] = {}
@@ -87,11 +84,13 @@ def logits_to_class_scores(
     return scores
 
 
-_IMAGE_TRANSFORM = T.Compose([
-    T.RandomResize([800], max_size=1333),
-    T.ToTensor(),
-    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-])
+_IMAGE_TRANSFORM = T.Compose(
+    [
+        T.RandomResize([800], max_size=1333),
+        T.ToTensor(),
+        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ]
+)
 
 
 def preprocess_image(image_bgr: np.ndarray) -> torch.Tensor:
@@ -118,7 +117,7 @@ class GroundingDINODetector:
         self,
         config_path: str = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
         checkpoint_path: str = "data/models/pretrained/groundingdino_swint_ogc.pth",
-        device: str = "cuda"
+        device: str = "cuda",
     ):
         self.config_path = config_path
         self.checkpoint_path = checkpoint_path
@@ -129,9 +128,7 @@ class GroundingDINODetector:
         if self._model is not None:
             return
         logger.info("Loading Grounding DINO model...")
-        self._model = load_model(
-            self.config_path, self.checkpoint_path, device=str(self.device)
-        )
+        self._model = load_model(self.config_path, self.checkpoint_path, device=str(self.device))
         self._model.to(self.device)
         self._model.eval()
         logger.info("Grounding DINO loaded successfully")
@@ -158,9 +155,7 @@ class GroundingDINODetector:
         self._load_model()
 
         caption = preprocess_caption(".".join(prompts))
-        positive_map = build_positive_map(
-            self._model.tokenizer, caption, len(prompts)
-        )
+        positive_map = build_positive_map(self._model.tokenizer, caption, len(prompts))
         if not positive_map:
             logger.warning("Could not build token map for prompts %s", prompts)
             return DetectionResult(
@@ -175,17 +170,15 @@ class GroundingDINODetector:
         with torch.no_grad():
             outputs = self._model(img_tensor[None], captions=[caption])
 
-        pred_logits = outputs["pred_logits"].sigmoid()[0]   # (nq, max_text_len)
-        pred_boxes = outputs["pred_boxes"][0]                # (nq, 4) cxcywh 0-1
+        pred_logits = outputs["pred_logits"].sigmoid()[0]  # (nq, max_text_len)
+        pred_boxes = outputs["pred_boxes"][0]  # (nq, 4) cxcywh 0-1
 
         # cls_scores is of shape (nq, num_classes)
-        cls_scores = logits_to_class_scores(
-            pred_logits, positive_map, len(prompts)
-        )                                                    # (nq, num_classes)
+        cls_scores = logits_to_class_scores(pred_logits, positive_map, len(prompts))  # (nq, num_classes)
 
         # pick the class with the highest score for each query
         # if 'dim' is specified, max will return (values, indices)
-        max_scores, class_ids = cls_scores.max(dim=-1)       # (nq,), (nq,)
+        max_scores, class_ids = cls_scores.max(dim=-1)  # (nq,), (nq,)
         keep = max_scores > box_threshold
         if not keep.any():
             return DetectionResult(
@@ -194,17 +187,15 @@ class GroundingDINODetector:
                 class_ids=np.empty(0, dtype=int),
             )
 
-        scores_kept = max_scores[keep] # filter by masking
+        scores_kept = max_scores[keep]  # filter by masking
         classes_kept = class_ids[keep]
         boxes_kept = pred_boxes[keep]
 
-        boxes_pixel = boxes_kept * torch.tensor(
-            [w, h, w, h], device=boxes_kept.device
-        )
+        boxes_pixel = boxes_kept * torch.tensor([w, h, w, h], device=boxes_kept.device)
         boxes_xyxy = box_convert(boxes_pixel, in_fmt="cxcywh", out_fmt="xyxy")
 
         # remove potential boxes on the same object
-        nms_idx = nms(boxes_xyxy, scores_kept, nms_threshold) 
+        nms_idx = nms(boxes_xyxy, scores_kept, nms_threshold)
 
         return DetectionResult(
             boxes_xyxy=boxes_xyxy[nms_idx].cpu().numpy(),

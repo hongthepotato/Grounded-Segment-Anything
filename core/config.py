@@ -124,9 +124,7 @@ def merge_configs(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, A
     return result
 
 
-def create_experiment_dir(
-    base_dir: str = "experiments", experiment_name: Optional[str] = None
-) -> Path:
+def create_experiment_dir(base_dir: str = "experiments", experiment_name: Optional[str] = None) -> Path:
     """
     Create a new experiment directory with timestamp.
 

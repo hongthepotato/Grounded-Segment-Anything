@@ -9,26 +9,29 @@ This module defines:
 """
 
 from __future__ import annotations
+
+import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import ClassVar, Dict, Any, Optional, List
-import json
-import uuid
+from typing import Any, ClassVar, Dict, List, Optional
 
 
 class JobStatus(str, Enum):
     """Job lifecycle states."""
-    PENDING = "pending"          # In queue, waiting to be picked up
-    RUNNING = "running"          # Currently executing on a worker
-    COMPLETED = "completed"      # Finished successfully
-    FAILED = "failed"            # Error occurred during execution
-    CANCELLED = "cancelled"      # User cancelled, job stopped
-    CANCELLING = "cancelling"    # Cancel requested, waiting for graceful stop
+
+    PENDING = "pending"  # In queue, waiting to be picked up
+    RUNNING = "running"  # Currently executing on a worker
+    COMPLETED = "completed"  # Finished successfully
+    FAILED = "failed"  # Error occurred during execution
+    CANCELLED = "cancelled"  # User cancelled, job stopped
+    CANCELLING = "cancelling"  # Cancel requested, waiting for graceful stop
 
 
 class JobType(str, Enum):
     """Supported job types."""
+
     TEACHER_TRAINING = "teacher_training"
     STUDENT_DISTILLATION = "student_distillation"
     MODEL_OPTIMIZATION = "model_optimization"
@@ -50,6 +53,7 @@ class JobProgress:
         metrics: Latest training/validation metrics
         message: Optional status message
     """
+
     current_epoch: int = 0
     total_epochs: int = 0
     current_step: int = 0
@@ -79,7 +83,7 @@ class JobProgress:
             current_step=data.get("current_step", 0),
             total_steps=data.get("total_steps", 0),
             metrics=data.get("metrics", {}),
-            message=data.get("message", "")
+            message=data.get("message", ""),
         )
 
     @property
@@ -119,6 +123,7 @@ class JobOutcome:
                only for fields a specific job type needs to forward to the coordinator
                (e.g. experiment_result for experiment_loop jobs).
     """
+
     status: str = "completed"
     metrics: Dict[str, float] = field(default_factory=dict)
     artifacts: Dict[str, str] = field(default_factory=dict)
@@ -183,6 +188,7 @@ class Job:
         tags: Optional tags for filtering/grouping
         outcome: Structured result written at job completion (Stage 0+)
     """
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     run_id: Optional[str] = None
     type: str = JobType.TEACHER_TRAINING.value
@@ -198,7 +204,9 @@ class Job:
     priority: int = 0
     tags: List[str] = field(default_factory=list)
     outcome: Optional[JobOutcome] = None
-    dispatch_event_id: Optional[str] = None  # Stream entry-id that enqueued this job; guards against duplicate dispatch on PEL recovery
+    dispatch_event_id: Optional[str] = (
+        None  # Stream entry-id that enqueued this job; guards against duplicate dispatch on PEL recovery
+    )
 
     def __post_init__(self):
         """Set defaults after initialization."""
@@ -243,14 +251,15 @@ class Job:
     def from_dict(cls, data: Dict[str, Any]) -> Job:
         """
         Create Job from dictionary (Redis hash).
-        
+
         Handles deserialization of JSON fields and datetimes.
         """
         # Handle bytes from Redis
         if data and isinstance(list(data.values())[0], bytes):
-            data = {k.decode() if isinstance(k, bytes) else k:
-                    v.decode() if isinstance(v, bytes) else v
-                    for k, v in data.items()}
+            data = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in data.items()
+            }
 
         # Parse JSON fields
         config = data.get("config", "{}")
@@ -344,6 +353,7 @@ class WorkerInfo:
         last_heartbeat: Last heartbeat timestamp
         started_at: When worker started
     """
+
     id: str
     gpu_id: int = 0
     hostname: str = ""
@@ -375,9 +385,10 @@ class WorkerInfo:
         """Create from dictionary."""
         # Handle bytes from Redis
         if data and isinstance(list(data.values())[0], bytes):
-            data = {k.decode() if isinstance(k, bytes) else k: 
-                    v.decode() if isinstance(v, bytes) else v 
-                    for k, v in data.items()}
+            data = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in data.items()
+            }
 
         def parse_datetime(value: str) -> Optional[datetime]:
             if not value:
