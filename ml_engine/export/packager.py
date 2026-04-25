@@ -13,7 +13,7 @@ import shutil
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from torch import nn
 
@@ -30,7 +30,7 @@ def create_export_package(
     output_dir: Path,
     class_names: List[str],
     model_name: str = "grounding_dino",
-    training_info: Optional[Dict[str, Any]] = None
+    training_info: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
     Create a downloadable ZIP package with merged model weights and docs.
@@ -45,6 +45,19 @@ def create_export_package(
     Returns:
         Path to the created ZIP file
     """
+    # Validate class_names contain no embedded newlines/carriage returns.
+    # class_names.txt is newline-delimited, so a class name with '\n' would
+    # silently split into two entries on read-back — silent data corruption.
+    # Reject at the boundary instead of corrupting downstream artifacts.
+    for i, name in enumerate(class_names):
+        if "\n" in name or "\r" in name:
+            raise ValueError(
+                f"class_names[{i}]={name!r} contains a newline or carriage "
+                f"return character; class_names.txt is newline-delimited so "
+                f"embedded newlines would corrupt the round-trip. Strip or "
+                f"replace newlines in class names before calling."
+            )
+
     output_dir = Path(output_dir)
     exports_dir = output_dir / "exports"
     exports_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +106,7 @@ def create_export_package(
     zip_path = exports_dir / f"{model_name}_package.zip"
     logger.info("Creating ZIP archive: %s", zip_path)
 
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for file_path in package_dir.rglob("*"):
             if file_path.is_file():
                 arcname = file_path.relative_to(package_dir)
@@ -130,8 +143,15 @@ def _create_readme(
         "{num_classes}": str(len(class_names)),
         "{training_date}": training_info.get("training_date", "N/A"),
         "{epochs}": str(training_info.get("epochs", "N/A")),
-        "{map50}": f"{training_info.get('mAP50', 0):.1%}" if training_info.get('mAP50') else "N/A",
-        "{miou}": f"{training_info.get('mIoU', 0):.1%}" if training_info.get('mIoU') else "N/A",
+        # Use `is not None` instead of truthiness so a genuinely-zero metric
+        # (catastrophic training failure: mAP50=0.0) renders as "0.0%" instead
+        # of being silently misrepresented as "N/A". Same fix for mIoU.
+        "{map50}": (
+            f"{training_info['mAP50']:.1%}" if training_info.get("mAP50") is not None else "N/A"
+        ),
+        "{miou}": (
+            f"{training_info['mIoU']:.1%}" if training_info.get("mIoU") is not None else "N/A"
+        ),
         "{generation_date}": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
