@@ -9,24 +9,24 @@ Provides:
 - PUT /api/autolabel/{job_id}/annotations - Save edited annotations
 """
 
-import os
 import logging
+import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
 from api.schemas import (
     AutoLabelRequest,
     AutoLabelResultResponse,
-    VisualizationListResponse,
-    VisualizationInfo,
-    JobResponse,
     JobProgressSchema,
+    JobResponse,
+    VisualizationInfo,
+    VisualizationListResponse,
     success_response,
 )
-from ml_engine.jobs import AsyncJobManager, get_async_job_manager, Job
 from core.config import load_json, save_json
+from ml_engine.jobs import AsyncJobManager, Job, get_async_job_manager
 
 logger = logging.getLogger(__name__)
 
@@ -73,15 +73,14 @@ def job_to_response(job: Job) -> JobResponse:
 
 @router.post("")
 async def submit_autolabel(
-    request: AutoLabelRequest,
-    manager: AsyncJobManager = Depends(get_manager)
+    request: AutoLabelRequest, manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Submit an auto-labeling job.
-    
+
     The job is queued and executed by a worker with GPU access.
     Returns immediately with job details - poll /api/jobs/{id} for status.
-    
+
     Example:
         POST /api/autolabel
         {
@@ -133,16 +132,13 @@ async def submit_autolabel(
 
 
 @router.get("/{job_id}/results", response_model=AutoLabelResultResponse)
-async def get_results(
-    job_id: str,
-    manager: AsyncJobManager = Depends(get_manager)
-):
+async def get_results(job_id: str, manager: AsyncJobManager = Depends(get_manager)):
     """
     Get COCO-format annotations for a completed auto-label job.
-    
+
     Example:
         GET /api/autolabel/abc123/results
-        
+
     Returns:
         COCO JSON with images, annotations, and categories
     """
@@ -153,7 +149,7 @@ async def get_results(
     if job.status.value != "completed":
         raise HTTPException(
             status_code=400,
-            detail=f"Job is not completed (status: {job.status.value}). Cannot get results."
+            detail=f"Job is not completed (status: {job.status.value}). Cannot get results.",
         )
 
     # Load annotations from output directory
@@ -163,7 +159,7 @@ async def get_results(
     if not annotations_path.exists():
         raise HTTPException(
             status_code=404,
-            detail="Annotations not found. The job may not have completed successfully."
+            detail="Annotations not found. The job may not have completed successfully.",
         )
 
     try:
@@ -171,7 +167,7 @@ async def get_results(
         return AutoLabelResultResponse(
             images=coco_data.get("images", []),
             annotations=coco_data.get("annotations", []),
-            categories=coco_data.get("categories", [])
+            categories=coco_data.get("categories", []),
         )
     except Exception as e:
         logger.error("Failed to load annotations: %s", e)
@@ -179,16 +175,13 @@ async def get_results(
 
 
 @router.get("/{job_id}/visualizations", response_model=VisualizationListResponse)
-async def list_visualizations(
-    job_id: str,
-    manager: AsyncJobManager = Depends(get_manager)
-):
+async def list_visualizations(job_id: str, manager: AsyncJobManager = Depends(get_manager)):
     """
     List visualization images for an auto-label job.
-    
+
     Example:
         GET /api/autolabel/abc123/visualizations
-        
+
     Returns:
         List of visualization image info
     """
@@ -199,18 +192,16 @@ async def list_visualizations(
     if job.status.value != "completed":
         raise HTTPException(
             status_code=400,
-            detail=f"Job is not completed (status: {job.status.value}). Visualizations not available."
+            detail=(
+                f"Job is not completed (status: {job.status.value}). Visualizations not available."
+            ),
         )
 
     output_dir = Path(job.output_dir)
     viz_dir = output_dir / "visualizations"
 
     if not viz_dir.exists():
-        return VisualizationListResponse(
-            job_id=job_id,
-            total=0,
-            images=[]
-        )
+        return VisualizationListResponse(job_id=job_id, total=0, images=[])
 
     # Load annotations to get annotation counts per image
     annotations_path = output_dir / "annotations.json"
@@ -221,8 +212,7 @@ async def list_visualizations(
             coco_data = load_json(str(annotations_path))
             # Build map of filename -> annotation count
             image_id_to_filename = {
-                img["id"]: img["file_name"]
-                for img in coco_data.get("images", [])
+                img["id"]: img["file_name"] for img in coco_data.get("images", [])
             }
             for ann in coco_data.get("annotations", []):
                 img_id = ann.get("image_id")
@@ -252,31 +242,27 @@ async def list_visualizations(
         if original_name is None:
             original_name = f"{original_stem}.jpg"
 
-        images.append(VisualizationInfo(
-            filename=viz_path.name,
-            original=original_name,
-            annotation_count=annotation_counts.get(original_name, 0)
-        ))
+        images.append(
+            VisualizationInfo(
+                filename=viz_path.name,
+                original=original_name,
+                annotation_count=annotation_counts.get(original_name, 0),
+            )
+        )
 
-    return VisualizationListResponse(
-        job_id=job_id,
-        total=len(images),
-        images=images
-    )
+    return VisualizationListResponse(job_id=job_id, total=len(images), images=images)
 
 
 @router.get("/{job_id}/visualizations/{filename}")
 async def get_visualization(
-    job_id: str,
-    filename: str,
-    manager: AsyncJobManager = Depends(get_manager)
+    job_id: str, filename: str, manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Get a visualization image file.
-    
+
     Example:
         GET /api/autolabel/abc123/visualizations/img001_viz.jpg
-        
+
     Returns:
         JPEG image file
     """
@@ -287,7 +273,9 @@ async def get_visualization(
     if job.status.value != "completed":
         raise HTTPException(
             status_code=400,
-            detail=f"Job is not completed (status: {job.status.value}). Visualizations not available."
+            detail=(
+                f"Job is not completed (status: {job.status.value}). Visualizations not available."
+            ),
         )
 
     output_dir = Path(job.output_dir)
@@ -302,25 +290,19 @@ async def get_visualization(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    return FileResponse(
-        path=str(viz_path),
-        media_type="image/jpeg",
-        filename=filename
-    )
+    return FileResponse(path=str(viz_path), media_type="image/jpeg", filename=filename)
 
 
 @router.put("/{job_id}/annotations")
 async def save_annotations(
-    job_id: str,
-    annotations: dict,
-    manager: AsyncJobManager = Depends(get_manager)
+    job_id: str, annotations: dict, manager: AsyncJobManager = Depends(get_manager)
 ):
     """
     Save edited annotations for an auto-label job.
-    
+
     Accepts full COCO JSON and saves as annotations_edited.json.
     Original annotations.json is preserved.
-    
+
     Example:
         PUT /api/autolabel/abc123/annotations
         {
@@ -328,7 +310,7 @@ async def save_annotations(
             "annotations": [...],
             "categories": [...]
         }
-        
+
     Returns:
         Save confirmation with path and counts
     """
@@ -339,22 +321,25 @@ async def save_annotations(
     if job.status.value != "completed":
         raise HTTPException(
             status_code=400,
-            detail=f"Job is not completed (status: {job.status.value}). Cannot save annotations."
+            detail=f"Job is not completed (status: {job.status.value}). Cannot save annotations.",
         )
 
     output_dir = Path(job.output_dir)
 
     if not output_dir.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Output directory not found"
-        )
+        raise HTTPException(status_code=404, detail="Output directory not found")
 
     # Validate structure
-    if "images" not in annotations or "annotations" not in annotations or "categories" not in annotations:
+    if (
+        "images" not in annotations
+        or "annotations" not in annotations
+        or "categories" not in annotations
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Invalid COCO format. Must contain 'images', 'annotations', and 'categories' keys."
+            detail=(
+                "Invalid COCO format. Must contain 'images', 'annotations', and 'categories' keys."
+            ),
         )
 
     # Save edited annotations
@@ -368,7 +353,7 @@ async def save_annotations(
             "saved": True,
             "path": str(edited_path),
             "image_count": len(annotations.get("images", [])),
-            "annotation_count": len(annotations.get("annotations", []))
+            "annotation_count": len(annotations.get("annotations", [])),
         }
     except Exception as e:
         logger.error("Failed to save annotations: %s", e)

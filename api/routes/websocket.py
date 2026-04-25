@@ -31,10 +31,10 @@ router = APIRouter(tags=["websocket"])
 async def job_stream(websocket: WebSocket, job_id: str):
     """
     WebSocket endpoint for real-time job updates.
-    
+
     Connects to Redis pub/sub and forwards events to the client.
     Automatically closes when job reaches terminal state.
-    
+
     Example (JavaScript):
         const ws = new WebSocket('ws://localhost:8000/ws/jobs/a1b2c3d4-...');
         ws.onmessage = (event) => {
@@ -52,10 +52,7 @@ async def job_stream(websocket: WebSocket, job_id: str):
     # Check if job exists
     job = await manager.get_job(job_id)
     if job is None:
-        await websocket.send_json({
-            "type": "error",
-            "message": f"Job {job_id} not found"
-        })
+        await websocket.send_json({"type": "error", "message": f"Job {job_id} not found"})
         await websocket.close(code=4004)
         return
 
@@ -70,12 +67,14 @@ async def job_stream(websocket: WebSocket, job_id: str):
 
     # If job is already terminal, send final state and close
     if job.is_terminal:
-        await websocket.send_json({
-            "type": f"job_{job.status.value}",
-            "job_id": job_id,
-            "output_dir": job.output_dir,
-            "error_message": job.error_message,
-        })
+        await websocket.send_json(
+            {
+                "type": f"job_{job.status.value}",
+                "job_id": job_id,
+                "output_dir": job.output_dir,
+                "error_message": job.error_message,
+            }
+        )
         await websocket.close()
         return
 
@@ -87,32 +86,28 @@ async def job_stream(websocket: WebSocket, job_id: str):
         """Callback from Redis pub/sub (runs in background thread)."""
         try:
             # Put event in async queue
-            asyncio.run_coroutine_threadsafe(
-                event_queue.put(event),
-                asyncio.get_event_loop()
-            )
+            asyncio.run_coroutine_threadsafe(event_queue.put(event), asyncio.get_event_loop())
         except Exception as e:
             logger.warning("Error queuing event: %s", e)
 
-    # Start subscription in background thread
-    sub_thread = manager.subscribe_to_job_async(job_id, on_event)
+    # Start subscription in background thread. The returned thread handle is
+    # intentionally unused — subscription runs fire-and-forget via the on_event
+    # callback. Kept as a `_`-prefixed binding to document the call's return
+    # value (and silence ruff F841 without a suppression directive).
+    _sub_thread = manager.subscribe_to_job_async(job_id, on_event)
 
     try:
         while True:
             # Check for events with timeout
             try:
-                event = await asyncio.wait_for(
-                    event_queue.get(),
-                    timeout=1.0
-                )
+                event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
 
                 # Forward event to client
                 await websocket.send_json(event)
 
                 # Check for terminal events
                 if event.get("type") in ["job_completed", "job_failed", "job_cancelled"]:
-                    logger.info("Job %s reached terminal state: %s",
-                              job_id[:8], event.get("type"))
+                    logger.info("Job %s reached terminal state: %s", job_id[:8], event.get("type"))
                     break
 
             except asyncio.TimeoutError:
@@ -120,12 +115,14 @@ async def job_stream(websocket: WebSocket, job_id: str):
                 job = await manager.get_job(job_id)
                 if job and job.is_terminal:
                     # Job finished but we missed the event
-                    await websocket.send_json({
-                        "type": f"job_{job.status.value}",
-                        "job_id": job_id,
-                        "output_dir": job.output_dir,
-                        "error_message": job.error_message,
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": f"job_{job.status.value}",
+                            "job_id": job_id,
+                            "output_dir": job.output_dir,
+                            "error_message": job.error_message,
+                        }
+                    )
                     break
 
                 # Send ping to keep connection alive
@@ -141,10 +138,7 @@ async def job_stream(websocket: WebSocket, job_id: str):
     except Exception as e:
         logger.error("WebSocket error for job %s: %s", job_id[:8], e)
         try:
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e)
-            })
+            await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:
             pass
 
