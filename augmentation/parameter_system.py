@@ -3,10 +3,12 @@ Albumentations Parameter System
 Provides a unified interface for all albumentations parameters
 Supports range, nested, and list parameters
 """
-from abc import ABC, abstractmethod
-from typing import Dict, Any, Union, Tuple
-from dataclasses import dataclass
+
 import random
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, Dict, Tuple, Union
+
 
 def convert_to_numeric(value: Any) -> Union[int, float]:
     """
@@ -26,7 +28,7 @@ def convert_to_numeric(value: Any) -> Union[int, float]:
     if isinstance(value, str):
         try:
             # Try int first (for strings like "10")
-            if '.' not in value and 'e' not in value.lower():
+            if "." not in value and "e" not in value.lower():
                 return int(value)
             # Otherwise convert to float
             return float(value)
@@ -35,6 +37,7 @@ def convert_to_numeric(value: Any) -> Union[int, float]:
 
     # Reject all other types
     raise TypeError(f"Cannot convert {type(value)} to numeric")
+
 
 class AlbumentationsParameter(ABC):
     """Base class for all parameter types"""
@@ -51,6 +54,7 @@ class AlbumentationsParameter(ABC):
 @dataclass
 class RangeParameter(AlbumentationsParameter):
     """Handles all range-based parameters - continuous, discrete, and scalar"""
+
     min_val: float
     max_val: float
     is_integer: bool = False  # Whether to sample/return integers
@@ -81,7 +85,7 @@ class RangeParameter(AlbumentationsParameter):
         return random.uniform(self.min_val, self.max_val)
 
     @classmethod
-    def scalar(cls, value: Union[int, float, str], is_integer: bool = False) -> 'RangeParameter':
+    def scalar(cls, value: Union[int, float, str], is_integer: bool = False) -> "RangeParameter":
         """
         Create a scalar parameter (min == max)
         Accepts: int, float, or string representations of numbers
@@ -92,9 +96,8 @@ class RangeParameter(AlbumentationsParameter):
 
     @classmethod
     def integer_range(
-            cls, min_val: Union[int, float, str],
-            max_val: Union[int, float, str]
-    ) -> 'RangeParameter':
+        cls, min_val: Union[int, float, str], max_val: Union[int, float, str]
+    ) -> "RangeParameter":
         """
         Create an integer range parameter
         Accepts: int, float, or string representations of numbers
@@ -112,17 +115,19 @@ class RangeParameter(AlbumentationsParameter):
     def is_scalar(self) -> bool:
         return self.min_val == self.max_val
 
+
 @dataclass
 class NestedParameter(AlbumentationsParameter):
     """
-    Handles nested dictionary parameters like 
+    Handles nested dictionary parameters like
     translate_percent={'x': (-0.1, 0.1), 'y': (-0.1, 0.1)}
-    
+
     Automatically converts raw values to appropriate parameter types:
     - Tuples/lists of 2 numbers -> RangeParameter
     - Single numbers -> RangeParameter.scalar
     - Already AlbumentationsParameter -> used as-is
     """
+
     parameters: Dict[str, Any]  # Accept Any, we'll convert in __post_init__
 
     def __post_init__(self):
@@ -157,9 +162,7 @@ class NestedParameter(AlbumentationsParameter):
         self.parameters = converted
 
     def to_albumentations_format(self) -> Dict[str, Any]:
-        return {key: param.to_albumentations_format()
-                for key, param in self.parameters.items()}
+        return {key: param.to_albumentations_format() for key, param in self.parameters.items()}
 
     def sample(self) -> Dict[str, Any]:
-        return {key: param.sample()
-                for key, param in self.parameters.items()}
+        return {key: param.sample() for key, param in self.parameters.items()}

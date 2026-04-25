@@ -4,12 +4,15 @@ Maintains API compatibility while using dict-based configs
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
+
 import albumentations as A
 import numpy as np
+
 from .transform_builders import TransformParameterBuilder
 
 logger = logging.getLogger(__name__)
+
 
 class ConfigurableAugmentationPipeline:
     """
@@ -41,11 +44,10 @@ class ConfigurableAugmentationPipeline:
         self.pipeline = self._create_pipeline()
 
         logger.info(
-            "ConfigurableAugmentationPipeline initialized with %d augmentations",
-            len(augmentations)
+            "ConfigurableAugmentationPipeline initialized with %d augmentations", len(augmentations)
         )
 
-    def _validate_augmentations(self, augmentations: Dict[str, Dict[str,Any]]) -> None:
+    def _validate_augmentations(self, augmentations: Dict[str, Dict[str, Any]]) -> None:
         """
         Validate augmentations dictionary structure
 
@@ -59,7 +61,9 @@ class ConfigurableAugmentationPipeline:
 
         # Type validation
         if not isinstance(augmentations, dict):
-            raise TypeError(f"augmentations must be a dictionary, got {type(augmentations).__name__}")
+            raise TypeError(
+                f"augmentations must be a dictionary, got {type(augmentations).__name__}"
+            )
 
         # Allow empty dict - will create identity pipeline (no-op)
         if len(augmentations) == 0:
@@ -70,42 +74,37 @@ class ConfigurableAugmentationPipeline:
         for aug_type, params in augmentations.items():
             # Check augmentation type
             if not isinstance(aug_type, str):
-                raise TypeError(
-                    f"Augmentation type must be string, "
-                    f"got {type(aug_type).__name__}"
-                )
+                raise TypeError(f"Augmentation type must be string, got {type(aug_type).__name__}")
 
             # Check params is dict
             if not isinstance(params, dict):
                 raise TypeError(
-                    f"Parameters for '{aug_type}' must be dict, "
-                    f"got {type(params).__name__}"
+                    f"Parameters for '{aug_type}' must be dict, got {type(params).__name__}"
                 )
 
             # Check if augmentation exists in albumentations (cheap check)
             if not hasattr(A, aug_type):
-                raise ValueError(
-                    f"Augmentation '{aug_type}' does not exist in albumentations."
-                )
+                raise ValueError(f"Augmentation '{aug_type}' does not exist in albumentations.")
 
-            if 'p' not in params:
-                raise KeyError(
-                    f"Probability for augmentation '{aug_type}' is not set."
-                )
+            if "p" not in params:
+                raise KeyError(f"Probability for augmentation '{aug_type}' is not set.")
 
     def _validate_input_data(
-            self, image: np.ndarray, masks: List[np.ndarray],
-            keypoints: Optional[List[List[int]]] = None, bboxes: Optional[List[List[int]]] = None
-        ) -> None:
+        self,
+        image: np.ndarray,
+        masks: List[np.ndarray],
+        keypoints: Optional[List[List[int]]] = None,
+        bboxes: Optional[List[List[int]]] = None,
+    ) -> None:
         """
         Validate input data for augmentation
-        
+
         Args:
             image: Input image (H, W, C)
             masks: Input masks (N, H, W), typical N = 1
             keypoints: Input keypoints (N, 2), typical N = 5
             bboxes: Input bounding boxes (N, 4), typical N = 1
-        
+
         Raises:
             ValueError: If input data is invalid
             TypeError: If input data has wrong type
@@ -115,14 +114,10 @@ class ConfigurableAugmentationPipeline:
             raise TypeError(f"image must be numpy.ndarray, got {type(image).__name__}")
 
         if image.ndim not in [2, 3]:
-            raise ValueError(
-                f"image must be 2D or 3D array, got shape {image.shape}"
-            )
+            raise ValueError(f"image must be 2D or 3D array, got shape {image.shape}")
 
         if image.ndim == 3 and image.shape[2] not in [1, 3, 4]:
-            raise ValueError(
-                f"image must have 1, 3, or 4 channels, got {image.shape[2]}"
-            )
+            raise ValueError(f"image must have 1, 3, or 4 channels, got {image.shape[2]}")
 
         image_h, image_w = image.shape[:2]
 
@@ -157,15 +152,11 @@ class ConfigurableAugmentationPipeline:
 
         for mask in masks:
             if not isinstance(mask, np.ndarray):
-                raise TypeError(
-                    f"masks must be a list of numpy.ndarray, "
-                    f"got {type(mask).__name__}"
-                )
+                raise TypeError(f"masks must be a list of numpy.ndarray, got {type(mask).__name__}")
 
             if mask.ndim != 2:
                 raise ValueError(
-                    f"masks must be a list of 2D numpy.ndarray (H, W), "
-                    f"got {mask.shape}"
+                    f"masks must be a list of 2D numpy.ndarray (H, W), got {mask.shape}"
                 )
 
             if mask.shape[0] != image_h or mask.shape[1] != image_w:
@@ -184,7 +175,7 @@ class ConfigurableAugmentationPipeline:
                 [[]] is invalid (malformed keypoint)
             image_h: Image height
             image_w: Image width
-            
+
         Raises:
             TypeError: If keypoints is not a list or has wrong element types
             ValueError: If keypoint coordinates are invalid
@@ -204,12 +195,11 @@ class ConfigurableAugmentationPipeline:
         # Now validate each keypoint
         for i, kp in enumerate(keypoints):
             if not isinstance(kp, list):
-                raise TypeError(f"keypoint {i+1} must be a list, got {type(kp).__name__}")
+                raise TypeError(f"keypoint {i + 1} must be a list, got {type(kp).__name__}")
 
             if len(kp) != 2:
                 raise ValueError(
-                    f"keypoint {i+1} must have exactly 2 coordinates (x, y), "
-                    f"got {len(kp)}"
+                    f"keypoint {i + 1} must have exactly 2 coordinates (x, y), got {len(kp)}"
                 )
 
             x, y = kp
@@ -219,18 +209,18 @@ class ConfigurableAugmentationPipeline:
                 # Handle string coordinates
                 if isinstance(x, str):
                     # Check if it's a float string (contains '.' or 'e'/'E')
-                    if '.' in x or 'e' in x.lower():
+                    if "." in x or "e" in x.lower():
                         raise TypeError(
-                            f"keypoint {i+1} coordinates must be integers, "
+                            f"keypoint {i + 1} coordinates must be integers, "
                             f"got x={type(x).__name__} (string-float '{x}'), y={type(y).__name__}"
                         )
                     x = int(x)
 
                 if isinstance(y, str):
                     # Check if it's a float string (contains '.' or 'e'/'E')
-                    if '.' in y or 'e' in y.lower():
+                    if "." in y or "e" in y.lower():
                         raise TypeError(
-                            f"keypoint {i+1} coordinates must be integers, "
+                            f"keypoint {i + 1} coordinates must be integers, "
                             f"got x={type(x).__name__}, y={type(y).__name__} (string-float '{y}')"
                         )
                     y = int(y)
@@ -238,26 +228,26 @@ class ConfigurableAugmentationPipeline:
                 # Now check if they're integers (or convertible to integers)
                 if not isinstance(x, (int, np.integer)):
                     raise TypeError(
-                        f"keypoint {i+1} coordinates must be integers, "
+                        f"keypoint {i + 1} coordinates must be integers, "
                         f"got x={type(x).__name__}, y={type(y).__name__}"
                     )
 
                 if not isinstance(y, (int, np.integer)):
                     raise TypeError(
-                        f"keypoint {i+1} coordinates must be integers, "
+                        f"keypoint {i + 1} coordinates must be integers, "
                         f"got x={type(x).__name__}, y={type(y).__name__}"
                     )
 
             except ValueError as e:
                 # int() conversion failed (e.g., "abc")
                 raise TypeError(
-                    f"keypoint {i+1} coordinates must be integers or string-integers, "
+                    f"keypoint {i + 1} coordinates must be integers or string-integers, "
                     f"got x={type(kp[0]).__name__}, y={type(kp[1]).__name__}"
                 ) from e
 
             if not (0 <= x < image_w and 0 <= y < image_h):
                 raise ValueError(
-                    f"keypoint {i+1} ({x}, {y}) out of bounds for image size "
+                    f"keypoint {i + 1} ({x}, {y}) out of bounds for image size "
                     f"(width={image_w}, height={image_h})"
                 )
 
@@ -300,23 +290,23 @@ class ConfigurableAugmentationPipeline:
         # Now validate each bbox
         for i, bbox in enumerate(bboxes):
             if not isinstance(bbox, list):
-                raise TypeError(f"bbox {i+1} must be a list, got {type(bbox).__name__}")
+                raise TypeError(f"bbox {i + 1} must be a list, got {type(bbox).__name__}")
 
             if len(bbox) != 4:
-                raise ValueError(f"bbox {i+1} must have exactly 4 elements, got {len(bbox)}")
+                raise ValueError(f"bbox {i + 1} must have exactly 4 elements, got {len(bbox)}")
 
             x, y, w, h = bbox
 
             # Convert string-integers to int, but reject floats and string-floats
             try:
                 coords = []
-                coord_names = ['x', 'y', 'w', 'h']
+                coord_names = ["x", "y", "w", "h"]
                 for coord, name in zip([x, y, w, h], coord_names):
                     if isinstance(coord, str):
                         # Check if it's a float string
-                        if '.' in coord or 'e' in coord.lower():
+                        if "." in coord or "e" in coord.lower():
                             raise TypeError(
-                                f"bbox {i+1} coordinates must be integers, "
+                                f"bbox {i + 1} coordinates must be integers, "
                                 f"{name} is string-float '{coord}'"
                             )
                         coords.append(int(coord))
@@ -324,7 +314,7 @@ class ConfigurableAugmentationPipeline:
                         coords.append(int(coord))
                     else:
                         raise TypeError(
-                            f"bbox {i+1} coordinates must be integers, "
+                            f"bbox {i + 1} coordinates must be integers, "
                             f"{name}={type(coord).__name__}"
                         )
 
@@ -333,36 +323,31 @@ class ConfigurableAugmentationPipeline:
             except ValueError as e:
                 # int() conversion failed
                 raise TypeError(
-                    f"bbox {i+1} coordinates must be integers or string-integers, "
+                    f"bbox {i + 1} coordinates must be integers or string-integers, "
                     f"got x={type(bbox[0]).__name__}, y={type(bbox[1]).__name__}, "
                     f"w={type(bbox[2]).__name__}, h={type(bbox[3]).__name__}"
                 ) from e
 
             # Validate positive dimensions (COCO: w and h must be > 0)
             if w <= 0:
-                raise ValueError(
-                    f"bbox {i+1} invalid: width ({w}) must be > 0"
-                )
+                raise ValueError(f"bbox {i + 1} invalid: width ({w}) must be > 0")
             if h <= 0:
-                raise ValueError(
-                    f"bbox {i+1} invalid: height ({h}) must be > 0"
-                )
+                raise ValueError(f"bbox {i + 1} invalid: height ({h}) must be > 0")
 
             # Validate top-left corner is inside the image
             if not (0 <= x < image_w and 0 <= y < image_h):
                 raise ValueError(
-                    f"bbox {i+1} top-left ({x}, {y}) out of bounds for image size "
+                    f"bbox {i + 1} top-left ({x}, {y}) out of bounds for image size "
                     f"(width={image_w}, height={image_h})"
                 )
 
             # Validate bbox fits within the image
             if x + w > image_w or y + h > image_h:
                 raise ValueError(
-                    f"bbox {i+1} [x={x}, y={y}, w={w}, h={h}] extends beyond image "
+                    f"bbox {i + 1} [x={x}, y={y}, w={w}, h={h}] extends beyond image "
                     f"(width={image_w}, height={image_h}): "
-                    f"x+w={x+w}, y+h={y+h}"
+                    f"x+w={x + w}, y+h={y + h}"
                 )
-
 
     def _create_pipeline(self) -> A.Compose:
         """
@@ -384,11 +369,11 @@ class ConfigurableAugmentationPipeline:
         # Create albumentations pipeline
         return A.Compose(
             all_transforms,
-            keypoint_params=A.KeypointParams(format='xy', remove_invisible=False),
+            keypoint_params=A.KeypointParams(format="xy", remove_invisible=False),
             bbox_params=A.BboxParams(
-                format='coco', # [x, y, w, h] for bounding boxes
-                label_fields=[],     # Temporarily empty
-                min_visibility=0.3
+                format="coco",  # [x, y, w, h] for bounding boxes
+                label_fields=[],  # Temporarily empty
+                min_visibility=0.3,
             ),
             # additional_targets={}  # Regard masks as image
         )
@@ -423,45 +408,49 @@ class ConfigurableAugmentationPipeline:
                 "Parameter signature mismatch for %s: %s\n"
                 "Provided params: %s\n"
                 "This transform will be skipped.",
-                aug_type, str(e), list(unified_params.keys())
+                aug_type,
+                str(e),
+                list(unified_params.keys()),
             )
             return None
 
         except ValueError as e:
             logger.error(
-                "Invalid parameter values for %s: %s\n"
-                "This transform will be skipped.",
-                aug_type, str(e)
+                "Invalid parameter values for %s: %s\nThis transform will be skipped.",
+                aug_type,
+                str(e),
             )
             return None
 
         except KeyError as e:
             logger.error(
-                "Missing required parameter for %s: %s\n"
-                "This transform will be skipped.",
-                aug_type, str(e)
+                "Missing required parameter for %s: %s\nThis transform will be skipped.",
+                aug_type,
+                str(e),
             )
             return None
 
         except Exception as e:
             logger.error(
-                "Unexpected error instantiating %s: %s\n"
-                "This transform will be skipped.",
-                aug_type, str(e), exc_info=True
+                "Unexpected error instantiating %s: %s\nThis transform will be skipped.",
+                aug_type,
+                str(e),
+                exc_info=True,
             )
             return None
 
     def __call__(
-        self, image: np.ndarray, 
+        self,
+        image: np.ndarray,
         masks: Optional[List[np.ndarray]] = None,
         keypoints: Optional[List[List[int]]] = None,
-        bboxes: Optional[List[List[int]]] = None
+        bboxes: Optional[List[List[int]]] = None,
     ) -> Dict[str, Any]:
         """
         Apply augmentation pipeline - EXACT SAME API as IndustrialAugmentationPipeline
-        
+
         CRITICAL: This method must maintain 100% API compatibility
-        
+
         Args:
             image: Input image (H, W, C) - numpy array
             masks: List of masks (optional) - (N, H, W), typical N = 1
@@ -516,18 +505,17 @@ class ConfigurableAugmentationPipeline:
         augmented = self.pipeline(**aug_input)
         logger.debug("Augmentation pipeline applied successfully")
 
-
         # Build result dictionary
         result = {"image": augmented["image"]}
 
         # === MASKS PROCESSING ===
         if has_masks:
-            if 'masks' not in augmented or augmented['masks'] is None:
-                raise RuntimeError(
-                    "Augmentation corrupted: provided masks but got none back."
-                )
+            if "masks" not in augmented or augmented["masks"] is None:
+                raise RuntimeError("Augmentation corrupted: provided masks but got none back.")
             if isinstance(augmented["masks"], np.ndarray) and augmented["masks"].ndim == 3:
-                result["masks"] = [augmented["masks"][i] for i in range(augmented["masks"].shape[0])]
+                result["masks"] = [
+                    augmented["masks"][i] for i in range(augmented["masks"].shape[0])
+                ]
             else:
                 result["masks"] = augmented["masks"]
             logger.debug("Processed %d masks", len(result["masks"]))
@@ -536,10 +524,8 @@ class ConfigurableAugmentationPipeline:
 
         # === KEYPOINTS PROCESSING ===
         if has_keypoints:
-            if 'keypoints' not in augmented or augmented['keypoints'] is None:
-                raise RuntimeError(
-                    "Augmentation corrupted: provided keypoints but got none back."
-                )
+            if "keypoints" not in augmented or augmented["keypoints"] is None:
+                raise RuntimeError("Augmentation corrupted: provided keypoints but got none back.")
             kpts = augmented["keypoints"]
             if isinstance(kpts, np.ndarray):
                 result["keypoints"] = kpts.tolist()
@@ -552,10 +538,8 @@ class ConfigurableAugmentationPipeline:
 
         # === BBOXES PROCESSING ===
         if has_bboxes:
-            if 'bboxes' not in augmented or augmented['bboxes'] is None:
-                raise RuntimeError(
-                    "Augmentation corrupted: provided bboxes but got none back."
-                )
+            if "bboxes" not in augmented or augmented["bboxes"] is None:
+                raise RuntimeError("Augmentation corrupted: provided bboxes but got none back.")
             bboxes = augmented["bboxes"]
             if isinstance(bboxes, np.ndarray):
                 result["bboxes"] = bboxes.tolist()
