@@ -34,15 +34,18 @@ def merge_lora_weights(model: nn.Module) -> nn.Module:
         >>> merged = merge_lora_weights(lora_model)
         >>> # merged is now a standard model, no PEFT dependency
     """
+    # `Any` annotation note: PEFT's `PeftModel` exposes `merge_and_unload`
+    # via __getattr__ delegation to `self.base_model` (a `LoraModel`). mypy
+    # cannot follow that delegation, so the call would fail static analysis
+    # even with `peft_model: PeftModel = ...`. The hasattr() checks above are
+    # the runtime contract; `Any` tells mypy "trust the duck-typing here."
+
     # Check if model has PEFT wrapper
     if hasattr(model, "model") and hasattr(model.model, "merge_and_unload"):
         # GroundingDINOLoRA wraps PEFT model in self.model
         logger.info("Merging LoRA weights into base model...")
 
-        # Get the PEFT model
-        peft_model = model.model
-
-        # Merge and unload - this modifies in place and returns unwrapped model
+        peft_model: Any = model.model
         merged_model = peft_model.merge_and_unload()
 
         logger.info("LoRA weights merged successfully")
@@ -51,7 +54,8 @@ def merge_lora_weights(model: nn.Module) -> nn.Module:
     if hasattr(model, "merge_and_unload"):
         # Direct PEFT model
         logger.info("Merging LoRA weights (direct PEFT model)...")
-        merged_model = model.merge_and_unload()
+        direct_peft: Any = model
+        merged_model = direct_peft.merge_and_unload()
         logger.info("LoRA weights merged successfully")
         return merged_model
 
@@ -90,8 +94,12 @@ def save_merged_model(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build checkpoint
-    checkpoint = {
+    # Build checkpoint. Explicit `Dict[str, Any]` annotation prevents mypy
+    # from inferring the dict literal's value type as `Collection[Any]` (the
+    # common ancestor of OrderedDict[str, Tensor], list, and dict). With the
+    # widened inference, `checkpoint["metadata"].update(extra_metadata)` would
+    # fail with `"Collection[Any]" has no attribute "update"`.
+    checkpoint: Dict[str, Any] = {
         "model_state_dict": model.state_dict(),
         "class_names": class_names or [],
         "metadata": {

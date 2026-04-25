@@ -202,55 +202,6 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 ---
 
-### 13. Type-annotate `ml_engine/export/merger.py` — properly fix mypy errors instead of `# type: ignore`
-
-**What:** Resolve the three mypy errors in `ml_engine/export/merger.py` at the source (proper type annotations) rather than via `# type: ignore[operator]` band-aids:
-
-- Line 46: `peft_model.merge_and_unload()` — `"Tensor" not callable [operator]`. mypy infers `peft_model` (= `model.model`) as `Tensor` because `nn.Module.__getattr__` returns `Tensor | Module`, so the `.merge_and_unload()` call looks like calling a tensor.
-- Line 54: same root cause on the direct PEFT branch (`model.merge_and_unload()`).
-- Line 105: `checkpoint['metadata'].update(extra_metadata)` — `"Collection[Any]" has no attribute "update" [attr-defined]`. mypy widens the dict literal's value type to `Collection[Any]` (the common ancestor of `OrderedDict[str, Tensor]`, `list`, `dict`).
-
-**Why:** These errors fire on every commit that touches `ml_engine/export/packager.py` (which imports merger.py) because mypy follows the import graph. Without a real fix, every neighboring change either has to skip the mypy hook or sprinkle `# type: ignore` comments — both are noise. Cleaner to fix once.
-
-The pre-commit hook on the `test/p2-roster-export-distillation` branch (PR for TODOS item 12, export+distillation portion) was skipped via `SKIP=mypy` for exactly this reason. That bypass should not become a habit.
-
-**Pros:**
-- Restores mypy as a real lint gate for `ml_engine/export/`
-- Removes the "skip-mypy" precedent before it spreads to other modules
-- Forces clarity on the duck-typed PEFT shape that the merger relies on
-
-**Cons:**
-- Requires a `Protocol` definition for the PEFT-shape callable (`MergeAndUnloadable`) plus an explicit `cast(...)` or `assert hasattr(...)` to teach mypy the runtime check is sound
-- Annotating `checkpoint` as `Dict[str, Any]` is the easy half; the duck-typed PEFT bit needs the Protocol
-- ~30-60 min of mypy-aware refactoring
-
-**Context:** Surfaced when TODO #12's export tests landed and pre-commit's mypy hook flagged these on first commit touching `packager.py`. The errors are pre-existing baseline (predate ci-and-tests), but became an active blocker once pre-commit started running. Files in scope: `ml_engine/export/merger.py` only.
-
-Recommended approach (sketch):
-
-```python
-from typing import Any, Protocol, runtime_checkable, Dict, cast
-
-@runtime_checkable
-class _PeftMergeable(Protocol):
-    def merge_and_unload(self) -> nn.Module: ...
-
-def merge_lora_weights(model: nn.Module) -> nn.Module:
-    nested = getattr(model, "model", None)
-    if isinstance(nested, _PeftMergeable):
-        return nested.merge_and_unload()
-    if isinstance(model, _PeftMergeable):
-        return model.merge_and_unload()
-    logger.warning(...)
-    return model
-```
-
-For the checkpoint dict: `checkpoint: Dict[str, Any] = {...}` — explicit annotation tells mypy not to widen.
-
-**Depends on / blocked by:** None. Standalone cleanup.
-
----
-
 ## Completed
 
 Historical record of items that have shipped. Kept rather than deleted so external
@@ -289,3 +240,39 @@ because its body uses no instance state — `self` is only there because it's
 an instance method. Avoids constructing a full augmentation pipeline for
 every test. Fast (~8s cold for all 44 tests), isolated from albumentations
 state.
+
+### 13. Type-annotate `ml_engine/export/merger.py` ✅
+
+**Completed:** 2026-04-25 on `chore/mypy-merger-hygiene`, stacked on `ci/gate-ruff-checks`.
+
+**What shipped:** Three pre-existing mypy errors in `ml_engine/export/merger.py`
+fixed without `# type: ignore` band-aids:
+- Lines 46 + 54: `peft_model.merge_and_unload()` was flagged `"Tensor" not callable`
+  because `nn.Module.__getattr__` is typed `Tensor | Module` and mypy can't see
+  through PEFT's runtime delegation. Fix: rebind via `peft_model: Any = model.model`
+  (and `direct_peft: Any = model` on the direct branch) — local `Any` annotation
+  signals "trust the duck-typed runtime contract here, mypy can't help."
+- Line 105: `checkpoint["metadata"].update(extra_metadata)` was flagged because
+  mypy widened the dict literal to `Collection[Any]`. Fix: explicit
+  `checkpoint: Dict[str, Any] = {...}` annotation prevents the inference widening.
+
+**Why `Any` and NOT a Protocol:** the original sketch in this TODO proposed a
+`@runtime_checkable Protocol`. Investigation showed PEFT ships `py.typed` but
+`PeftModel.merge_and_unload` is exposed via `__getattr__` delegation to
+`self.base_model` (a `LoraModel`). mypy fundamentally cannot follow `__getattr__`
+for arbitrary attribute names — so even `from peft import PeftModel` and using
+`isinstance(x, PeftModel)` would NOT have helped. The Protocol approach would
+have worked but added 15 lines of new abstraction for a 3-line type fix. `Any`
+is honest about what's actually true: mypy can't help here, the runtime
+hasattr() checks ARE the contract.
+
+**The SKIP=mypy precedent:** This TODO existed because `SKIP=mypy git commit`
+became habitual across 5 PRs. With merger.py now mypy-clean, the bypass should
+no longer be needed for ml_engine/export/. (Other dirs still have baseline mypy
+errors covered by item 6 — broader cleanup.)
+
+**Design notes worth remembering:** before assuming a 3rd-party library's typing
+will solve a static-checking problem, verify it's not using `__getattr__`-based
+delegation. Many ML libraries (PEFT, transformers, accelerate) lean on dynamic
+composition and have similar gaps. `Any` at the boundary is a legitimate fix
+when the dynamic surface can't be statically modeled.
