@@ -7,32 +7,32 @@ Provides:
 
 Usage:
     from core.logging_formatters import TextFormatter, JSONFormatter
-    
+
     handler.setFormatter(TextFormatter())
     # or
     handler.setFormatter(JSONFormatter())
 """
 
 import json
-import sys
 import logging
+import sys
 import traceback
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-from core.constants import LOG_FORMAT_STRING, DATE_FORMAT_STRING
+from core.constants import DATE_FORMAT_STRING, LOG_FORMAT_STRING
 
 
 class TextFormatter(logging.Formatter):
     """
     Standard text formatter with consistent styling.
-    
+
     Format: [timestamp] [name] [level] message
-    
+
     Example output:
         [2025-01-06 14:30:22] [ml_engine.training] [INFO] Training started
         [2025-01-06 14:30:23] [ml_engine.training] [ERROR] Failed to load model
-    
+
     Args:
         fmt: Optional custom format string
         datefmt: Optional custom date format
@@ -41,11 +41,7 @@ class TextFormatter(logging.Formatter):
     DEFAULT_FORMAT = LOG_FORMAT_STRING
     DEFAULT_DATE_FORMAT = DATE_FORMAT_STRING
 
-    def __init__(
-        self,
-        fmt: Optional[str] = None,
-        datefmt: Optional[str] = None
-    ):
+    def __init__(self, fmt: Optional[str] = None, datefmt: Optional[str] = None):
         fmt = fmt or self.DEFAULT_FORMAT
         datefmt = datefmt or self.DEFAULT_DATE_FORMAT
         super().__init__(fmt=fmt, datefmt=datefmt)
@@ -54,13 +50,13 @@ class TextFormatter(logging.Formatter):
 class JSONFormatter(logging.Formatter):
     """
     Structured JSON formatter for production log aggregation.
-    
+
     Outputs each log record as a single JSON line, suitable for:
     - ELK Stack (Elasticsearch, Logstash, Kibana)
     - AWS CloudWatch
     - Grafana Loki
     - Google Cloud Logging
-    
+
     Output fields:
         - timestamp: ISO 8601 format
         - level: Log level name (INFO, ERROR, etc.)
@@ -71,11 +67,11 @@ class JSONFormatter(logging.Formatter):
         - line: Source line number
         - exception: Exception info (if present)
         - ... any extra fields passed to constructor
-    
+
     Example output:
-        {"timestamp": "2025-01-06T14:30:22.123456", "level": "INFO", 
+        {"timestamp": "2025-01-06T14:30:22.123456", "level": "INFO",
          "logger": "ml_engine.training", "message": "Training started", ...}
-    
+
     Args:
         extra_fields: Optional dict of extra fields to include in every log
     """
@@ -104,11 +100,28 @@ class JSONFormatter(logging.Formatter):
         if hasattr(record, "__dict__"):
             # Standard fields to exclude
             standard_fields = {
-                "name", "msg", "args", "created", "filename", "funcName",
-                "levelname", "levelno", "lineno", "module", "msecs",
-                "pathname", "process", "processName", "relativeCreated",
-                "stack_info", "exc_info", "exc_text", "thread", "threadName",
-                "message", "asctime"
+                "name",
+                "msg",
+                "args",
+                "created",
+                "filename",
+                "funcName",
+                "levelname",
+                "levelno",
+                "lineno",
+                "module",
+                "msecs",
+                "pathname",
+                "process",
+                "processName",
+                "relativeCreated",
+                "stack_info",
+                "exc_info",
+                "exc_text",
+                "thread",
+                "threadName",
+                "message",
+                "asctime",
             }
             for key, value in record.__dict__.items():
                 if key not in standard_fields and not key.startswith("_"):
@@ -124,7 +137,7 @@ class JSONFormatter(logging.Formatter):
             log_data["exception"] = {
                 "type": record.exc_info[0].__name__ if record.exc_info[0] else None,
                 "message": str(record.exc_info[1]) if record.exc_info[1] else None,
-                "traceback": traceback.format_exception(*record.exc_info)
+                "traceback": traceback.format_exception(*record.exc_info),
             }
 
         # Serialize to JSON (single line, no pretty printing)
@@ -134,25 +147,25 @@ class JSONFormatter(logging.Formatter):
 class ColoredTextFormatter(TextFormatter):
     """
     Text formatter with ANSI color codes for terminal output.
-    
+
     Colors:
         - DEBUG: Cyan
         - INFO: Green
         - WARNING: Yellow
         - ERROR: Red
         - CRITICAL: Red (bold)
-    
+
     Note: Colors are only applied if output is a terminal (TTY).
     Falls back to plain TextFormatter if not a TTY.
     """
 
     # ANSI color codes
     COLORS = {
-        "DEBUG": "\033[36m",     # Cyan
-        "INFO": "\033[32m",      # Green
-        "WARNING": "\033[33m",   # Yellow
-        "ERROR": "\033[31m",     # Red
-        "CRITICAL": "\033[1;31m" # Bold Red
+        "DEBUG": "\033[36m",  # Cyan
+        "INFO": "\033[32m",  # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",  # Red
+        "CRITICAL": "\033[1;31m",  # Bold Red
     }
     RESET = "\033[0m"
 
@@ -161,7 +174,7 @@ class ColoredTextFormatter(TextFormatter):
         formatted = super().format(record)
 
         # Only colorize if we're writing to a terminal (TTY)
-        if hasattr(sys.stdout, 'isatty') and sys.stdout.isatty():
+        if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
             color = self.COLORS.get(record.levelname, "")
             if color:
                 return f"{color}{formatted}{self.RESET}"
