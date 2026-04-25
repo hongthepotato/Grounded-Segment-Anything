@@ -94,19 +94,70 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 ---
 
-### 6. Typed mypy overrides — remove `--ignore-missing-imports`
+### 6. mypy baseline cleanup — drive 416 errors to zero, then flip the gate
 
-**What:** Add `[[tool.mypy.overrides]]` blocks in `pyproject.toml` for untyped third-party deps (`groundingdino.*`, `segment_anything.*`, `peft.*`, `transformers.*`). Remove the workflow-level `--ignore-missing-imports` flag and `continue-on-error: true` from the mypy step.
+**Status:** Baseline measured 2026-04-25 — `uv run --no-sync mypy core ml_engine api --ignore-missing-imports` reports **410 errors in 50 files** (after Step 1 installed `types-PyYAML` and cleared 6 `yaml`-import errors). `continue-on-error: true` on the mypy step in `ci.yml` keeps CI passing while this baseline exists.
 
-**Why:** Current CI runs mypy lax during the 2-week ramp-up to avoid blocking on volume of existing errors. After ramp, tighten so mypy actually gates the build.
+**Step 1 outcome (shipped):** Installed `types-PyYAML` only. Surveyed our other third-party imports (PIL, tqdm, requests) — type stubs exist for those too, but installing them would NOT drop the count today: `--ignore-missing-imports` already suppresses errors for libraries without inline type info, and adding their stubs would START flagging code that uses them. That's a NET INCREASE in the visible baseline, not a decrease — wrong direction for a "quick win" PR. Those stubs should ride with the per-directory cleanup PRs (Step 2) when the related code is being touched anyway.
 
-**Pros:** Real type checking. Catches Optional[X] vs X bugs, wrong-shape dict returns, return-type drift. High value in ML code where tensor shapes rarely match docstrings.
+**Lesson learned:** the original Step-1 estimate of "100-150 errors from missing stubs" was wildly optimistic. Reality: 6. The `--ignore-missing-imports` flag turns out to be a sledgehammer that hides most stub gaps, so removing it would expose them — but removing it is exactly what Step 3 does. So the order doesn't matter much; what matters is committing to the multi-week cleanup or pivoting to alternative 3 (strict-on-critical-only).
 
-**Cons:** Will surface existing type violations that need cleanup. Unclear volume until lax mypy has run for ~2 weeks and the error count is measurable.
+**What:** Drive the mypy baseline to zero, then remove `continue-on-error: true` from the mypy step in `ci.yml` (mirror what item 9 + the gate-flip PR did for ruff). End state: mypy actually gates merges.
 
-**Context:** Workflow env currently sets `--ignore-missing-imports` globally. Replace with narrow per-package overrides. Start with untyped-but-stable packages (groundingdino, segment_anything); leave actively-upgrading packages (transformers) behind `ignore_missing_imports = true` for longer.
+**Why this is NOT a single PR:** unlike the ruff baseline (mostly mechanical whitespace + import order, ~90% auto-fixable), mypy errors require per-case judgment. Each one is a real type ambiguity:
 
-**Depends on / blocked by:** 2 weeks of running CI with lax mypy to establish baseline error count.
+| Error class | Example | Effort per fix |
+|---|---|---|
+| Missing 3rd-party stubs | `Library stubs not installed for "yaml"` | 1 line per dep — install `types-PyYAML` etc. |
+| Missing variable annotations | `Need type annotation for "annotation_counts"` | 1 line per variable |
+| `Optional` mishandling | `Argument 1 to "Path" has incompatible type "str \| None"` | Per-case judgment (assert non-None? refactor signature? change caller?) |
+| Variable shadowing | `path: str = ...; path = Path(path)` rebinds incompatibly | Rename or refactor |
+| Subclass narrowing | `formatter: ColoredTextFormatter = TextFormatter(...)` | Often signals real type design issues |
+| Library `__getattr__` (PEFT pattern) | What item 13 fixed in `merger.py` | Case-by-case `Any` cast |
+
+**Honest scope estimate (~2-3 weeks of focused work):**
+- ~100-150 errors are quick wins (install stubs, add obvious annotations) — ~1 hour
+- ~150-200 are mechanical per-case (variable shadowing, simple Optional, missing return types) — half-day per directory
+- ~50-100 require real semantic work (Optional refactor, type-narrowing assertions) — case-by-case
+
+**Recommended sequencing (mirrors item 9's per-directory rollout, ~6 PRs total):**
+
+```
+Step 1 (1 PR, ~1 hr):
+  deps: install missing type stubs (types-PyYAML, types-Pillow,
+  types-requests, pandas-stubs, etc.) into the lint extra.
+  Drops baseline by ~25-100 errors immediately. Zero runtime risk.
+
+Step 2 (4 PRs, ~half-day each):
+  mypy-baseline-core/        (~10 errors)
+  mypy-baseline-api/         (~20-30 estimated)
+  mypy-baseline-augmentation/ (?)
+  mypy-baseline-ml-engine/   (bulk; may need sub-PR splits like ruff did)
+
+Step 3 (1 PR, 1 line):
+  ci(mypy): flip continue-on-error → false in ci.yml's mypy step
+  (mirrors what ci/gate-ruff-checks did for ruff)
+```
+
+**Three pragmatic alternatives if 2-3 weeks doesn't justify the ROI:**
+
+1. **Full strict (the path above)** — multi-week effort, ongoing per-PR cost to maintain types. Worth it if type bugs have been biting in production.
+2. **Pragmatic non-gating** — keep mypy advisory forever, fix specific high-value modules opportunistically. The status quo. Costs nothing now; defers all benefits.
+3. **Strict only on critical modules** — flip mypy to gating ONLY for `core/` (config, logging) and `api/schemas.py` (request/response wire format). Keep `ml_engine/` and others advisory. **~1 PR of work**, captures most of the bug-prevention value with minimal cleanup overhead. Rationale: type discipline matters most where (a) the wire format is defined and (b) other modules import from. ML training internals tend to fail "math is wrong" not "dict had unexpected key" — mypy doesn't help with the former anyway.
+
+**Pros (of full strict):** Real type checking. Catches Optional[X] vs X bugs, wrong-shape dict returns, return-type drift. High value in ML code where tensor shapes rarely match docstrings.
+
+**Cons:** 416 existing errors require per-file judgment work. Ongoing per-PR cost to maintain types. ML libraries (PEFT, transformers, accelerate) use heavy `__getattr__` delegation that mypy can't model — `Any` casts will be needed at boundaries even after cleanup (item 13 documented this for PEFT).
+
+**Recommended next action: DECIDE.** Step 1 is done — the post-stubs baseline is 410 errors in 50 files, only marginally better than 416/53. The "missing stubs" surface turned out to be tiny. Now choose:
+
+- **Path A (full strict)** — commit to ~2-3 weeks of per-directory cleanup PRs (Step 2) followed by the gate flip (Step 3). Worth it if type bugs have been biting in production.
+- **Path B (status quo)** — leave mypy advisory forever; fix high-value modules opportunistically. Costs nothing now; defers all benefits.
+- **Path C (strict-on-critical-only — recommended)** — flip mypy to gating ONLY for `core/` (config, logging) and `api/schemas.py` (request/response wire format). Keep `ml_engine/` and others advisory. ~1 PR of work; captures most of the bug-prevention value with minimal cleanup overhead.
+
+Step 2 ought to wait until this decision is made — kicking off per-directory cleanup PRs without knowing the end state is wasted work.
+
+**Depends on / blocked by:** the A/B/C decision above. None of the steps below it block each other.
 
 ---
 
@@ -199,6 +250,38 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 **Context:** Deferred from the original ci-and-tests PR (~3400 lines new) to keep that PR shippable. PR is CI-green at 52% combined coverage, merged with COVERAGE_MIN ratchet seeded at 50. Each new test file from this roster bumps real coverage and unlocks a COVERAGE_MIN bump in the same PR.
 
 **Depends on / blocked by:** `ci-and-tests` PR merging (for the test infrastructure and markers). No other blockers. Recommended sequencing: look at `tests/unit/augmentation/test_augmentation_factory.py` (shipped in item 10) for the pytest-parametrize + class-grouping pattern when adding the augmentation/ tests in this item.
+
+---
+
+### 14. `tests/test_sam_lora.py` — 13 pre-existing failures + a CI scope gap
+
+**What:** Investigate and resolve 13 pre-existing test failures in `tests/test_sam_lora.py`. Discovered 2026-04-25 while running the full `pytest tests` (vs the narrower `pytest tests/unit tests/integration tests/contract` that CI runs). Verified pre-existing via `git stash` against `agentic`'s baseline — NOT introduced by any PR in this work stream.
+
+**Sample failures (concrete signal for the investigator):**
+- `TestSAMHQLoRAConfig::test_lora_target_modules_format` — asserts `'q_proj' in target_modules` but actual `target_modules` is `['qkv', 'proj']`. Either the target-module naming changed (and the test wasn't updated), OR there's a real regression in `ml_engine/models/teacher/sam_lora.py`.
+- `TestSAMHQLoRAForwardPass::test_forward_returns_expected_keys` — expected output shape `(2, 3, 256, 256)`, got `(2, 3, 1024, 1024)`. Indicates either the SAM forward pass was rewritten to return native 1024-resolution masks (without updating the test) OR the test was wrong from the start.
+
+**Why this needs attention:**
+1. **Real bug vs stale test** — both interpretations have evidence. Either way, the truth needs to be established. If real bug: `sam_lora.py` is silently broken in production. If stale test: confusing signal whenever someone runs the test file directly.
+2. **CI scope gap** — `tests/test_sam_lora.py` is a root-level test file (`tests/*.py`) that CI's `pytest tests/unit tests/integration tests/contract` never picks up. So these failures have been invisible to CI for as long as they've existed. CI was designed to skip root-level tests intentionally (item 11 of the ci-and-tests design doc lists root-level files as "audit for staleness — `test_data_manager.py`, `test_sam_lora.py`, `test_auto_labeler.py`"), but the audit never finished. This is the unfinished half of that audit.
+
+**Pros:**
+- Resolves a real signal/noise problem (right now nobody knows if these are bugs)
+- Closes the CI scope gap — either delete dead tests or move them under `tests/unit/` so CI runs them
+- May reveal an actual production bug in SAM-HQ LoRA wrapper
+
+**Cons:**
+- Investigation requires understanding SAM-HQ LoRA internals (target_modules, forward pass shape contract)
+- If the tests turn out to be stale, deletion + reasoning needs to be documented
+- If a real bug is found, the fix may be deeper than expected (LoRA adapter shape contract changes are usually invasive)
+
+**Context:** The 3 root-level tests in `tests/` are: `test_sam_lora.py`, `test_data_manager.py`, `test_auto_labeler.py`. The ci-and-tests design doc explicitly flagged these as "audit for staleness" but didn't follow through. Same investigation should cover all three. Suggested minimal path:
+
+1. Run each root-level test file with verbose pytest (`-v --tb=long`). Cluster failures.
+2. For each cluster, decide: real bug → file separately + fix; stale test → delete with one-line PR commit explaining why; outdated assumption → update the test.
+3. After per-file decisions: either move the file under `tests/unit/` (so CI catches future regressions) or delete it.
+
+**Depends on / blocked by:** None. Independent of in-flight work.
 
 ---
 
