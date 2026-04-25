@@ -76,23 +76,9 @@ Three related design gaps surfaced during the first `/plan → /approve` integra
 
 Six items deferred during the `/plan-eng-review` of the CI/test infrastructure PR. Filed 2026-04-23. All depend on the `ci-and-tests` branch merging first.
 
-### 4. Pre-commit hooks (ruff + mypy + pytest on staged files)
-
-**What:** Add `.pre-commit-config.yaml` wiring `ruff`, `ruff-format`, `mypy`, and `pytest` on staged files. Document `pre-commit install` in README onboarding.
-
-**Why:** Shift-left from CI to the developer's machine. Sub-second feedback on lint violations. Catches issues before PR is opened, saving CI minutes.
-
-**Pros:** Instant feedback loop. Zero CI cost. Reduces "forgot to run pytest" class of regressions even further.
-
-**Cons:** Adds `.pre-commit-config.yaml` maintenance. Onboarding requires `pre-commit install` step. Can slow down rebase-heavy workflows if hooks are slow.
-
-**Context:** Natural shift-left follow-up now that CI runs the same checks on every push. `ruff check .` and `uv run mypy core ml_engine api` are already the CI commands — pre-commit just runs them locally first.
-
-**Depends on / blocked by:** `ci-and-tests` PR merging (so pre-commit and CI run the same linters).
-
----
-
 ### 5. Dependabot config for Python + GitHub Actions updates
+
+**Status:** 🟡 PR open on `chore/dependabot` (2026-04-24). Scope expanded in-flight to include the Dockerfile `TORCH_CUDA_ARCH_LIST` broad-arch expansion — one coordinated PR covers both "stay current on deps" and "run on all NVIDIA generations."
 
 **What:** Add `.github/dependabot.yml` with weekly schedule for `pip` (uv ecosystem via pyproject.toml) and `github-actions` ecosystems.
 
@@ -172,22 +158,6 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 ---
 
-### 10. Error-path coverage for `augmentation_factory._validate_bboxes`
-
-**What:** Add a dedicated `tests/unit/augmentation/test_augmentation_factory.py` that parametrizes every error branch of the COCO-format validator: `None` is valid, `[]` is valid, `[[]]` raises, non-list raises, bbox with len != 4 raises, negative `w`/`h` raise, out-of-image `x`/`y` raise, `x + w > image_w` raises, `y + h > image_h` raises, string-integer coords accepted, string-float coords rejected, float coords rejected, non-int types rejected. Assert both the exception type (TypeError vs ValueError) and an error-message fragment.
-
-**Why:** The `/plan-eng-review` adversarial pass flagged that ~40 lines of new validation in `augmentation/augmentation_factory.py::_validate_bboxes` (the COCO-format rewrite) have zero error-path coverage. `tests/unit/test_augmentation.py::test_pipeline_application` only exercises the happy path with valid COCO bboxes. Any regression in the new validator branches goes undetected until a real COCO dataset hits it in a training run.
-
-**Pros:** Closes the error-path gap for a validator that the CI/test PR explicitly re-implemented. Each branch becomes regression-protected.
-
-**Cons:** None — this is Priority-2 unit test work per the design doc's New Unit Tests roster (item #9: "augmentation/test_augmentation_factory.py — factory dispatch + parameter validation").
-
-**Context:** The Priority-2 unit test roster in the ci-and-tests PR explicitly named this file. Deferred to this TODO because the PR is already at ~3400 lines new.
-
-**Depends on / blocked by:** `ci-and-tests` merging. No other blockers.
-
----
-
 ### 11. Inference module integration tests (detectors, segmenters, auto_labeler, visualizer)
 
 **What:** Add integration tests under `tests/integration/` against tiny real SAM/GroundingDINO weights for `ml_engine/inference/detectors/*`, `ml_engine/inference/segmenters/*`, `ml_engine/inference/auto_labeler.py`, `ml_engine/inference/visualizer.py`. Use a minimal checkpoint (e.g., `SAM-small` variant or custom-trained tiny weights) hosted as a CI fixture.
@@ -215,7 +185,7 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 - `tests/unit/augmentation/test_characteristic_translator.py` — covers `augmentation/characteristic_translator.py` (~1362 lines — biggest target; triage to highest-value code paths first, don't boil this sub-ocean in one PR). Translation correctness between characteristic spec and concrete transform params.
 - `tests/unit/api/test_schemas.py` — covers `api/schemas.py` (~382 lines). API pydantic schemas: request/response envelope structure, required-field enforcement, validation-error shape.
 
-**Why:** The design doc (`~/.gstack/projects/hongthepotato-Grounded-Segment-Anything/shen_h-agentic-design-20260422-223526.md` lines 204-212) explicitly listed these as "include if time permits, follow-up PR otherwise." They were deferred, and without a tracking entry the promise was about to fall off the radar. Captured here so the bookkeeping survives the merge. TODO #10 already captures the seventh P2 file (`test_augmentation_factory.py`) with extra error-path detail — don't duplicate; do the two together if scheduling side-by-side makes sense.
+**Why:** The design doc (`~/.gstack/projects/hongthepotato-Grounded-Segment-Anything/shen_h-agentic-design-20260422-223526.md` lines 204-212) explicitly listed these as "include if time permits, follow-up PR otherwise." They were deferred, and without a tracking entry the promise was about to fall off the radar. Captured here so the bookkeeping survives the merge. The seventh P2 file (`test_augmentation_factory.py`) was covered by item 10 which has now shipped (see Completed section below).
 
 **Pros:**
 - Raises unit coverage above the 52% baseline the ratchet starts at, giving real headroom toward the 70% design target.
@@ -228,4 +198,45 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 **Context:** Deferred from the original ci-and-tests PR (~3400 lines new) to keep that PR shippable. PR is CI-green at 52% combined coverage, merged with COVERAGE_MIN ratchet seeded at 50. Each new test file from this roster bumps real coverage and unlocks a COVERAGE_MIN bump in the same PR.
 
-**Depends on / blocked by:** `ci-and-tests` PR merging (for the test infrastructure and markers). No other blockers. Recommended sequencing: pair with TODO #10 (augmentation_factory error-path tests) if attacking the augmentation/ directory, since both touch related code.
+**Depends on / blocked by:** `ci-and-tests` PR merging (for the test infrastructure and markers). No other blockers. Recommended sequencing: look at `tests/unit/augmentation/test_augmentation_factory.py` (shipped in item 10) for the pytest-parametrize + class-grouping pattern when adding the augmentation/ tests in this item.
+
+---
+
+## Completed
+
+Historical record of items that have shipped. Kept rather than deleted so external
+references (commit messages, PR descriptions mentioning "item N") resolve.
+
+### 4. Pre-commit hooks ✅
+
+**Completed:** 2026-04-24 via PR #26 merged into `agentic`.
+
+**What shipped:** `.pre-commit-config.yaml` with file-hygiene hooks (trailing
+whitespace, EOF newline, YAML/TOML validity, large-file cap, merge conflict
+markers, private-key detection, debug-statements, Python AST validity) plus
+`ruff check`, `ruff format --check`, and `mypy` via `uv run --no-sync` so the
+hook binaries match CI exactly. Added `pre-commit>=3.6.0` to the `dev` extra.
+Onboarding: `uv sync --extra dev && uv run pre-commit install`.
+
+**Design notes worth remembering:** `--fix` deliberately NOT enabled for ruff
+because the ~3500-finding baseline would produce a destructive first-run diff.
+Per-file cleanup happens naturally as pre-commit flags new violations when
+you touch a file — see item 9.
+
+### 10. Error-path coverage for `augmentation_factory._validate_bboxes` ✅
+
+**Completed:** 2026-04-24 in the same PR as this Completed-section addition.
+
+**What shipped:** `tests/unit/augmentation/test_augmentation_factory.py` — 44
+parametrized tests across 7 test classes, one per error class:
+`TestValidInputs` (5), `TestInvalidContainer` (5), `TestInvalidBboxElement`
+(8), `TestInvalidCoordinateTypes` (8), `TestInvalidDimensions` (6),
+`TestOutOfBounds` (8), `TestErrorIndexing` (1). Every branch of the COCO
+validator exits under test: type mismatches raise `TypeError`, value/bounds
+mismatches raise `ValueError`, and the reported bbox index is 1-indexed.
+
+**Design notes worth remembering:** validator is called with `self=None`
+because its body uses no instance state — `self` is only there because it's
+an instance method. Avoids constructing a full augmentation pipeline for
+every test. Fast (~8s cold for all 44 tests), isolated from albumentations
+state.
