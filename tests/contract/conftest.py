@@ -95,7 +95,9 @@ def synthetic_targets() -> torch.Tensor:
 
 
 @pytest.fixture
-def compute_loss_fn(synthetic_batch: torch.Tensor, synthetic_targets: torch.Tensor) -> Callable[[nn.Module], Dict[str, torch.Tensor]]:
+def compute_loss_fn(
+    synthetic_batch: torch.Tensor, synthetic_targets: torch.Tensor
+) -> Callable[[nn.Module], Dict[str, torch.Tensor]]:
     """Returns a function that runs model(batch) and computes MSE to targets."""
 
     def _compute(model: nn.Module) -> Dict[str, torch.Tensor]:

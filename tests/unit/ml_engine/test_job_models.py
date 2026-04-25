@@ -20,13 +20,14 @@ from ml_engine.jobs.models import (
     WorkerInfo,
 )
 
-
 # ---------------------------------------------------------------------------
 # JobProgress
 # ---------------------------------------------------------------------------
 
+
 class TestJobProgress:
     r"""Tests for JobProgress properties and serialization."""
+
     def test_defaults(self):
         r"""Test that default JobProgress has zero epochs and empty metrics"""
         p = JobProgress()
@@ -84,13 +85,14 @@ class TestJobProgress:
         assert p.metrics == {}
 
 
-
 # ---------------------------------------------------------------------------
 # JobOutcome
 # ---------------------------------------------------------------------------
 
+
 class TestJobOutcome:
     r"""Tests for JobOutcome properties and serialization."""
+
     def test_defaults(self):
         r"""Test that default JobOutcome has status 'completed' and empty metrics."""
         o = JobOutcome()
@@ -147,10 +149,12 @@ class TestJobOutcome:
 # Job -- construction
 # ---------------------------------------------------------------------------
 
+
 class TestJobConstruction:
     r"""Tests for Job construction and properties."""
+
     def test_defaults(self):
-        r"""Test that default Job has PENDING status, TEACHER_TRAINING type, empty config, and run_id defaults to id."""
+        r"""Default Job: PENDING status, TEACHER_TRAINING type, empty config, run_id == id."""
         j = Job()
         assert j.status == JobStatus.PENDING
         assert j.type == JobType.TEACHER_TRAINING.value
@@ -221,8 +225,10 @@ class TestJobConstruction:
 # Job -- to_dict / from_dict roundtrip
 # ---------------------------------------------------------------------------
 
+
 class TestJobSerialization:
     r"""Tests for Job to_dict and from_dict serialization."""
+
     def test_to_dict_roundtrip(self):
         r"""Test that to_dict and from_dict preserve all fields."""
         j = Job(
@@ -248,8 +254,9 @@ class TestJobSerialization:
     def test_from_dict_bytes_keys(self):
         r"""Simulate Redis returning bytes."""
         j = Job(run_id="r1", config={"x": 1})
-        raw = {k.encode(): v.encode() if isinstance(v, str) else str(v).encode()
-               for k, v in j.to_dict().items()}
+        raw = {
+            k.encode(): v.encode() if isinstance(v, str) else str(v).encode() for k, v in j.to_dict().items()
+        }
         j2 = Job.from_dict(raw)
         assert j2.run_id == "r1"
 
@@ -303,8 +310,10 @@ class TestJobSerialization:
 # WorkerInfo
 # ---------------------------------------------------------------------------
 
+
 class TestWorkerInfo:
     r""""""
+
     def test_defaults(self):
         w = WorkerInfo(id="worker-1")
         assert w.gpu_id == 0
@@ -322,8 +331,9 @@ class TestWorkerInfo:
 
     def test_from_dict_bytes(self):
         w = WorkerInfo(id="w", gpu_id=1)
-        raw = {k.encode(): v.encode() if isinstance(v, str) else str(v).encode()
-               for k, v in w.to_dict().items()}
+        raw = {
+            k.encode(): v.encode() if isinstance(v, str) else str(v).encode() for k, v in w.to_dict().items()
+        }
         w2 = WorkerInfo.from_dict(raw)
         assert w2.gpu_id == 1
 

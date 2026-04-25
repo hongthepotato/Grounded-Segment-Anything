@@ -68,14 +68,20 @@ jobs:
       # install groundingdino, fails the metadata build (groundingdino's
       # setup.py `import torch` before torch is installed). --no-sync
       # trusts the environment the install step produced.
+      # Ruff is now GATING — the previous baseline cleanup PRs (TODOS #9)
+      # cleared the entire backlog (3593 → 0 across maintained code) and the
+      # `extend-exclude` block in pyproject.toml scopes lint to code we
+      # actively own. Any new violation fails CI; ruff stays useful.
       - name: ruff check
         run: uv run --no-sync ruff check .
-        continue-on-error: true
 
       - name: ruff format check
         run: uv run --no-sync ruff format --check .
-        continue-on-error: true
 
+      # mypy stays advisory until TODOS #6 (typed overrides) and #13
+      # (mypy hygiene in ml_engine/export/merger.py) clear the baseline.
+      # Flipping this to gating before then would block every PR on
+      # pre-existing type errors that aren't the PR's concern.
       - name: mypy
         run: uv run --no-sync mypy core ml_engine api --ignore-missing-imports
         continue-on-error: true

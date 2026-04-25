@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import multiprocessing as mp
-import sys
 from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
@@ -28,7 +27,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ml_engine.jobs.handlers.experiment_loop import ExperimentLoopHandler
-
 
 # ---------------------------------------------------------------------------
 # Minimal YAML defaults returned by load_config mock
@@ -104,9 +102,7 @@ def _run_handler(
             MockLoop.return_value = mock_loop_instance
 
             if write_best_config:
-                (Path(output_dir) / "best_config.yaml").write_text(
-                    "epochs: 5\n", encoding="utf-8"
-                )
+                (Path(output_dir) / "best_config.yaml").write_text("epochs: 5\n", encoding="utf-8")
 
             handler = ExperimentLoopHandler()
             handler.run(
@@ -120,6 +116,7 @@ def _run_handler(
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def job_config():
@@ -137,6 +134,7 @@ def output_dir(tmp_path):
 # ---------------------------------------------------------------------------
 # outcome.json shape
 # ---------------------------------------------------------------------------
+
 
 class TestOutcomeJson:
     def test_outcome_written(self, job_config, output_dir):
@@ -195,6 +193,7 @@ class TestOutcomeJson:
 # Artifacts
 # ---------------------------------------------------------------------------
 
+
 class TestArtifacts:
     def test_best_config_in_artifacts_when_file_exists(self, job_config, output_dir):
         _run_handler(job_config, output_dir, write_best_config=True)
@@ -221,6 +220,7 @@ class TestArtifacts:
 # ---------------------------------------------------------------------------
 # Budget construction: YAML defaults + job_config overrides
 # ---------------------------------------------------------------------------
+
 
 class TestBudgetConstruction:
     def _run_with_capture(self, job_config: Dict[str, Any], output_dir: str) -> Any:
@@ -252,9 +252,7 @@ class TestBudgetConstruction:
         return captured.get("budget")
 
     def test_default_max_trials_from_yaml(self, output_dir):
-        budget = self._run_with_capture(
-            {"data_path": "/d", "image_paths": ["x.jpg"]}, output_dir
-        )
+        budget = self._run_with_capture({"data_path": "/d", "image_paths": ["x.jpg"]}, output_dir)
         assert budget.max_trials == 10
 
     def test_job_config_overrides_max_trials(self, output_dir):
@@ -267,23 +265,21 @@ class TestBudgetConstruction:
     def test_wall_time_int_cast(self, output_dir):
         """max_wall_time_seconds cast to int even if provided as string."""
         budget = self._run_with_capture(
-            {"data_path": "/d", "image_paths": ["x.jpg"],
-             "experiment": {"max_wall_time_seconds": "3600"}},
+            {"data_path": "/d", "image_paths": ["x.jpg"], "experiment": {"max_wall_time_seconds": "3600"}},
             output_dir,
         )
         assert budget.max_wall_time_seconds == 3600
         assert isinstance(budget.max_wall_time_seconds, int)
 
     def test_null_wall_time_stays_none(self, output_dir):
-        budget = self._run_with_capture(
-            {"data_path": "/d", "image_paths": ["x.jpg"]}, output_dir
-        )
+        budget = self._run_with_capture({"data_path": "/d", "image_paths": ["x.jpg"]}, output_dir)
         assert budget.max_wall_time_seconds is None
 
 
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
+
 
 class TestValidation:
     def _run_expect_raise(self, job_config: Dict[str, Any], output_dir: str, match: str) -> None:
@@ -304,9 +300,7 @@ class TestValidation:
                     )
 
     def test_missing_data_path_raises(self, output_dir):
-        self._run_expect_raise(
-            {"image_paths": ["x.jpg"]}, output_dir, "data_path required"
-        )
+        self._run_expect_raise({"image_paths": ["x.jpg"]}, output_dir, "data_path required")
 
     def test_missing_image_paths_raises(self, output_dir):
         self._run_expect_raise(

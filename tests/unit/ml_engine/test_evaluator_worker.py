@@ -18,9 +18,6 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from ml_engine.agent.memory import MemoryStore
-from ml_engine.agent.workers import EvaluatorWorker
-from tests.unit.ml_engine.conftest import read_stream_events
 from ml_engine.agent.contracts import (
     AcceptanceCriteria,
     BudgetSpec,
@@ -29,12 +26,15 @@ from ml_engine.agent.contracts import (
     PipelineContract,
     TargetSpec,
 )
+from ml_engine.agent.memory import MemoryStore
 from ml_engine.agent.state_machine import StateMachine
-
+from ml_engine.agent.workers import EvaluatorWorker
+from tests.unit.ml_engine.conftest import read_stream_events
 
 # ---------------------------------------------------------------------------
 # Fixtures (redis_async, redis_sync come from conftest and share FakeServer)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def run_id():
@@ -80,6 +80,7 @@ def read_gate_events(redis_sync, run_id: str) -> list:
 # _handle_evaluation -- outcome.json missing
 # ---------------------------------------------------------------------------
 
+
 class TestHandleEvaluationMissingOutcome:
     @pytest.mark.asyncio
     async def test_escalates_when_output_dir_missing(self, worker, redis_sync, run_id):
@@ -96,7 +97,9 @@ class TestHandleEvaluationMissingOutcome:
         assert "outcome.json not found" in gate_events[0]["reason"]
 
     @pytest.mark.asyncio
-    async def test_escalates_when_outcome_file_missing_but_dir_exists(self, worker, redis_sync, run_id, tmp_path):
+    async def test_escalates_when_outcome_file_missing_but_dir_exists(
+        self, worker, redis_sync, run_id, tmp_path
+    ):
         out_dir = tmp_path / "empty_output"
         out_dir.mkdir()
         event = {
@@ -113,6 +116,7 @@ class TestHandleEvaluationMissingOutcome:
 # ---------------------------------------------------------------------------
 # _handle_evaluation -- pass verdicts
 # ---------------------------------------------------------------------------
+
 
 class TestHandleEvaluationPass:
     @pytest.mark.asyncio
@@ -172,6 +176,7 @@ class TestHandleEvaluationPass:
 # _handle_evaluation -- retry / escalate
 # ---------------------------------------------------------------------------
 
+
 class TestHandleEvaluationRetry:
     @pytest.mark.asyncio
     async def test_retry_when_below_threshold(self, worker, redis_sync, run_id, tmp_path):
@@ -217,6 +222,7 @@ class TestHandleEvaluationRetry:
 # _handle_evaluation -- no contract (pre-approval)
 # ---------------------------------------------------------------------------
 
+
 class TestHandleEvaluationNoContract:
     @pytest.mark.asyncio
     async def test_defaults_to_pass_when_no_contract(self, redis_async, redis_sync, run_id, tmp_path):
@@ -239,6 +245,7 @@ class TestHandleEvaluationNoContract:
 # ---------------------------------------------------------------------------
 # _write_feedback_memory
 # ---------------------------------------------------------------------------
+
 
 class TestWriteFeedbackMemory:
     @pytest.mark.asyncio
@@ -302,6 +309,7 @@ class TestWriteFeedbackMemory:
         worker = EvaluatorWorker(redis_async, run_id + "-memfail")
 
         from unittest.mock import patch
+
         out_dir = make_outcome(tmp_path, {"mAP50": 0.7})
         event = {
             "type": "evaluation_requested",
@@ -322,6 +330,7 @@ class TestWriteFeedbackMemory:
 # set_contract()
 # ---------------------------------------------------------------------------
 
+
 class TestSetContract:
     @pytest.mark.asyncio
     async def test_set_contract_updates_contract(self, worker, contract):
@@ -340,6 +349,7 @@ class TestSetContract:
 # ---------------------------------------------------------------------------
 # Distillation gate path (mIoU metric)
 # ---------------------------------------------------------------------------
+
 
 class TestHandleEvaluationDistillation:
     @pytest.mark.asyncio
@@ -400,11 +410,10 @@ class TestHandleEvaluationDistillation:
 # Malformed outcome.json (JSON parse error)
 # ---------------------------------------------------------------------------
 
+
 class TestHandleEvaluationMalformedOutcome:
     @pytest.mark.asyncio
-    async def test_escalates_when_outcome_json_is_corrupt(
-        self, redis_async, redis_sync, run_id, tmp_path
-    ):
+    async def test_escalates_when_outcome_json_is_corrupt(self, redis_async, redis_sync, run_id, tmp_path):
         """
         Malformed JSON causes json.loads to raise inside _handle_evaluation.
         StreamConsumer._dispatch catches it, calls on_event_error, which

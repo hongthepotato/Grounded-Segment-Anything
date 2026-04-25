@@ -30,8 +30,10 @@ def clear_cache():
 # get_async_redis_client
 # ---------------------------------------------------------------------------
 
+
 class TestGetAsyncRedisClient:
     r""""""
+
     def test_same_url_returns_cached_instance(self):
         with patch.object(redis_clients._aredis.Redis, "from_url") as mock_from_url:
             mock_from_url.return_value = MagicMock(name="client-1")
@@ -77,6 +79,7 @@ class TestGetAsyncRedisClient:
 # ---------------------------------------------------------------------------
 # close_async_redis_client
 # ---------------------------------------------------------------------------
+
 
 class TestCloseAsyncRedisClient:
     @pytest.mark.asyncio

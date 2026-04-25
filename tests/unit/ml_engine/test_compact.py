@@ -6,15 +6,13 @@ compact_stage is pure -- no Redis, no I/O.
 
 from __future__ import annotations
 
-import pytest
-
-from ml_engine.agent.compact import compact_stage, _format_summary
+from ml_engine.agent.compact import _format_summary, compact_stage
 from ml_engine.agent.contracts import StageSummary
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def make_summary(**kwargs) -> StageSummary:
     defaults = dict(
@@ -38,8 +36,10 @@ def msg(role: str, content: str) -> dict:
 # _format_summary
 # ---------------------------------------------------------------------------
 
+
 class TestFormatSummary:
     r"""Tests for the _format_summary function which converts a StageSummary into a text block."""
+
     def test_includes_stage_name(self):
         r"""Stage name should be included in the summary text."""
         s = make_summary(stage="teacher_training")
@@ -99,9 +99,11 @@ class TestFormatSummary:
 # compact_stage
 # ---------------------------------------------------------------------------
 
+
 class TestCompactStage:
     r"""Tests for the compact_stage function which compacts a message
     list by replacing a stage's execution history with a summary."""
+
     def test_returns_list(self):
         r"""The result of compact_stage should be a list of messages."""
         messages = [
@@ -137,7 +139,7 @@ class TestCompactStage:
         assert "0.8800" in last["content"]
 
     def test_pre_stage_messages_preserved(self):
-        r"""Messages before stage_start_idx should be preserved in the result, while messages from the stage should be dropped."""
+        r"""Messages before stage_start_idx are preserved; messages from the stage are dropped."""
         pre = [msg("user", f"pre-context-{i}") for i in range(3)]
         stage_msgs = [
             msg("assistant", "dispatch_stage teacher_training"),
@@ -168,9 +170,9 @@ class TestCompactStage:
     def test_result_shorter_than_input(self):
         r"""Compaction must reduce message count when stage has many events."""
         messages = (
-            [msg("user", "contract_approved")] +
-            [msg("user", f"[EVENT] progress {i} teacher_training") for i in range(20)] +
-            [msg("user", "[EVENT] job_completed teacher_training")]
+            [msg("user", "contract_approved")]
+            + [msg("user", f"[EVENT] progress {i} teacher_training") for i in range(20)]
+            + [msg("user", "[EVENT] job_completed teacher_training")]
         )
         # stage starts at index 1 (first progress event)
         result = compact_stage(messages, make_summary(stage="teacher_training"), stage_start_idx=1)

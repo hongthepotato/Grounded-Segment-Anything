@@ -9,9 +9,9 @@ Tests:
 """
 
 import os
-import unittest
 import tempfile
-import torch
+import unittest
+
 import torch.nn as nn
 
 
@@ -22,12 +22,14 @@ class SimpleModel(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 64, 3)
         self.bn1 = nn.BatchNorm2d(64)
-        self.self_attn = nn.ModuleDict({
-            'q_proj': nn.Linear(64, 64),
-            'k_proj': nn.Linear(64, 64),
-            'v_proj': nn.Linear(64, 64),
-            'out_proj': nn.Linear(64, 64)
-        })
+        self.self_attn = nn.ModuleDict(
+            {
+                "q_proj": nn.Linear(64, 64),
+                "k_proj": nn.Linear(64, 64),
+                "v_proj": nn.Linear(64, 64),
+                "out_proj": nn.Linear(64, 64),
+            }
+        )
         self.fc = nn.Linear(64, 10)
 
     def forward(self, x):
@@ -44,10 +46,10 @@ class TestLoRAUtilities(unittest.TestCase):
         """Create a simple model for testing."""
         self.model = SimpleModel()
         self.lora_config = {
-            'r': 4,
-            'lora_alpha': 8,
-            'lora_dropout': 0.1,
-            'target_modules': ['q_proj', 'k_proj', 'v_proj']
+            "r": 4,
+            "lora_alpha": 8,
+            "lora_dropout": 0.1,
+            "target_modules": ["q_proj", "k_proj", "v_proj"],
         }
 
     def test_apply_lora(self):
@@ -74,9 +76,9 @@ class TestLoRAUtilities(unittest.TestCase):
         stats = verify_freezing(model_with_lora, strict=False)
 
         # Check that most parameters are frozen
-        self.assertGreater(stats['frozen_params'], 0)
-        self.assertGreater(stats['trainable_params'], 0)
-        self.assertLess(stats['trainable_ratio'], 50.0)  # Should be much less than 50%
+        self.assertGreater(stats["frozen_params"], 0)
+        self.assertGreater(stats["trainable_params"], 0)
+        self.assertLess(stats["trainable_ratio"], 50.0)  # Should be much less than 50%
 
     def test_verify_freezing_strict_raises_on_non_lora_trainable(self):
         """Test that strict mode raises when non-LoRA params are trainable."""
@@ -86,7 +88,7 @@ class TestLoRAUtilities(unittest.TestCase):
 
         # Manually make a non-LoRA parameter trainable to trigger strict error
         for name, param in model_with_lora.named_parameters():
-            if 'lora' not in name.lower():
+            if "lora" not in name.lower():
                 param.requires_grad = True
                 break
 
@@ -105,8 +107,7 @@ class TestLoRAUtilities(unittest.TestCase):
         for name, param in model_with_lora.named_parameters():
             if param.requires_grad:
                 # All trainable params should have 'lora' in name
-                self.assertIn('lora', name.lower(),
-                              f"Trainable parameter without 'lora' in name: {name}")
+                self.assertIn("lora", name.lower(), f"Trainable parameter without 'lora' in name: {name}")
 
     def test_freeze_module(self):
         """Test module freezing."""
@@ -142,12 +143,9 @@ class TestLoRAUtilities(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             save_lora_adapters(model_with_lora, tmpdir)
             saved_files = os.listdir(tmpdir)
-            self.assertTrue(
-                len(saved_files) > 0,
-                "save_lora_adapters wrote no files to output_dir"
-            )
+            self.assertTrue(len(saved_files) > 0, "save_lora_adapters wrote no files to output_dir")
             # PEFT always writes adapter_config.json
-            self.assertIn('adapter_config.json', saved_files)
+            self.assertIn("adapter_config.json", saved_files)
 
     def test_save_lora_adapters_non_peft_model_raises(self):
         """Test that saving a non-PEFT model raises ValueError."""
@@ -160,5 +158,5 @@ class TestLoRAUtilities(unittest.TestCase):
             self.assertIn("save_pretrained", str(ctx.exception))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

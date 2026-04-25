@@ -10,19 +10,18 @@ import pytest
 
 from ml_engine.experiment.config_guard import ConfigGuard, GuardResult
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 MUTABLE_KEYS = {
-    "batch_size":        {"type": "int",    "min": 1,    "max": 32},
-    "learning_rate":     {"type": "float",  "min": 1e-6, "max": 1e-2},
-    "optimizer":         {"type": "choice", "choices": ["AdamW", "SGD"]},
-    "use_amp":           {"type": "bool"},
-    "augmentations":     {"type": "list",   "items": ["flip", "rotate", "crop"]},
-    "lora_r":            {"type": "int",    "min": 2,    "max": 128},
-    "weight_decay":      {"type": "float",  "min": 0.0,  "max": 0.1},
+    "batch_size": {"type": "int", "min": 1, "max": 32},
+    "learning_rate": {"type": "float", "min": 1e-6, "max": 1e-2},
+    "optimizer": {"type": "choice", "choices": ["AdamW", "SGD"]},
+    "use_amp": {"type": "bool"},
+    "augmentations": {"type": "list", "items": ["flip", "rotate", "crop"]},
+    "lora_r": {"type": "int", "min": 2, "max": 128},
+    "weight_decay": {"type": "float", "min": 0.0, "max": 0.1},
 }
 
 IMMUTABLE_KEYS = [
@@ -41,8 +40,10 @@ def guard():
 # GuardResult helpers
 # ---------------------------------------------------------------------------
 
+
 class TestGuardResult:
     r"""Tests for GuardResult dataclass behavior."""
+
     def test_bool_true_when_passed(self):
         r"""GuardResult should evaluate to True if passed=True."""
         r = GuardResult(passed=True)
@@ -64,8 +65,10 @@ class TestGuardResult:
 # validate() -- passing cases
 # ---------------------------------------------------------------------------
 
+
 class TestValidatePassing:
     r"""Tests for ConfigGuard.validate() that should pass without errors."""
+
     def test_valid_int(self, guard):
         r"""Valid integer within range should pass."""
         result = guard.validate({"batch_size": 16})
@@ -132,6 +135,7 @@ class TestValidatePassing:
 # validate() -- int errors
 # ---------------------------------------------------------------------------
 
+
 class TestValidateIntErrors:
     def test_int_below_min(self, guard):
         r"""Integer below minimum boundary should fail with appropriate error message."""
@@ -161,8 +165,10 @@ class TestValidateIntErrors:
 # validate() -- float errors
 # ---------------------------------------------------------------------------
 
+
 class TestValidateFloatErrors:
     r"""Float key with value below minimum boundary should fail with appropriate error message."""
+
     def test_float_below_min(self, guard):
         r"""Float below minimum boundary should fail with appropriate error message."""
         result = guard.validate({"learning_rate": 1e-10})
@@ -175,7 +181,7 @@ class TestValidateFloatErrors:
         assert not result.passed
 
     def test_float_wrong_type(self, guard):
-        r"""Float key with string value should fail type check."""  
+        r"""Float key with string value should fail type check."""
         result = guard.validate({"learning_rate": "0.001"})
         assert not result.passed
 
@@ -189,8 +195,10 @@ class TestValidateFloatErrors:
 # validate() -- choice errors
 # ---------------------------------------------------------------------------
 
+
 class TestValidateChoiceErrors:
     r"""Choice key with invalid value should fail with appropriate error message."""
+
     def test_invalid_choice(self, guard):
         result = guard.validate({"optimizer": "RMSProp"})
         assert not result.passed
@@ -206,8 +214,10 @@ class TestValidateChoiceErrors:
 # validate() -- bool errors
 # ---------------------------------------------------------------------------
 
+
 class TestValidateBoolErrors:
     r"""Boolean key with non-boolean value should fail with appropriate error message."""
+
     def test_string_true_rejected(self, guard):
         result = guard.validate({"use_amp": "true"})
         assert not result.passed
@@ -223,8 +233,10 @@ class TestValidateBoolErrors:
 # validate() -- list errors
 # ---------------------------------------------------------------------------
 
+
 class TestValidateListErrors:
     r"""List key with invalid value should fail with appropriate error message."""
+
     def test_string_rejected_as_list(self, guard):
         r"""String value for list key should fail type check."""
         result = guard.validate({"augmentations": "flip"})
@@ -239,6 +251,7 @@ class TestValidateListErrors:
 # ---------------------------------------------------------------------------
 # validate() -- immutable and unknown key errors
 # ---------------------------------------------------------------------------
+
 
 class TestValidateImmutableUnknown:
     def test_immutable_key_rejected(self, guard):
@@ -260,6 +273,7 @@ class TestValidateImmutableUnknown:
 # ---------------------------------------------------------------------------
 # validate() -- mixed valid/invalid
 # ---------------------------------------------------------------------------
+
 
 class TestValidateMixed:
     def test_one_valid_one_invalid(self, guard):

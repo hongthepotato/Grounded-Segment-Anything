@@ -13,10 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import pytest
-
 from unittest.mock import patch
 
+import pytest
 import redis as _redis
 
 from ml_engine.agent.loop import (
@@ -27,7 +26,6 @@ from ml_engine.agent.loop import (
     state_key,
 )
 from ml_engine.agent.stream_consumer import stream_key
-
 
 # ---------------------------------------------------------------------------
 # Fixtures (redis_async provided by conftest.py)
@@ -42,6 +40,7 @@ def run_id():
 # ---------------------------------------------------------------------------
 # apublish_event
 # ---------------------------------------------------------------------------
+
 
 class TestPublishEvent:
     @pytest.mark.asyncio
@@ -77,6 +76,7 @@ class TestPublishEvent:
 # ensure_consumer_group
 # ---------------------------------------------------------------------------
 
+
 class TestEnsureConsumerGroup:
     @pytest.mark.asyncio
     async def test_creates_group_idempotent(self, redis_async, run_id):
@@ -96,6 +96,7 @@ class TestEnsureConsumerGroup:
 # ---------------------------------------------------------------------------
 # LoopState serialization
 # ---------------------------------------------------------------------------
+
 
 class TestLoopStateSerialization:
     def test_roundtrip_empty(self, run_id):
@@ -145,10 +146,12 @@ class TestLoopStateSerialization:
 # AgentLoop._load_state / _save_state
 # ---------------------------------------------------------------------------
 
+
 class TestAgentLoopStatePersistence:
     def _make_loop(self, redis_async, run_id):
         async def noop(event, state):
             pass
+
         return AgentLoop(redis_async, run_id, on_event=noop)
 
     @pytest.mark.asyncio
@@ -175,6 +178,7 @@ class TestAgentLoopStatePersistence:
 # ---------------------------------------------------------------------------
 # AgentLoop.run() -- event dispatch
 # ---------------------------------------------------------------------------
+
 
 class TestAgentLoopRun:
     """
@@ -306,6 +310,7 @@ class TestAgentLoopRun:
 # New field roundtrips (stage_start_idx, stage_dispatch_overrides)
 # ---------------------------------------------------------------------------
 
+
 class TestLoopStateNewFieldsRoundtrip:
     """Regression tests for fields added after the initial LoopState schema."""
 
@@ -340,6 +345,7 @@ class TestLoopStateNewFieldsRoundtrip:
 # Redis error retry path
 # ---------------------------------------------------------------------------
 
+
 class TestRedisErrorRetry:
     @pytest.mark.asyncio
     async def test_redis_error_retries(self, redis_async, run_id):
@@ -368,8 +374,10 @@ class TestRedisErrorRetry:
             return await real_xreadgroup(*args, **kwargs)
 
         with patch.object(redis_async, "xreadgroup", side_effect=flaky):
+
             async def no_sleep(_t):
                 return None
+
             with patch("ml_engine.agent.stream_consumer.asyncio.sleep", new=no_sleep):
                 await loop.run(max_events=1)
 
@@ -381,6 +389,7 @@ class TestRedisErrorRetry:
 # ---------------------------------------------------------------------------
 # PEL recovery on restart
 # ---------------------------------------------------------------------------
+
 
 class TestPELRecovery:
     @pytest.mark.asyncio
@@ -424,6 +433,7 @@ class TestPELRecovery:
 # Cancellation semantics (new in async migration)
 # ---------------------------------------------------------------------------
 
+
 class TestCancellationSemantics:
     @pytest.mark.asyncio
     async def test_cancelled_handler_leaves_message_unacked(self, redis_async, run_id):
@@ -448,8 +458,11 @@ class TestCancellationSemantics:
         # Message must still be pending (unacked) -- PEL recovery will replay it.
         key = stream_key(run)
         pending = await redis_async.xpending_range(
-            key, "coordinator",
-            min="-", max="+", count=10,
+            key,
+            "coordinator",
+            min="-",
+            max="+",
+            count=10,
             consumername="coordinator-0",
         )
         assert len(pending) == 1, "cancelled handler's message must remain in PEL"

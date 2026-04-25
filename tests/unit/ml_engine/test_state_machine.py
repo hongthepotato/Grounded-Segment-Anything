@@ -9,20 +9,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+
 import pytest
 import pytest_asyncio
 
 from ml_engine.agent.state_machine import (
-    StateMachine,
     STATES,
     TERMINAL_STATES,
     TRANSITIONS,
+    StateMachine,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def run_id():
@@ -49,6 +50,7 @@ def contract_dict():
 # ---------------------------------------------------------------------------
 # initialize()
 # ---------------------------------------------------------------------------
+
 
 class TestInitialize:
     @pytest.mark.asyncio
@@ -84,6 +86,7 @@ class TestInitialize:
 # current_state()
 # ---------------------------------------------------------------------------
 
+
 class TestCurrentState:
     @pytest.mark.asyncio
     async def test_raises_key_error_for_unknown_run(self, redis_async):
@@ -103,6 +106,7 @@ class TestLoad:
 # ---------------------------------------------------------------------------
 # transition()
 # ---------------------------------------------------------------------------
+
 
 class TestTransition:
     @pytest.mark.asyncio
@@ -198,6 +202,7 @@ class TestTransition:
 # Full valid pipeline walk
 # ---------------------------------------------------------------------------
 
+
 class TestFullPipelineWalk:
     @pytest.mark.asyncio
     async def test_happy_path_detection_pipeline(self, redis_async, run_id):
@@ -272,6 +277,7 @@ class TestFullPipelineWalk:
 # stage_summaries
 # ---------------------------------------------------------------------------
 
+
 class TestStageSummaries:
     @pytest.mark.asyncio
     async def test_append_and_get(self, sm):
@@ -296,6 +302,7 @@ class TestStageSummaries:
 # ---------------------------------------------------------------------------
 # get_proposed_contract()
 # ---------------------------------------------------------------------------
+
 
 class TestGetProposedContract:
     @pytest.mark.asyncio
@@ -329,6 +336,7 @@ class TestGetProposedContract:
 # ---------------------------------------------------------------------------
 # exists()
 # ---------------------------------------------------------------------------
+
 
 class TestExists:
     @pytest.mark.asyncio

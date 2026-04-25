@@ -19,7 +19,6 @@ a Coordinator-enforced invariant, not a worker-level guard.
 
 from __future__ import annotations
 
-
 import pytest
 import pytest_asyncio
 
@@ -32,15 +31,15 @@ from ml_engine.agent.contracts import (
     TargetSpec,
 )
 from ml_engine.agent.state_machine import StateMachine
-from tests.unit.ml_engine.conftest import read_stream_events
 from ml_engine.agent.workers import ExecutorWorker
-from ml_engine.jobs.models import Job, JobType
 from ml_engine.jobs.async_redis_store import AsyncRedisJobStore
-
+from ml_engine.jobs.models import Job, JobType
+from tests.unit.ml_engine.conftest import read_stream_events
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def run_id():
@@ -97,11 +96,10 @@ async def queue_length(store: AsyncRedisJobStore) -> int:
 # Normal dispatch path
 # ---------------------------------------------------------------------------
 
+
 class TestNormalDispatch:
     @pytest.mark.asyncio
-    async def test_enqueues_job_and_publishes_stage_dispatched(
-        self, worker, store, job, redis_sync, run_id
-    ):
+    async def test_enqueues_job_and_publishes_stage_dispatched(self, worker, store, job, redis_sync, run_id):
         event = {
             "type": "dispatch_requested",
             "job_id": job.id,
@@ -116,9 +114,7 @@ class TestNormalDispatch:
         assert dispatched[0]["stage"] == "teacher_training"
 
     @pytest.mark.asyncio
-    async def test_stamps_dispatch_event_id_on_job(
-        self, worker, store, job, run_id
-    ):
+    async def test_stamps_dispatch_event_id_on_job(self, worker, store, job, run_id):
         event = {
             "type": "dispatch_requested",
             "job_id": job.id,
@@ -131,9 +127,7 @@ class TestNormalDispatch:
         assert updated.dispatch_event_id == "1234-0"
 
     @pytest.mark.asyncio
-    async def test_job_lands_in_queue(
-        self, worker, store, job, run_id
-    ):
+    async def test_job_lands_in_queue(self, worker, store, job, run_id):
         assert await queue_length(store) == 0
         event = {
             "type": "dispatch_requested",
@@ -145,9 +139,7 @@ class TestNormalDispatch:
         assert await queue_length(store) == 1
 
     @pytest.mark.asyncio
-    async def test_no_rejected_event_on_success(
-        self, worker, store, job, redis_sync, run_id
-    ):
+    async def test_no_rejected_event_on_success(self, worker, store, job, redis_sync, run_id):
         event = {
             "type": "dispatch_requested",
             "job_id": job.id,
@@ -164,11 +156,10 @@ class TestNormalDispatch:
 # Idempotency: PEL re-delivery with same entry_id_str
 # ---------------------------------------------------------------------------
 
+
 class TestIdempotency:
     @pytest.mark.asyncio
-    async def test_second_call_same_entry_id_does_not_reenqueue(
-        self, worker, store, job, run_id
-    ):
+    async def test_second_call_same_entry_id_does_not_reenqueue(self, worker, store, job, run_id):
         """When the same entry_id_str is seen again, the queue must not grow."""
         event = {
             "type": "dispatch_requested",
@@ -186,9 +177,7 @@ class TestIdempotency:
         assert await queue_length(store) == 1
 
     @pytest.mark.asyncio
-    async def test_idempotency_hit_publishes_stage_dispatched(
-        self, worker, store, job, redis_sync, run_id
-    ):
+    async def test_idempotency_hit_publishes_stage_dispatched(self, worker, store, job, redis_sync, run_id):
         """Idempotency hit must re-publish stage_dispatched so Coordinator unblocks."""
         event = {
             "type": "dispatch_requested",
@@ -205,9 +194,7 @@ class TestIdempotency:
         assert all(d["job_id"] == job.id for d in dispatched)
 
     @pytest.mark.asyncio
-    async def test_idempotency_hit_emits_no_rejected_event(
-        self, worker, store, job, redis_sync, run_id
-    ):
+    async def test_idempotency_hit_emits_no_rejected_event(self, worker, store, job, redis_sync, run_id):
         event = {
             "type": "dispatch_requested",
             "job_id": job.id,
@@ -221,9 +208,7 @@ class TestIdempotency:
         assert rejected == []
 
     @pytest.mark.asyncio
-    async def test_different_entry_id_stamps_new_id(
-        self, worker, store, job, run_id
-    ):
+    async def test_different_entry_id_stamps_new_id(self, worker, store, job, run_id):
         """A new dispatch (different entry_id_str) should update dispatch_event_id."""
         event = {
             "type": "dispatch_requested",
@@ -242,11 +227,10 @@ class TestIdempotency:
 # Dispatch rejected paths
 # ---------------------------------------------------------------------------
 
+
 class TestDispatchRejected:
     @pytest.mark.asyncio
-    async def test_missing_job_id_skips_silently(
-        self, worker, redis_sync, run_id
-    ):
+    async def test_missing_job_id_skips_silently(self, worker, redis_sync, run_id):
         event = {
             "type": "dispatch_requested",
             "stage": "teacher_training",
@@ -295,9 +279,7 @@ class TestDispatchRejected:
         assert "Retry budget exhausted" in rejected[0]["errors"][0]
 
     @pytest.mark.asyncio
-    async def test_retry_budget_exhausted_does_not_enqueue(
-        self, redis_async, run_id, store, job, redis_sync
-    ):
+    async def test_retry_budget_exhausted_does_not_enqueue(self, redis_async, run_id, store, job, redis_sync):
         sm = StateMachine(run_id=run_id, redis_async=redis_async)
         await sm.initialize()
         await redis_async.hset(sm._key, "retry_count", "2")
@@ -326,11 +308,10 @@ class TestDispatchRejected:
 # Contract absent: pre-approval planning phase
 # ---------------------------------------------------------------------------
 
+
 class TestNoContract:
     @pytest.mark.asyncio
-    async def test_dispatch_allowed_without_contract(
-        self, redis_async, run_id, store, job, redis_sync
-    ):
+    async def test_dispatch_allowed_without_contract(self, redis_async, run_id, store, job, redis_sync):
         """No contract = pre-approval phase. All dispatches are allowed."""
         sm = StateMachine(run_id=run_id, redis_async=redis_async)
         await sm.initialize()

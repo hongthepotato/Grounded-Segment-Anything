@@ -9,16 +9,15 @@ import pytest
 from ml_engine.experiment.mutators import SimpleMutator
 from ml_engine.experiment.trial_log import TrialLog, TrialRecord
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 MUTABLE_KEYS = {
-    "batch_size":    {"type": "int",    "min": 1,   "max": 32},
-    "learning_rate": {"type": "float",  "min": 1e-6, "max": 1e-2, "log_scale": True},
-    "optimizer":     {"type": "choice", "choices": ["AdamW", "SGD"]},
-    "use_amp":       {"type": "bool"},
+    "batch_size": {"type": "int", "min": 1, "max": 32},
+    "learning_rate": {"type": "float", "min": 1e-6, "max": 1e-2, "log_scale": True},
+    "optimizer": {"type": "choice", "choices": ["AdamW", "SGD"]},
+    "use_amp": {"type": "bool"},
 }
 
 SINGLE_KEY = {
@@ -32,7 +31,7 @@ def make_log(output_dir: str, trials: list = None) -> TrialLog:
         output_dir=output_dir,
         budget_summary={"metric_mode": "max"},
     )
-    for t in (trials or []):
+    for t in trials or []:
         log.append(t)
     return log
 
@@ -52,8 +51,10 @@ def record(trial_id: str, metric: float, overrides: dict = None, status: str = "
 # propose() -- baseline (no trials)
 # ---------------------------------------------------------------------------
 
+
 class TestProposeBaseline:
     r"""Tests for propose() behavior when no trials have been logged yet."""
+
     def test_returns_empty_dict_when_no_trials(self, tmp_path):
         r"""Should return {} to indicate baseline (no overrides) when no trials exist."""
         m = SimpleMutator(mutable_keys=MUTABLE_KEYS, seed=42)
@@ -73,9 +74,11 @@ class TestProposeBaseline:
 # propose() -- returns one key
 # ---------------------------------------------------------------------------
 
+
 class TestProposeReturnsOneKey:
     r"""Tests for propose() behavior when trials exist:
     should return a dict with exactly one key from mutable_keys."""
+
     def test_returns_single_key_dict(self, tmp_path):
         m = SimpleMutator(mutable_keys=MUTABLE_KEYS, seed=1)
         log = make_log(str(tmp_path), [record("t1", 0.5)])
@@ -94,6 +97,7 @@ class TestProposeReturnsOneKey:
 # propose() -- empty mutable_keys raises
 # ---------------------------------------------------------------------------
 
+
 class TestProposeEmptyMutableKeys:
     def test_raises_when_mutable_keys_empty(self, tmp_path):
         m = SimpleMutator(mutable_keys={}, seed=0)
@@ -105,6 +109,7 @@ class TestProposeEmptyMutableKeys:
 # ---------------------------------------------------------------------------
 # _sample_value -- type contracts
 # ---------------------------------------------------------------------------
+
 
 class TestSampleValue:
     def test_int_type_returns_int(self):
@@ -168,12 +173,13 @@ class TestSampleValue:
 # Stagnation avoidance
 # ---------------------------------------------------------------------------
 
+
 class TestStagnationAvoidance:
     def test_different_key_chosen_after_stagnation(self, tmp_path):
         """If last 3 trials show no improvement and same key used, switch key."""
         # Only 2 keys so we can observe switching
         keys = {
-            "batch_size":    {"type": "int",  "min": 1, "max": 32},
+            "batch_size": {"type": "int", "min": 1, "max": 32},
             "learning_rate": {"type": "float", "min": 1e-6, "max": 1e-2},
         }
         m = SimpleMutator(mutable_keys=keys, seed=7)
@@ -193,6 +199,7 @@ class TestStagnationAvoidance:
 # ---------------------------------------------------------------------------
 # Seeded reproducibility
 # ---------------------------------------------------------------------------
+
 
 class TestSeedReproducibility:
     def test_same_seed_same_sequence(self, tmp_path):

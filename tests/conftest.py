@@ -19,6 +19,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     """Mark tests with @pytest.mark.gpu to skip when CUDA is unavailable."""
     try:
         import torch
+
         cuda_available = torch.cuda.is_available()
     except Exception:
         # If torch import itself fails, treat as no-GPU. Tests that need torch

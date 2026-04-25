@@ -101,9 +101,7 @@ class TestCreateMinimalInferenceScript:
 
 
 class TestCreateReadme:
-    def test_renders_with_no_template_dir_falls_through_to_minimal(
-        self, tmp_path: Path, monkeypatch
-    ):
+    def test_renders_with_no_template_dir_falls_through_to_minimal(self, tmp_path: Path, monkeypatch):
         """No template files on disk → fallback to _get_minimal_readme."""
         # Point TEMPLATES_DIR at an empty directory
         empty_templates = tmp_path / "no_templates"
@@ -145,9 +143,7 @@ class TestCreateReadme:
         assert content.startswith("SAM-SPECIFIC")
         assert "GENERIC" not in content
 
-    def test_falls_through_to_generic_template_when_model_specific_missing(
-        self, tmp_path: Path, monkeypatch
-    ):
+    def test_falls_through_to_generic_template_when_model_specific_missing(self, tmp_path: Path, monkeypatch):
         templates = tmp_path / "templates"
         templates.mkdir()
         (templates / "README_template.md").write_text("GENERIC: classes={class_names}")

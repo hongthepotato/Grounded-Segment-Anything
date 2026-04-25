@@ -36,10 +36,10 @@ for _k, _v in _HEAVY_STUBS.items():
 
 from ml_engine.distillation.student_trainer import StudentTrainer  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_trainer(tmp_path: Path, config: dict = None) -> StudentTrainer:
     """Build a StudentTrainer with the given config and a tmp output directory."""
@@ -95,6 +95,7 @@ def _run_train_mocked(
 # _build_train_args
 # ---------------------------------------------------------------------------
 
+
 class TestBuildTrainArgs:
     def test_default_epochs(self, tmp_path):
         args = _make_trainer(tmp_path)._build_train_args()
@@ -115,33 +116,40 @@ class TestBuildTrainArgs:
 
     def test_lrf_normal_values(self, tmp_path):
         """Standard config: lr=1e-3, min_lr=1e-5 → lrf=0.01."""
-        args = _make_trainer(tmp_path, {
-            "training": {"learning_rate": 1e-3},
-            "scheduler": {"min_lr": 1e-5},
-        })._build_train_args()
+        args = _make_trainer(
+            tmp_path,
+            {
+                "training": {"learning_rate": 1e-3},
+                "scheduler": {"min_lr": 1e-5},
+            },
+        )._build_train_args()
         assert args["lrf"] == pytest.approx(0.01)
         assert 0.0 < args["lrf"] <= 1.0
 
     def test_lrf_clamped_when_lr_smaller_than_min_lr(self, tmp_path):
         """lr=1e-6 < min_lr=1e-5 would give lrf=10 without the clamp."""
-        args = _make_trainer(tmp_path, {
-            "training": {"learning_rate": 1e-6},
-            "scheduler": {"min_lr": 1e-5},
-        })._build_train_args()
+        args = _make_trainer(
+            tmp_path,
+            {
+                "training": {"learning_rate": 1e-6},
+                "scheduler": {"min_lr": 1e-5},
+            },
+        )._build_train_args()
         assert args["lrf"] <= 1.0
 
     def test_lrf_clamped_with_zero_lr(self, tmp_path):
         """lr=0 hits the 1e-8 floor → lrf=1000 without clamp."""
-        args = _make_trainer(tmp_path, {
-            "training": {"learning_rate": 0.0},
-            "scheduler": {"min_lr": 1e-5},
-        })._build_train_args()
+        args = _make_trainer(
+            tmp_path,
+            {
+                "training": {"learning_rate": 0.0},
+                "scheduler": {"min_lr": 1e-5},
+            },
+        )._build_train_args()
         assert args["lrf"] <= 1.0
 
     def test_aug_keys_passed_through(self, tmp_path):
-        args = _make_trainer(tmp_path, {
-            "augmentation": {"mosaic": 0.8, "fliplr": 0.3}
-        })._build_train_args()
+        args = _make_trainer(tmp_path, {"augmentation": {"mosaic": 0.8, "fliplr": 0.3}})._build_train_args()
         assert args["mosaic"] == pytest.approx(0.8)
         assert args["fliplr"] == pytest.approx(0.3)
 
@@ -162,6 +170,7 @@ class TestBuildTrainArgs:
 # ---------------------------------------------------------------------------
 # Metric extraction
 # ---------------------------------------------------------------------------
+
 
 class TestMetricExtraction:
     def test_seg_model_maps_mAP50M_to_mIoU(self, tmp_path):
@@ -226,6 +235,7 @@ class TestMetricExtraction:
 # ---------------------------------------------------------------------------
 # best.pt path resolution
 # ---------------------------------------------------------------------------
+
 
 class TestBestPtPath:
     def test_missing_best_pt_raises_file_not_found(self, tmp_path):

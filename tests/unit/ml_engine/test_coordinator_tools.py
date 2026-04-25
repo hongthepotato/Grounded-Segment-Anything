@@ -15,11 +15,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ml_engine.agent.contracts import (
+    AcceptanceCriteria,
+    BudgetSpec,
+    DataSpec,
+    LineageSpec,
+    PipelineContract,
+    TargetSpec,
+)
 from ml_engine.agent.coordinator import (
-    AdvanceGateTool,
     AdvanceGateArgs,
-    DispatchStageTool,
+    AdvanceGateTool,
     DispatchStageArgs,
+    DispatchStageTool,
     InspectStatusArgs,
     InspectStatusTool,
     ProposePlanArgs,
@@ -29,23 +37,15 @@ from ml_engine.agent.coordinator import (
     RequestEvaluationArgs,
     RequestEvaluationTool,
 )
-from ml_engine.agent.contracts import (
-    AcceptanceCriteria,
-    BudgetSpec,
-    DataSpec,
-    LineageSpec,
-    PipelineContract,
-    TargetSpec,
-)
 from ml_engine.agent.memory import MemoryStore
 from ml_engine.agent.state_machine import StateMachine
 from ml_engine.agent.tools import RunContext
 from tests.unit.ml_engine.conftest import read_stream_events
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def run_id():
@@ -82,7 +82,6 @@ def context_no_contract(run_id):
     )
 
 
-
 def _mock_job_manager():
     """Return a mock AsyncJobManager whose store.store_job is a no-op."""
     mock_store = MagicMock()
@@ -95,6 +94,7 @@ def _mock_job_manager():
 # ---------------------------------------------------------------------------
 # InspectStatusTool
 # ---------------------------------------------------------------------------
+
 
 class TestInspectStatusTool:
     @pytest.mark.asyncio
@@ -128,6 +128,7 @@ class TestInspectStatusTool:
 # ---------------------------------------------------------------------------
 # ReadMemoryTool
 # ---------------------------------------------------------------------------
+
 
 class TestReadMemoryTool:
     @pytest.mark.asyncio
@@ -163,6 +164,7 @@ class TestReadMemoryTool:
 # DispatchStageTool
 # ---------------------------------------------------------------------------
 
+
 class TestDispatchStageTool:
     @pytest.mark.asyncio
     async def test_unknown_stage_returns_failure(self, redis_async, context):
@@ -174,9 +176,7 @@ class TestDispatchStageTool:
     @pytest.mark.asyncio
     async def test_no_contract_returns_failure(self, redis_async, context_no_contract):
         tool = DispatchStageTool(redis_async)
-        result = await tool.execute(
-            DispatchStageArgs(stage="teacher_training"), context_no_contract
-        )
+        result = await tool.execute(DispatchStageArgs(stage="teacher_training"), context_no_contract)
         assert result.success is False
         assert "No contract" in result.error
 
@@ -215,14 +215,13 @@ class TestDispatchStageTool:
 # RequestEvaluationTool
 # ---------------------------------------------------------------------------
 
+
 class TestRequestEvaluationTool:
     @pytest.mark.asyncio
     async def test_publishes_evaluation_requested(self, redis_async, redis_sync, run_id, context):
         tool = RequestEvaluationTool(redis_async)
         result = await tool.execute(
-            RequestEvaluationArgs(
-                stage="teacher_training", job_id="job-001", output_dir="/out"
-            ),
+            RequestEvaluationArgs(stage="teacher_training", job_id="job-001", output_dir="/out"),
             context,
         )
         assert result.success is True
@@ -236,6 +235,7 @@ class TestRequestEvaluationTool:
 # ---------------------------------------------------------------------------
 # AdvanceGateTool
 # ---------------------------------------------------------------------------
+
 
 class TestAdvanceGateTool:
     @pytest.mark.asyncio
@@ -281,6 +281,7 @@ class TestAdvanceGateTool:
 # ---------------------------------------------------------------------------
 # ProposePlanTool
 # ---------------------------------------------------------------------------
+
 
 class TestProposePlanTool:
     @pytest.mark.asyncio

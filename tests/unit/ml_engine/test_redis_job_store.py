@@ -8,19 +8,18 @@ to use a FakeRedis instance.
 
 from __future__ import annotations
 
-import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import fakeredis
 import pytest
 
-from ml_engine.jobs.models import Job, JobStatus, JobProgress, JobType
+from ml_engine.jobs.models import Job, JobProgress, JobStatus, JobType
 from ml_engine.jobs.redis_store import RedisJobStore
-
 
 # ---------------------------------------------------------------------------
 # Fixture: store backed by fakeredis
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def fake_redis():
@@ -31,9 +30,10 @@ def fake_redis():
 @pytest.fixture
 def store(fake_redis):
     """RedisJobStore wired to a FakeRedis instance (bypasses real connection)."""
-    with patch("ml_engine.jobs.redis_store.redis.ConnectionPool") as mock_pool_cls, \
-         patch("ml_engine.jobs.redis_store.redis.Redis") as mock_redis_cls:
-
+    with (
+        patch("ml_engine.jobs.redis_store.redis.ConnectionPool") as mock_pool_cls,
+        patch("ml_engine.jobs.redis_store.redis.Redis") as mock_redis_cls,
+    ):
         mock_pool = MagicMock()
         mock_pool_cls.from_url.return_value = mock_pool
         mock_redis_cls.return_value = fake_redis
@@ -46,8 +46,10 @@ def store(fake_redis):
 # enqueue_job
 # ---------------------------------------------------------------------------
 
+
 class TestEnqueueJob:
     r"""Tests for enqueue_job (one-phase dispatch)."""
+
     def test_enqueue_stores_job(self, store, fake_redis):
         r"""Test that enqueue_job persists the job to Redis (not just the ID in the queue)."""
         job = Job(type=JobType.TEACHER_TRAINING.value, config={"batch_size": 8})
@@ -94,8 +96,10 @@ class TestEnqueueJob:
 # store_job / enqueue_by_id  (two-phase dispatch)
 # ---------------------------------------------------------------------------
 
+
 class TestStoreJobEnqueueById:
     r"""Tests for store_job + enqueue_by_id (two-phase dispatch)."""
+
     def test_store_job_does_not_add_to_queue(self, store, fake_redis):
         r"""Test that store_job alone does not add the job ID to the queue."""
         job = Job()
@@ -139,8 +143,10 @@ class TestStoreJobEnqueueById:
 # get_job
 # ---------------------------------------------------------------------------
 
+
 class TestGetJob:
     r"""Tests for get_job."""
+
     def test_returns_none_for_unknown(self, store, fake_redis):
         r"""Test that get_job returns None if the job ID is not found in Redis."""
         assert store.get_job("no-such-job") is None
@@ -164,8 +170,10 @@ class TestGetJob:
 # update_job
 # ---------------------------------------------------------------------------
 
+
 class TestUpdateJob:
     r"""Tests for update_job."""
+
     def test_update_status(self, store, fake_redis):
         r"""Test that update_job can update the job status and it is correctly stored in Redis."""
         job = Job()
@@ -178,7 +186,6 @@ class TestUpdateJob:
         r"""Test that update_job can update the job progress and it is correctly stored in Redis."""
         job = Job()
         store.enqueue_job(job)
-        progress = JobProgress(current_epoch=3, total_epochs=10)
         updated_progress = JobProgress(current_epoch=6, total_epochs=10)
         store.update_job(job.id, progress=updated_progress)
         stored = store.get_job(job.id)
@@ -206,8 +213,10 @@ class TestUpdateJob:
 # dequeue_job
 # ---------------------------------------------------------------------------
 
+
 class TestDequeueJob:
     r"""Tests for dequeue_job."""
+
     def test_dequeue_returns_none_when_empty(self, store, fake_redis):
         r"""Test that dequeue_job returns None if the queue is empty."""
         result = store.dequeue_job(timeout=1)
@@ -232,8 +241,10 @@ class TestDequeueJob:
 # get_queue_length
 # ---------------------------------------------------------------------------
 
+
 class TestGetQueueLength:
     r"""Tests for get_queue_length."""
+
     def test_zero_when_empty(self, store, fake_redis):
         r"""Test that get_queue_length returns 0 when the queue is empty."""
         assert store.get_queue_length() == 0

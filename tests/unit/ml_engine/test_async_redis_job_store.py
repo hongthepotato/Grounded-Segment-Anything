@@ -7,19 +7,19 @@ sees a real async-style Redis (fakeredis.aioredis). No real Redis needed.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
 
-from ml_engine.jobs.async_redis_store import AsyncRedisJobStore
 from ml_engine.jobs.async_manager import AsyncJobManager
-from ml_engine.jobs.models import Job, JobStatus, JobProgress, JobType, WorkerInfo
-
+from ml_engine.jobs.async_redis_store import AsyncRedisJobStore
+from ml_engine.jobs.models import Job, JobProgress, JobStatus, JobType, WorkerInfo
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest_asyncio.fixture
 async def store(redis_async):
@@ -35,6 +35,7 @@ async def manager(redis_async):
 # ---------------------------------------------------------------------------
 # enqueue_job
 # ---------------------------------------------------------------------------
+
 
 class TestEnqueueJob:
     @pytest.mark.asyncio
@@ -62,6 +63,7 @@ class TestEnqueueJob:
 # ---------------------------------------------------------------------------
 # store_job / enqueue_by_id
 # ---------------------------------------------------------------------------
+
 
 class TestStoreJobEnqueueById:
     @pytest.mark.asyncio
@@ -93,6 +95,7 @@ class TestStoreJobEnqueueById:
 # get_job
 # ---------------------------------------------------------------------------
 
+
 class TestGetJob:
     @pytest.mark.asyncio
     async def test_returns_none_for_unknown(self, store):
@@ -116,6 +119,7 @@ class TestGetJob:
 # ---------------------------------------------------------------------------
 # update_job (and status-index maintenance)
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateJob:
     @pytest.mark.asyncio
@@ -167,6 +171,7 @@ class TestUpdateJob:
 # count_jobs (O(1) via SCARD -- TODO-6 fix)
 # ---------------------------------------------------------------------------
 
+
 class TestCountJobs:
     @pytest.mark.asyncio
     async def test_count_by_status_uses_index(self, store):
@@ -192,6 +197,7 @@ class TestCountJobs:
 # ---------------------------------------------------------------------------
 # AsyncJobManager high-level API
 # ---------------------------------------------------------------------------
+
 
 class TestAsyncJobManager:
     @pytest.mark.asyncio
@@ -250,6 +256,7 @@ class TestAsyncJobManager:
 # dequeue_job
 # ---------------------------------------------------------------------------
 
+
 class TestQueueOps:
     @pytest.mark.asyncio
     async def test_queue_length_zero_when_empty(self, store):
@@ -265,6 +272,7 @@ class TestQueueOps:
 # ---------------------------------------------------------------------------
 # list_jobs with status filter uses index (O(matching) not O(all))
 # ---------------------------------------------------------------------------
+
 
 class TestListJobs:
     @pytest.mark.asyncio
@@ -292,9 +300,7 @@ class TestListJobs:
         j2 = Job(type=JobType.EXPERIMENT_LOOP.value, status=JobStatus.PENDING)
         await store.enqueue_job(j1)
         await store.enqueue_job(j2)
-        result = await store.list_jobs(
-            status=JobStatus.PENDING, job_type=JobType.TEACHER_TRAINING.value
-        )
+        result = await store.list_jobs(status=JobStatus.PENDING, job_type=JobType.TEACHER_TRAINING.value)
         assert len(result) == 1
         assert result[0].type == JobType.TEACHER_TRAINING.value
 
@@ -315,6 +321,7 @@ class TestListJobs:
 # ---------------------------------------------------------------------------
 # list_workers
 # ---------------------------------------------------------------------------
+
 
 class TestListWorkers:
     @pytest.mark.asyncio
@@ -341,6 +348,7 @@ class TestListWorkers:
 # ---------------------------------------------------------------------------
 # cleanup_stale_workers
 # ---------------------------------------------------------------------------
+
 
 class TestCleanupStaleWorkers:
     @pytest.mark.asyncio
@@ -378,6 +386,7 @@ class TestCleanupStaleWorkers:
 # AsyncJobManager: cancel_job CANCELLING and get_queue_status
 # ---------------------------------------------------------------------------
 
+
 class TestAsyncJobManagerExtended:
     @pytest.mark.asyncio
     async def test_cancel_cancelling_job_returns_true(self, manager):
@@ -404,7 +413,8 @@ class TestAsyncJobManagerExtended:
     async def test_count_jobs_total_no_status(self, manager):
         """count_jobs() with no filter returns sum across all statuses."""
         j1 = await manager.submit_job(job_type=JobType.TEACHER_TRAINING.value, config={})
-        j2 = await manager.submit_job(job_type=JobType.TEACHER_TRAINING.value, config={})
+        # Second job submitted to populate the queue; only j1 is acted on below.
+        _j2 = await manager.submit_job(job_type=JobType.TEACHER_TRAINING.value, config={})
         await manager.cancel_job(j1.id)
         total = await manager.store.count_jobs()
         # j1 cancelled, j2 pending -- both counted

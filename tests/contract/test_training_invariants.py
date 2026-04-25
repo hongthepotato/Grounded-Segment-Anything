@@ -189,8 +189,7 @@ class TestGradScalerSelectionByDtype:
             )
         else:
             assert scaler is None, (
-                f"Expected NO GradScaler for {dtype!s}; got one. "
-                f"bf16/fp32 with scaler is a config error."
+                f"Expected NO GradScaler for {dtype!s}; got one. bf16/fp32 with scaler is a config error."
             )
 
     def test_fp16_cannot_represent_small_gradients(self) -> None:

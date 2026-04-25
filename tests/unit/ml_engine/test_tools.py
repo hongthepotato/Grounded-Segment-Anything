@@ -9,12 +9,12 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from ml_engine.agent.tools import Tool, ToolRegistry, ToolResult, RunContext
-
+from ml_engine.agent.tools import RunContext, Tool, ToolRegistry, ToolResult
 
 # ---------------------------------------------------------------------------
 # Concrete test tool
 # ---------------------------------------------------------------------------
+
 
 class EchoInput(BaseModel):
     message: str
@@ -45,6 +45,7 @@ class NoDescTool(Tool[EchoInput]):
 # ToolResult
 # ---------------------------------------------------------------------------
 
+
 class TestToolResult:
     def test_success_true(self):
         r = ToolResult(success=True, output="done")
@@ -69,6 +70,7 @@ class TestToolResult:
 # ---------------------------------------------------------------------------
 # RunContext
 # ---------------------------------------------------------------------------
+
 
 class TestRunContext:
     def test_minimal_construction(self):
@@ -98,6 +100,7 @@ class TestRunContext:
 # Tool.validate (default impl)
 # ---------------------------------------------------------------------------
 
+
 class TestToolValidate:
     def test_default_validate_returns_empty(self):
         tool = EchoTool()
@@ -108,6 +111,7 @@ class TestToolValidate:
 # ---------------------------------------------------------------------------
 # Tool.to_llm_schema
 # ---------------------------------------------------------------------------
+
 
 class TestToolLlmSchema:
     def test_schema_has_name(self):
@@ -136,6 +140,7 @@ class TestToolLlmSchema:
 # ---------------------------------------------------------------------------
 # ToolRegistry
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistry:
     def test_register_and_get(self):
