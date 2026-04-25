@@ -75,6 +75,12 @@ test = [
 lint = [
     "ruff",
     "mypy",
+    # Type stubs for runtime deps that lack inline `py.typed` markers.
+    # Adding only stubs that DROP the current mypy baseline; stubs for libs
+    # that --ignore-missing-imports currently suppresses (PIL/tqdm/requests)
+    # would surface previously-hidden errors and should ride with item 6's
+    # broader cleanup, not this Step-1 quick-win PR.
+    "types-PyYAML",
 ]
 # Torch variant flag extras. Mutually exclusive — uv enforces via the
 # `[tool.uv] conflicts` block below. One of these must be selected at
