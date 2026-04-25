@@ -27,8 +27,8 @@ class TestDtypePreservationThroughAutocast:
     @pytest.mark.parametrize(
         "autocast_dtype",
         [torch.bfloat16],  # CPU autocast is well-supported for bf16; fp16 CPU autocast
-                           # is partial (only some ops are in the allowlist), so testing
-                           # the same invariant there would be noisy.
+        # is partial (only some ops are in the allowlist), so testing
+        # the same invariant there would be noisy.
         ids=["bfloat16"],
     )
     def test_linear_layer_output_matches_autocast_dtype(
@@ -79,9 +79,7 @@ class TestDtypePreservationThroughAutocast:
                 f"was {param_dtypes_before[name]!s}, now {p.dtype!s}"
             )
 
-    def test_dtype_mismatch_between_input_and_model_is_caught(
-        self, tiny_attention_block: nn.Module
-    ) -> None:
+    def test_dtype_mismatch_between_input_and_model_is_caught(self, tiny_attention_block: nn.Module) -> None:
         """Feeding a bf16 tensor into an fp32 model without autocast must raise.
 
         This guards against the failure where someone silently converts input

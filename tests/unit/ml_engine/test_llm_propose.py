@@ -6,8 +6,7 @@ The LLMClient is mocked so no real API calls are made.
 
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,33 +14,35 @@ from ml_engine.experiment.llm_propose import LLMProposeFn
 from ml_engine.experiment.mutators import SimpleMutator
 from ml_engine.experiment.trial_log import TrialLog, TrialRecord
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 MUTABLE_KEYS = {
-    "batch_size":                       {"type": "int",    "min": 1,    "max": 32},
-    "models.grounding_dino.lora.r":     {"type": "int",    "min": 2,    "max": 128},
+    "batch_size": {"type": "int", "min": 1, "max": 32},
+    "models.grounding_dino.lora.r": {"type": "int", "min": 2, "max": 128},
     "models.grounding_dino.learning_rate": {"type": "float", "min": 1e-6, "max": 1e-2, "log_scale": True},
-    "optimizer":                        {"type": "choice", "choices": ["AdamW", "SGD"]},
+    "optimizer": {"type": "choice", "choices": ["AdamW", "SGD"]},
     "training_dynamics.mixed_precision.enabled": {"type": "bool"},
 }
 
 
 def make_trial_log(num_trials: int = 2, tmp_path=None) -> TrialLog:
     import tempfile
+
     out_dir = str(tmp_path) if tmp_path else tempfile.mkdtemp()
     log = TrialLog(run_id="test-run", output_dir=out_dir, budget_summary={"metric_mode": "max"})
     for i in range(num_trials):
-        log.append(TrialRecord(
-            trial_id=f"trial-{i}",
-            overrides={"batch_size": 8 + i},
-            primary_metric=0.4 + i * 0.05,
-            all_metrics={"val_mAP50": 0.4 + i * 0.05},
-            status="keep",
-            description=f"trial {i}",
-        ))
+        log.append(
+            TrialRecord(
+                trial_id=f"trial-{i}",
+                overrides={"batch_size": 8 + i},
+                primary_metric=0.4 + i * 0.05,
+                all_metrics={"val_mAP50": 0.4 + i * 0.05},
+                status="keep",
+                description=f"trial {i}",
+            )
+        )
     return log
 
 
@@ -57,8 +58,10 @@ def make_proposer(**kwargs) -> LLMProposeFn:
 # _parse_overrides
 # ---------------------------------------------------------------------------
 
+
 class TestParseOverrides:
-    r"""Tests for the _parse_overrides method, which parses the LLM's text response into a dict of overrides."""
+    r"""_parse_overrides: parses the LLM text response into a dict of overrides."""
+
     def test_valid_int_key(self):
         r"""Valid int key should be parsed correctly."""
         p = make_proposer()
@@ -176,8 +179,10 @@ class TestParseOverrides:
 # propose() -- fallback behavior
 # ---------------------------------------------------------------------------
 
+
 class TestProposeFallback:
     r"""Tests for the propose() method's fallback behavior when _parse_overrides raises exceptions."""
+
     def test_falls_back_after_3_consecutive_failures(self):
         r"""After 3 consecutive failures, should call fallback.propose() and return its result."""
         fallback = MagicMock(spec=SimpleMutator)
@@ -211,10 +216,11 @@ class TestProposeFallback:
 
         with patch.object(p, "_propose_async", new=mock_propose_async):
             import asyncio
+
             # Patch asyncio.run to call the coroutine directly
             with patch("ml_engine.experiment.llm_propose.asyncio") as mock_asyncio:
                 mock_asyncio.run.side_effect = lambda coro: asyncio.get_event_loop().run_until_complete(coro)
-                result = p.propose(make_trial_log())
+                p.propose(make_trial_log())  # side effect: resets _consecutive_failures
 
         assert p._consecutive_failures == 0
 
@@ -236,6 +242,7 @@ class TestProposeFallback:
 # ---------------------------------------------------------------------------
 # _build_user_message
 # ---------------------------------------------------------------------------
+
 
 class TestBuildUserMessage:
     def test_includes_mutable_key_names(self):
@@ -273,18 +280,22 @@ class TestBuildUserMessage:
 # Skill file loading
 # ---------------------------------------------------------------------------
 
+
 class TestSkillLoading:
     def test_loads_hpo_propose_skill(self):
         """Should load the hpo_propose.md skill file and use it as system prompt."""
         p = LLMProposeFn(mutable_keys=MUTABLE_KEYS)
         # The skill file exists, so system prompt should contain skill content
-        assert "hyperparameter optimization" in p._system_prompt.lower() or \
-               "hpo" in p._system_prompt.lower() or \
-               "propose" in p._system_prompt.lower()
+        assert (
+            "hyperparameter optimization" in p._system_prompt.lower()
+            or "hpo" in p._system_prompt.lower()
+            or "propose" in p._system_prompt.lower()
+        )
 
     def test_falls_back_to_default_on_missing_skill(self):
         """If skill file doesn't exist, should use the hardcoded _SYSTEM_PROMPT."""
         from ml_engine.experiment.llm_propose import _SYSTEM_PROMPT
+
         p = LLMProposeFn(mutable_keys=MUTABLE_KEYS, skill_name="nonexistent_skill_xyz")
         assert p._system_prompt == _SYSTEM_PROMPT
 
@@ -298,10 +309,12 @@ class TestSkillLoading:
 # LLMClient created once (not per call)
 # ---------------------------------------------------------------------------
 
+
 class TestLLMClientReuse:
     def test_llm_client_is_instance_attribute(self):
         p = LLMProposeFn(mutable_keys=MUTABLE_KEYS)
         from ml_engine.agent.llm_client import LLMClient
+
         assert isinstance(p._llm, LLMClient)
 
     def test_base_url_threaded_to_client(self):

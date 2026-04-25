@@ -32,13 +32,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import redis as _redis
 
+from ml_engine.agent.loop import apublish_event
 from ml_engine.agent.stream_consumer import (
     StreamConsumer,
     ensure_consumer_group,
     stream_key,
 )
-from ml_engine.agent.loop import apublish_event
-
 
 # ---------------------------------------------------------------------------
 # Fixtures (redis_async from conftest)
@@ -63,7 +62,7 @@ class RecordingConsumer(StreamConsumer):
     def __init__(self, redis_client, run_id, *, stop_after: int = 0, **kwargs):
         super().__init__(redis_client, run_id, consumer_name="test-0", **kwargs)
         self.received: List[Dict[str, Any]] = []
-        self._stop_after = stop_after   # should_stop() returns True after N events
+        self._stop_after = stop_after  # should_stop() returns True after N events
         self._started = False
 
     async def on_start(self) -> None:
@@ -163,8 +162,10 @@ class TestOnStartHook:
         await apublish_event(redis_async, run, {"type": "pel_event"})
         key = stream_key(run)
         await redis_async.xreadgroup(
-            groupname="test-group", consumername="test-0",
-            streams={key: ">"}, count=1,
+            groupname="test-group",
+            consumername="test-0",
+            streams={key: ">"},
+            count=1,
         )
         # PEL has 1 entry; do not ACK.
 
@@ -300,7 +301,11 @@ class TestOnEventError:
 
         key = stream_key(run)
         pending = await redis_async.xpending_range(
-            key, "test-group", min="-", max="+", count=10,
+            key,
+            "test-group",
+            min="-",
+            max="+",
+            count=10,
             consumername="test-0",
         )
         assert pending == [], "message must be ACKed even when handler raises"
@@ -329,7 +334,11 @@ class TestOnEventError:
         # Message must remain in PEL (not ACKed).
         key = stream_key(run)
         pending = await redis_async.xpending_range(
-            key, "test-group", min="-", max="+", count=10,
+            key,
+            "test-group",
+            min="-",
+            max="+",
+            count=10,
             consumername="test-0",
         )
         assert len(pending) == 1, "message must remain unacked when on_event_error raises CancelledError"
@@ -356,7 +365,11 @@ class TestOnEventError:
 
         key = stream_key(run)
         pending = await redis_async.xpending_range(
-            key, "test-group", min="-", max="+", count=10,
+            key,
+            "test-group",
+            min="-",
+            max="+",
+            count=10,
             consumername="test-0",
         )
         assert pending == [], "message must be ACKed even when on_event_error raises"
@@ -377,7 +390,8 @@ class TestDrainPELResilience:
         consumer = RecordingConsumer(redis_async, run)
 
         with patch.object(
-            redis_async, "xpending_range",
+            redis_async,
+            "xpending_range",
             new=AsyncMock(side_effect=_redis.RedisError("xpending boom")),
         ):
             await consumer.run(max_events=1)
@@ -396,19 +410,20 @@ class TestDrainPELResilience:
         await apublish_event(redis_async, run, {"type": "stuck"})
         key = stream_key(run)
         await redis_async.xreadgroup(
-            groupname="test-group", consumername="test-0",
-            streams={key: ">"}, count=1,
+            groupname="test-group",
+            consumername="test-0",
+            streams={key: ">"},
+            count=1,
         )
         # PEL has 1 entry. Now publish a new message too.
         await apublish_event(redis_async, run, {"type": "new_after_stuck"})
 
         consumer = RecordingConsumer(redis_async, run)
 
-        real_xclaim = redis_async.xclaim
-
         async def failing_xclaim(*args, **kwargs):
             raise _redis.RedisError("xclaim boom")
 
+        # patch.object handles save/restore of redis_async.xclaim automatically.
         with patch.object(redis_async, "xclaim", side_effect=failing_xclaim):
             await consumer.run(max_events=1)
 
@@ -428,8 +443,10 @@ class TestDrainPELResilience:
         await apublish_event(redis_async, run, {"type": "race_condition"})
         key = stream_key(run)
         await redis_async.xreadgroup(
-            groupname="test-group", consumername="test-0",
-            streams={key: ">"}, count=1,
+            groupname="test-group",
+            consumername="test-0",
+            streams={key: ">"},
+            count=1,
         )
 
         consumer = RecordingConsumer(redis_async, run)
@@ -449,8 +466,10 @@ class TestDrainPELResilience:
         await apublish_event(redis_async, run, {"type": "should_not_arrive"})
         key = stream_key(run)
         await redis_async.xreadgroup(
-            groupname="test-group", consumername="test-0",
-            streams={key: ">"}, count=1,
+            groupname="test-group",
+            consumername="test-0",
+            streams={key: ">"},
+            count=1,
         )
 
         consumer = RecordingConsumer(redis_async, run)

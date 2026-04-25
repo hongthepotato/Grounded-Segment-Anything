@@ -8,14 +8,19 @@ from __future__ import annotations
 
 import pytest
 
-from ml_engine.agent.gate import evaluate_gate
 from ml_engine.agent.contracts import AcceptanceCriteria
-from ml_engine.agent.state_machine import DISTILLATION_GATE_STAGES, TEACHER_GATE_STAGES, STATES, TERMINAL_STATES
-
+from ml_engine.agent.gate import evaluate_gate
+from ml_engine.agent.state_machine import (
+    DISTILLATION_GATE_STAGES,
+    STATES,
+    TEACHER_GATE_STAGES,
+    TERMINAL_STATES,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def criteria(min_mAP50: float = 0.5, min_mIoU: float = 0.4) -> AcceptanceCriteria:
     r"""Convenience factory for AcceptanceCriteria with defaults matching our typical contract."""
@@ -24,15 +29,23 @@ def criteria(min_mAP50: float = 0.5, min_mIoU: float = 0.4) -> AcceptanceCriteri
 
 TEACHER_STAGES = sorted(TEACHER_GATE_STAGES)
 DISTILLATION_STAGES = sorted(DISTILLATION_GATE_STAGES)
-OTHER_STAGES = sorted(STATES - TEACHER_GATE_STAGES - DISTILLATION_GATE_STAGES - TERMINAL_STATES - {"created", "planning", "pending_contract_approval", "failed_retrying"})
+OTHER_STAGES = sorted(
+    STATES
+    - TEACHER_GATE_STAGES
+    - DISTILLATION_GATE_STAGES
+    - TERMINAL_STATES
+    - {"created", "planning", "pending_contract_approval", "failed_retrying"}
+)
 
 
 # ---------------------------------------------------------------------------
 # Detection gate
 # ---------------------------------------------------------------------------
 
+
 class TestTeacherGate:
     r"""Tests for the teacher training gate, which uses mAP50 as the signal metric."""
+
     @pytest.mark.parametrize("stage", TEACHER_STAGES)
     def test_pass_when_mAP50_meets_threshold(self, stage):
         r"""mAP50 above threshold should pass."""
@@ -153,8 +166,10 @@ class TestTeacherGate:
 # Distillation gate -- SAM path (mIoU present)
 # ---------------------------------------------------------------------------
 
+
 class TestDistillationGateSAMPath:
     r"""Tests for the distillation gate when distilling SAM, which uses mIoU as the primary signal metric."""
+
     @pytest.mark.parametrize("stage", DISTILLATION_STAGES)
     def test_pass_when_mIoU_meets_threshold(self, stage):
         r"""Distilling SAM: outcome has mIoU, which is the primary signal for the gate."""
@@ -220,8 +235,10 @@ class TestDistillationGateSAMPath:
 # Distillation gate -- GroundingDINO path (mAP50 present, no mIoU)
 # ---------------------------------------------------------------------------
 
+
 class TestDistillationGateDetectionPath:
-    r"""Tests for the distillation gate when distilling GroundingDINO, which uses mAP50 as the signal metric."""
+    r"""Distillation gate when distilling GroundingDINO — uses mAP50 as the signal metric."""
+
     @pytest.mark.parametrize("stage", DISTILLATION_STAGES)
     def test_pass_when_mAP50_meets_threshold(self, stage):
         r"""Distilling GroundingDINO: outcome has mAP50, no mIoU."""
@@ -301,8 +318,10 @@ class TestDistillationGateDetectionPath:
 # Default gate (other stages)
 # ---------------------------------------------------------------------------
 
+
 class TestDefaultGate:
-    r"""Tests for stages that don't have specific metric thresholds -- should pass by default, not escalate."""
+    r"""Stages without specific metric thresholds — should pass by default, not escalate."""
+
     @pytest.mark.parametrize("stage", OTHER_STAGES)
     def test_always_passes_unknown_stage(self, stage):
         decision = evaluate_gate(
@@ -320,8 +339,10 @@ class TestDefaultGate:
 # Edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestEdgeCases:
     r"""Edge cases around threshold boundaries, missing metrics, and retry counts."""
+
     def test_mAP50_zero_retries_left_escalates(self):
         r"""mAP50 below threshold with zero retries left should escalate, not retry."""
         decision = evaluate_gate(

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from ml_engine.agent.memory import MemoryStore, MEMORY_TYPES
+from ml_engine.agent.memory import MEMORY_TYPES, MemoryStore
 
 
 @pytest.fixture
@@ -22,6 +22,7 @@ def store(redis_async):
 # ---------------------------------------------------------------------------
 # write() / read()
 # ---------------------------------------------------------------------------
+
 
 class TestWriteRead:
     @pytest.mark.asyncio
@@ -106,6 +107,7 @@ class TestWriteRead:
 # to_llm_context()
 # ---------------------------------------------------------------------------
 
+
 class TestToLlmContext:
     @pytest.mark.asyncio
     async def test_returns_no_memory_when_empty(self, store):
@@ -116,7 +118,7 @@ class TestToLlmContext:
     async def test_includes_memory_type_header(self, store):
         await store.write("feedback", "k1", {"verdict": "pass"})
         result = await store.to_llm_context(types=["feedback"])
-        assert "## Memory: feedback\n  [k1] {\"verdict\": \"pass\"}" in result
+        assert '## Memory: feedback\n  [k1] {"verdict": "pass"}' in result
 
     @pytest.mark.asyncio
     async def test_includes_key_in_output(self, store):
@@ -145,16 +147,20 @@ class TestToLlmContext:
 # _parse_record() -- corrupt data resilience
 # ---------------------------------------------------------------------------
 
+
 class TestParseRecord:
     @pytest.mark.asyncio
     async def test_corrupt_content_json_returns_raw(self, redis_async, store):
         """Simulate Redis returning garbled content bytes."""
-        await redis_async.hset("mem:feedback:corrupt", mapping={
-            "type": "feedback",
-            "key": "corrupt",
-            "content": "NOT JSON {{{",
-            "updated_at": "2026-01-01",
-        })
+        await redis_async.hset(
+            "mem:feedback:corrupt",
+            mapping={
+                "type": "feedback",
+                "key": "corrupt",
+                "content": "NOT JSON {{{",
+                "updated_at": "2026-01-01",
+            },
+        )
         records = await store.read("feedback", "corrupt")
         assert len(records) == 1
         assert "raw" in records[0]["content"]

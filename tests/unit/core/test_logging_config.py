@@ -7,16 +7,16 @@ Tests centralized logging configuration functions.
 import logging
 import os
 from unittest.mock import patch
+
 import pytest
-from core.logging_formatters import JSONFormatter
-from core.logging_formatters import TextFormatter
 
 from core.logging_config import (
     configure_logging,
-    get_logger,
     get_job_logger,
+    get_logger,
     reset_logging,
 )
+from core.logging_formatters import JSONFormatter, TextFormatter
 
 
 @pytest.fixture(autouse=True)
@@ -226,7 +226,8 @@ class TestGetJobLogger:
         # File contains multiple JSON lines (newline-delimited JSON)
         # Parse each line separately
         import json
-        lines = content.strip().split('\n')
+
+        lines = content.strip().split("\n")
         assert len(lines) >= 1
 
         # Find the line with our test message

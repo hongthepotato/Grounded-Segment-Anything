@@ -13,15 +13,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ml_engine.agent.llm_client import LLMClient, LLM_TIMEOUT_SECONDS
-
+from ml_engine.agent.llm_client import LLM_TIMEOUT_SECONDS, LLMClient
 
 # ---------------------------------------------------------------------------
 # Default model selection
 # ---------------------------------------------------------------------------
 
+
 class TestDefaultModel:
     r"""egression tests to ensure default model selection logic doesn't accidentally break."""
+
     def test_anthropic_default(self):
         r"""By default, should select a model with "claude" in the name for Anthropic."""
         c = LLMClient(provider="anthropic")
@@ -55,8 +56,10 @@ class TestDefaultModel:
 # Constructor params
 # ---------------------------------------------------------------------------
 
+
 class TestConstructorParams:
     r"""Tests to verify that constructor parameters are stored correctly on the instance."""
+
     def test_default_timeout(self):
         r"""By default, should have a timeout of LLM_TIMEOUT_SECONDS."""
         c = LLMClient()
@@ -92,8 +95,10 @@ class TestConstructorParams:
 # OpenAI base_url passthrough
 # ---------------------------------------------------------------------------
 
+
 class TestBaseUrl:
-    r"""Tests to verify that base_url constructor parameter is passed to OpenAI client and not included when None."""
+    r"""base_url constructor param is forwarded to OpenAI client (and omitted when None)."""
+
     @pytest.mark.asyncio
     async def test_base_url_passed_to_openai_client(self, monkeypatch):
         r"""When base_url is provided, it should be passed to the OpenAI client constructor."""
@@ -103,10 +108,12 @@ class TestBaseUrl:
         mock_client_cls = MagicMock()
         mock_instance = MagicMock()
         mock_response = MagicMock()
-        mock_response.choices = [MagicMock(
-            message=MagicMock(content="test"),
-            finish_reason="stop",
-        )]
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(content="test"),
+                finish_reason="stop",
+            )
+        ]
         mock_response.model = "deepseek-chat"
         mock_instance.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_instance
@@ -127,10 +134,12 @@ class TestBaseUrl:
         mock_client_cls = MagicMock()
         mock_instance = MagicMock()
         mock_response = MagicMock()
-        mock_response.choices = [MagicMock(
-            message=MagicMock(content="test"),
-            finish_reason="stop",
-        )]
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(content="test"),
+                finish_reason="stop",
+            )
+        ]
         mock_response.model = "gpt-4o"
         mock_instance.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_instance
@@ -146,6 +155,7 @@ class TestBaseUrl:
 # Custom API key env var
 # ---------------------------------------------------------------------------
 
+
 class TestApiKeyEnv:
     @pytest.mark.asyncio
     async def test_custom_env_var_used(self, monkeypatch):
@@ -155,10 +165,12 @@ class TestApiKeyEnv:
         mock_client_cls = MagicMock()
         mock_instance = MagicMock()
         mock_response = MagicMock()
-        mock_response.choices = [MagicMock(
-            message=MagicMock(content="test"),
-            finish_reason="stop",
-        )]
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(content="test"),
+                finish_reason="stop",
+            )
+        ]
         mock_response.model = "deepseek-chat"
         mock_instance.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_instance
@@ -186,10 +198,12 @@ class TestApiKeyEnv:
         mock_client_cls = MagicMock()
         mock_instance = MagicMock()
         mock_response = MagicMock()
-        mock_response.choices = [MagicMock(
-            message=MagicMock(content="test"),
-            finish_reason="stop",
-        )]
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(content="test"),
+                finish_reason="stop",
+            )
+        ]
         mock_response.model = "gpt-4o"
         mock_instance.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_instance
@@ -205,6 +219,7 @@ class TestApiKeyEnv:
 # Unknown provider
 # ---------------------------------------------------------------------------
 
+
 class TestUnknownProvider:
     @pytest.mark.asyncio
     async def test_raises_value_error(self):
@@ -216,6 +231,7 @@ class TestUnknownProvider:
 # ---------------------------------------------------------------------------
 # Anthropic path
 # ---------------------------------------------------------------------------
+
 
 class TestCallAnthropic:
     @pytest.mark.asyncio
@@ -278,7 +294,12 @@ class TestCallAnthropic:
         mock_client_cls.return_value = mock_instance
 
         with patch("anthropic.AsyncAnthropic", mock_client_cls):
-            result = await c._call_anthropic("system", [{"role": "user", "content": "hi"}], [{"name": "dispatch_stage", "description": "d", "input_schema": {}}], 256)
+            result = await c._call_anthropic(
+                "system",
+                [{"role": "user", "content": "hi"}],
+                [{"name": "dispatch_stage", "description": "d", "input_schema": {}}],
+                256,
+            )
 
         assert len(result["content"]) == 2
         assert result["content"][0] == {"type": "text", "text": "I'll call the tool."}
@@ -290,6 +311,7 @@ class TestCallAnthropic:
 # ---------------------------------------------------------------------------
 # Timeout
 # ---------------------------------------------------------------------------
+
 
 class TestTimeout:
     @pytest.mark.asyncio
@@ -313,6 +335,7 @@ class TestTimeout:
 # ---------------------------------------------------------------------------
 # OpenAI tool_calls in response
 # ---------------------------------------------------------------------------
+
 
 class TestOpenAIToolCalls:
     @pytest.mark.asyncio
@@ -357,10 +380,12 @@ class TestOpenAIToolCalls:
         c = LLMClient(provider="openai")
 
         mock_response = MagicMock()
-        mock_response.choices = [MagicMock(
-            message=MagicMock(content="ok", tool_calls=None),
-            finish_reason="stop",
-        )]
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(content="ok", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
         mock_response.model = "gpt-4o"
 
         mock_client_cls = MagicMock()
@@ -368,11 +393,13 @@ class TestOpenAIToolCalls:
         mock_instance.chat.completions.create = AsyncMock(return_value=mock_response)
         mock_client_cls.return_value = mock_instance
 
-        tools = [{
-            "name": "dispatch_stage",
-            "description": "Dispatch a pipeline stage",
-            "input_schema": {"type": "object", "properties": {"stage": {"type": "string"}}},
-        }]
+        tools = [
+            {
+                "name": "dispatch_stage",
+                "description": "Dispatch a pipeline stage",
+                "input_schema": {"type": "object", "properties": {"stage": {"type": "string"}}},
+            }
+        ]
 
         with patch("openai.AsyncOpenAI", mock_client_cls):
             await c._call_openai("system", [{"role": "user", "content": "hi"}], tools, 256)
@@ -383,12 +410,16 @@ class TestOpenAIToolCalls:
         assert oai_tools[0]["type"] == "function"
         assert oai_tools[0]["function"]["name"] == "dispatch_stage"
         assert oai_tools[0]["function"]["description"] == "Dispatch a pipeline stage"
-        assert oai_tools[0]["function"]["parameters"] == {"type": "object", "properties": {"stage": {"type": "string"}}}
+        assert oai_tools[0]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {"stage": {"type": "string"}},
+        }
 
 
 # ---------------------------------------------------------------------------
 # _block_to_dict
 # ---------------------------------------------------------------------------
+
 
 class TestBlockToDict:
     def test_text_block(self):
@@ -423,6 +454,7 @@ class TestBlockToDict:
 # Anthropic -> OpenAI message conversion (_to_openai_messages)
 # ---------------------------------------------------------------------------
 
+
 class TestToOpenAIMessages:
     r"""Pure-function tests for the Claude→OpenAI message shape converter."""
 
@@ -435,7 +467,7 @@ class TestToOpenAIMessages:
         assert out == [{"role": "assistant", "content": "ok"}]
 
     def test_assistant_text_plus_tool_use(self):
-        r"""Assistant with text + tool_use becomes content string + tool_calls with JSON-stringified arguments."""
+        r"""Assistant text + tool_use → content string + tool_calls with JSON-stringified args."""
         msg = {
             "role": "assistant",
             "content": [
@@ -484,10 +516,14 @@ class TestToOpenAIMessages:
         msg = {
             "role": "user",
             "content": [
-                {"type": "tool_result", "tool_use_id": "call_1", "content": [
-                    {"type": "text", "text": "part A "},
-                    {"type": "text", "text": "part B"},
-                ]},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_1",
+                    "content": [
+                        {"type": "text", "text": "part A "},
+                        {"type": "text", "text": "part B"},
+                    ],
+                },
             ],
         }
         out = LLMClient._to_openai_messages([msg])
@@ -524,13 +560,19 @@ class TestToOpenAIMessages:
         r"""Regression: exact shape from Coordinator turn 2 that triggered the DeepSeek 400."""
         messages = [
             {"role": "user", "content": "plan teacher training"},
-            {"role": "assistant", "content": [
-                {"type": "text", "text": "calling tool"},
-                {"type": "tool_use", "id": "toolu_1", "name": "propose_plan", "input": {"stage": "hpo"}},
-            ]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"},
-            ]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "calling tool"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "propose_plan", "input": {"stage": "hpo"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"},
+                ],
+            },
         ]
         out = LLMClient._to_openai_messages(messages)
         assert len(out) == 3
@@ -550,10 +592,12 @@ class TestCallOpenAIRequestShape:
         c = LLMClient(provider="openai")
 
         mock_response = MagicMock()
-        mock_response.choices = [MagicMock(
-            message=MagicMock(content="final", tool_calls=None),
-            finish_reason="stop",
-        )]
+        mock_response.choices = [
+            MagicMock(
+                message=MagicMock(content="final", tool_calls=None),
+                finish_reason="stop",
+            )
+        ]
         mock_response.model = "deepseek-chat"
 
         mock_client_cls = MagicMock()
@@ -563,13 +607,19 @@ class TestCallOpenAIRequestShape:
 
         messages = [
             {"role": "user", "content": "start"},
-            {"role": "assistant", "content": [
-                {"type": "text", "text": "calling"},
-                {"type": "tool_use", "id": "toolu_1", "name": "x", "input": {"k": "v"}},
-            ]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "done"},
-            ]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "calling"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "x", "input": {"k": "v"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "done"},
+                ],
+            },
         ]
 
         with patch("openai.AsyncOpenAI", mock_client_cls):
@@ -587,6 +637,7 @@ class TestCallOpenAIRequestShape:
 # ---------------------------------------------------------------------------
 # Client caching
 # ---------------------------------------------------------------------------
+
 
 class TestClientCaching:
     def test_openai_client_cached(self, monkeypatch):

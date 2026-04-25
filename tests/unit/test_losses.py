@@ -9,8 +9,8 @@ Tests:
 """
 
 import unittest
+
 import torch
-import torch.nn as nn
 
 
 def _make_matcher_outputs(B: int, N: int, num_tokens: int, device="cpu"):
@@ -26,11 +26,13 @@ def _make_matcher_targets(B: int, M: int, num_tokens: int, device="cpu"):
     """Synthetic targets with M objects per image."""
     targets = []
     for _ in range(B):
-        targets.append({
-            "labels": torch.zeros(M, dtype=torch.long, device=device),
-            "boxes": torch.rand(M, 4, device=device),
-            "token_labels": torch.randint(0, 2, (M, num_tokens), dtype=torch.float, device=device),
-        })
+        targets.append(
+            {
+                "labels": torch.zeros(M, dtype=torch.long, device=device),
+                "boxes": torch.rand(M, 4, device=device),
+                "token_labels": torch.randint(0, 2, (M, num_tokens), dtype=torch.float, device=device),
+            }
+        )
     return targets
 
 
@@ -39,6 +41,7 @@ class TestHungarianMatcher(unittest.TestCase):
 
     def setUp(self):
         from ml_engine.training.losses import HungarianMatcher
+
         self.matcher = HungarianMatcher(cost_class=1.0, cost_bbox=5.0, cost_giou=2.0)
 
     def test_output_shape(self):
@@ -84,6 +87,7 @@ class TestGroundingDINOCriterion(unittest.TestCase):
 
     def setUp(self):
         from ml_engine.training.losses import build_criterion
+
         self.criterion = build_criterion(num_classes=80, num_decoder_layers=2)
 
     def test_forward_returns_expected_keys(self):
@@ -104,9 +108,7 @@ class TestGroundingDINOCriterion(unittest.TestCase):
     def test_auxiliary_losses(self):
         """Auxiliary decoder losses are keyed with _0, _1, ... suffixes."""
         B, N, T = 2, 10, 20
-        aux_outputs = [
-            {"pred_logits": torch.randn(B, N, T), "pred_boxes": torch.rand(B, N, 4)}
-        ]
+        aux_outputs = [{"pred_logits": torch.randn(B, N, T), "pred_boxes": torch.rand(B, N, 4)}]
         outputs = {
             "pred_logits": torch.randn(B, N, T),
             "pred_boxes": torch.rand(B, N, 4),
@@ -177,18 +179,14 @@ class TestGroundingDINOCriterion(unittest.TestCase):
         outputs = {
             "pred_logits": pred_logits,
             "pred_boxes": pred_boxes,
-            "aux_outputs": [
-                {"pred_logits": aux_pred_logits, "pred_boxes": aux_pred_boxes}
-            ],
+            "aux_outputs": [{"pred_logits": aux_pred_logits, "pred_boxes": aux_pred_boxes}],
         }
         targets = _make_matcher_targets(B, M=3, num_tokens=T)
 
         loss_dict = self.criterion(outputs, targets)
 
         total_loss = sum(
-            loss_dict[k] * self.criterion.weight_dict[k]
-            for k in loss_dict
-            if k in self.criterion.weight_dict
+            loss_dict[k] * self.criterion.weight_dict[k] for k in loss_dict if k in self.criterion.weight_dict
         )
 
         # Must not raise
@@ -206,6 +204,7 @@ class TestBuildCriterion(unittest.TestCase):
     def test_weight_dict_covers_all_decoder_layers(self):
         """weight_dict has entries for all aux layers and encoder."""
         from ml_engine.training.losses import build_criterion
+
         num_layers = 4
         criterion = build_criterion(num_classes=10, num_decoder_layers=num_layers)
 
@@ -223,6 +222,7 @@ class TestBuildCriterion(unittest.TestCase):
     def test_weight_values(self):
         """Paper weights: loss_ce=2.0, loss_bbox=5.0, loss_giou=2.0."""
         from ml_engine.training.losses import build_criterion
+
         criterion = build_criterion(num_classes=10)
 
         self.assertAlmostEqual(criterion.weight_dict["loss_ce"], 2.0)
@@ -235,6 +235,7 @@ class TestSegmentationLoss(unittest.TestCase):
 
     def setUp(self):
         from ml_engine.training.losses import SegmentationLoss
+
         self.loss_fn = SegmentationLoss()
 
     def test_all_invalid_masks_backward(self):
@@ -321,7 +322,7 @@ class TestMatcherRobustToInfLogits(unittest.TestCase):
         finite values elsewhere; few valid tokens relative to num_tokens.
         Build in FP32 — the autocast context in each test downcasts as needed.
         """
-        pred_logits = torch.full((B, N, num_tokens), float('-inf'), device=device)
+        pred_logits = torch.full((B, N, num_tokens), float("-inf"), device=device)
         pred_logits[:, :, :num_valid] = torch.randn(B, N, num_valid, device=device)
 
         outputs = {
@@ -336,22 +337,23 @@ class TestMatcherRobustToInfLogits(unittest.TestCase):
         for _ in range(B):
             tl = torch.zeros(M, num_tokens, device=device)
             tl[:, :num_valid] = 1.0 / num_valid
-            targets.append({
-                "labels": torch.zeros(M, dtype=torch.long, device=device),
-                "boxes": torch.rand(M, 4, device=device),
-                "token_labels": tl,
-            })
+            targets.append(
+                {
+                    "labels": torch.zeros(M, dtype=torch.long, device=device),
+                    "boxes": torch.rand(M, 4, device=device),
+                    "token_labels": tl,
+                }
+            )
         return outputs, targets
 
     def test_no_nan_with_inf_padding_fp32(self):
         """Baseline: matcher produces finite cost matrix in pure FP32."""
         from ml_engine.training.losses import HungarianMatcher
+
         matcher = HungarianMatcher()
 
         # Heavy padding shape mirroring the real bug: 4 valid tokens out of 256.
-        outputs, targets = self._build_inputs_with_inf(
-            B=1, N=900, num_tokens=256, num_valid=4, M=6
-        )
+        outputs, targets = self._build_inputs_with_inf(B=1, N=900, num_tokens=256, num_valid=4, M=6)
         indices = matcher(outputs, targets)  # must not raise
         self.assertEqual(len(indices), 1)
         self.assertEqual(len(indices[0][0]), 6)  # one match per target
@@ -361,11 +363,17 @@ class TestMatcherRobustToInfLogits(unittest.TestCase):
         if not torch.cuda.is_available():
             self.skipTest("autocast(cuda, bfloat16) requires CUDA")
         from ml_engine.training.losses import HungarianMatcher
+
         matcher = HungarianMatcher()
         outputs, targets = self._build_inputs_with_inf(
-            B=1, N=900, num_tokens=256, num_valid=4, M=6, device="cuda",
+            B=1,
+            N=900,
+            num_tokens=256,
+            num_valid=4,
+            M=6,
+            device="cuda",
         )
-        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             indices = matcher(outputs, targets)
         self.assertEqual(len(indices), 1)
 
@@ -377,11 +385,17 @@ class TestMatcherRobustToInfLogits(unittest.TestCase):
         if not torch.cuda.is_available():
             self.skipTest("autocast(cuda, float16) requires CUDA")
         from ml_engine.training.losses import HungarianMatcher
+
         matcher = HungarianMatcher()
         outputs, targets = self._build_inputs_with_inf(
-            B=1, N=900, num_tokens=256, num_valid=4, M=6, device="cuda",
+            B=1,
+            N=900,
+            num_tokens=256,
+            num_valid=4,
+            M=6,
+            device="cuda",
         )
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
             indices = matcher(outputs, targets)
         self.assertEqual(len(indices), 1)
 
@@ -404,12 +418,14 @@ class TestLossLabelsDtypeAgnostic(unittest.TestCase):
         }
         targets = []
         for _ in range(B):
-            targets.append({
-                "labels": torch.zeros(M, dtype=torch.long, device=device),
-                "boxes": torch.rand(M, 4, device=device),
-                # token_labels stays fp32 by design (dino_utils.py:120)
-                "token_labels": torch.randint(0, 2, (M, T), dtype=torch.float32, device=device),
-            })
+            targets.append(
+                {
+                    "labels": torch.zeros(M, dtype=torch.long, device=device),
+                    "boxes": torch.rand(M, 4, device=device),
+                    # token_labels stays fp32 by design (dino_utils.py:120)
+                    "token_labels": torch.randint(0, 2, (M, T), dtype=torch.float32, device=device),
+                }
+            )
         return outputs, targets
 
     def test_loss_labels_under_fp16_autocast(self):
@@ -420,12 +436,13 @@ class TestLossLabelsDtypeAgnostic(unittest.TestCase):
         if not torch.cuda.is_available():
             self.skipTest("autocast(cuda, float16) requires CUDA")
         from ml_engine.training.losses import build_criterion
+
         criterion = build_criterion(num_classes=10, num_decoder_layers=2).cuda()
 
         outputs, targets = self._build_inputs(B=2, N=10, T=20, M=3, device="cuda")
 
         # Must not raise "Index put requires source and destination dtypes match"
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
             losses = criterion(outputs, targets)
         self.assertIn("loss_ce", losses)
         for name, val in losses.items():
@@ -436,11 +453,12 @@ class TestLossLabelsDtypeAgnostic(unittest.TestCase):
         if not torch.cuda.is_available():
             self.skipTest("autocast(cuda, bfloat16) requires CUDA")
         from ml_engine.training.losses import build_criterion
+
         criterion = build_criterion(num_classes=10, num_decoder_layers=2).cuda()
 
         outputs, targets = self._build_inputs(B=2, N=10, T=20, M=3, device="cuda")
 
-        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             losses = criterion(outputs, targets)
         self.assertIn("loss_ce", losses)
 

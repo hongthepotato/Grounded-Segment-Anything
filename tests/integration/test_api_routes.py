@@ -220,9 +220,7 @@ class TestAgentIssue004ResponseEnvelope:
     any environment where /plan can actually run.
     """
 
-    def test_plan_endpoint_returns_envelope(
-        self, client: TestClient, fake_aioredis, monkeypatch
-    ) -> None:
+    def test_plan_endpoint_returns_envelope(self, client: TestClient, fake_aioredis, monkeypatch) -> None:
         # Patch the per-endpoint redis resolver that agent.py uses.
         monkeypatch.setattr(
             "ml_engine.agent.redis_clients.get_async_redis_client",
@@ -269,9 +267,7 @@ class TestAgentIssue004ResponseEnvelope:
 class TestDistillationHappyPath:
     """POST /api/distillation should return the envelope with a new job id."""
 
-    def test_post_distillation_minimal_config_returns_job(
-        self, client: TestClient
-    ) -> None:
+    def test_post_distillation_minimal_config_returns_job(self, client: TestClient) -> None:
         payload = {
             "data_path": "upload/2026/03/train.json",
             "image_paths": ["upload/2026/03/labeled/a.jpg"],
@@ -317,9 +313,7 @@ class TestExportsHappyPath:
         # With no actual artifacts in the tmp dir, models dict is empty —
         # that's OK, the envelope shape is what we're guarding.
 
-    def test_list_exports_for_nonexistent_job_returns_404(
-        self, client: TestClient
-    ) -> None:
+    def test_list_exports_for_nonexistent_job_returns_404(self, client: TestClient) -> None:
         resp = client.get("/api/jobs/does-not-exist/exports")
         assert resp.status_code == 404
         assert resp.json()["status"] == "failed"

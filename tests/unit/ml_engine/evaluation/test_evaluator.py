@@ -84,8 +84,8 @@ class TestCxcywhNormToXyxyPixel:
     def test_multiple_boxes(self) -> None:
         boxes = torch.tensor(
             [
-                [0.25, 0.25, 0.5, 0.5],   # top-left quadrant
-                [0.75, 0.75, 0.5, 0.5],   # bottom-right quadrant
+                [0.25, 0.25, 0.5, 0.5],  # top-left quadrant
+                [0.75, 0.75, 0.5, 0.5],  # bottom-right quadrant
             ],
             dtype=torch.float32,
         )

@@ -396,9 +396,7 @@ class TestLoadMergedModel:
     def test_malformed_checkpoint_raises_clean_error(self, tmp_path: Path):
         """A checkpoint missing the model_state_dict key should fail loudly, not via KeyError."""
         out = tmp_path / "bad.pth"
-        torch.save(
-            {"metadata": {"format": "merged_grounding_dino"}}, out
-        )  # missing model_state_dict
+        torch.save({"metadata": {"format": "merged_grounding_dino"}}, out)  # missing model_state_dict
 
         target = _TinyModel()
         # Currently raises KeyError, not a domain-meaningful error

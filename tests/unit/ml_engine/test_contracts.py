@@ -20,16 +20,17 @@ from ml_engine.agent.contracts import (
     TargetSpec,
 )
 
-
 # ---------------------------------------------------------------------------
 # TargetSpec
 # ---------------------------------------------------------------------------
+
 
 class TestTargetSpec:
     r"""TargetSpec is the contract section that describes what the pipeline is trying to achieve,
     in terms of model outputs and evaluation criteria.
     It informs the entire pipeline design, from data processing
     to model architecture to evaluation metrics."""
+
     def test_defaults(self):
         r"""Test that default TargetSpec has empty class_names and "detection" output_mode."""
         t = TargetSpec(class_names=["defect"])
@@ -48,6 +49,7 @@ class TestTargetSpec:
 # DataSpec
 # ---------------------------------------------------------------------------
 
+
 class TestDataSpec:
     r"""DataSpec describes where the data lives and how to split it.
     It is used by the Coordinator to plan the pipeline and by the TeacherTrainingHandler
@@ -55,6 +57,7 @@ class TestDataSpec:
     but it can be customized by providing a split_config dict.
     The DataSpec also includes a list of image paths, which can be used for more
     fine-grained control over the dataset."""
+
     def test_default_split(self):
         r"""Test that the default split_config is 70% train, 15% val, 15% test."""
         d = DataSpec(data_path="/data", image_paths=[])
@@ -74,10 +77,12 @@ class TestDataSpec:
 # BudgetSpec
 # ---------------------------------------------------------------------------
 
+
 class TestBudgetSpec:
     r"""BudgetSpec defines limits on the pipeline execution to guide planning and prevent runaway jobs."""
+
     def test_defaults(self):
-        r"""Test that the default BudgetSpec has max_epochs=50, max_trials=20, max_retries=2, and no wall time limit."""
+        r"""Default BudgetSpec: max_epochs=50, max_trials=20, max_retries=2, no wall-time limit."""
         b = BudgetSpec()
         assert b.max_epochs == 50
         assert b.max_trials == 20
@@ -89,8 +94,10 @@ class TestBudgetSpec:
 # AcceptanceCriteria
 # ---------------------------------------------------------------------------
 
+
 class TestAcceptanceCriteria:
-    r"""AcceptanceCriteria defines the per-stage metric thresholds that the Evaluator uses for pass/fail decisions."""
+    r"""Per-stage metric thresholds that the Evaluator uses for pass/fail decisions."""
+
     def test_defaults(self):
         r"""Test that the default AcceptanceCriteria has min_mAP50=0.5, min_mIoU=0.4, and no max_val_loss."""
         c = AcceptanceCriteria()
@@ -109,31 +116,35 @@ class TestAcceptanceCriteria:
 # LineageSpec
 # ---------------------------------------------------------------------------
 
+
 class TestLineageSpec:
     r"""LineageSpec contains metadata for traceability, versioning, and reproducibility."""
+
     def test_version_hash_generated(self):
         r"""Test that a version_hash is automatically generated and is an 8-character string."""
-        l = LineageSpec()
-        assert isinstance(l.version_hash, str)
-        assert len(l.version_hash) == 8
+        lineage = LineageSpec()
+        assert isinstance(lineage.version_hash, str)
+        assert len(lineage.version_hash) == 8
 
     def test_created_at_set(self):
         r"""Test that created_at is automatically set to a non-empty string."""
-        l = LineageSpec()
-        assert l.created_at is not None
+        lineage = LineageSpec()
+        assert lineage.created_at is not None
 
     def test_parent_contract_id_defaults_none(self):
         r"""Test that parent_contract_id defaults to None if not provided."""
-        l = LineageSpec()
-        assert l.parent_contract_id is None
+        lineage = LineageSpec()
+        assert lineage.parent_contract_id is None
 
 
 # ---------------------------------------------------------------------------
 # PipelineContract.to_dict / from_dict
 # ---------------------------------------------------------------------------
 
+
 class TestPipelineContractSerialization:
-    r"""Test the to_dict and from_dict methods of PipelineContract, including nested dataclasses and edge cases."""
+    r"""to_dict / from_dict on PipelineContract — nested dataclasses + edge cases."""
+
     def _make_contract(self) -> PipelineContract:
         return PipelineContract(
             id="contract-001",
@@ -201,7 +212,7 @@ class TestPipelineContractSerialization:
         assert len(c.id) > 0
 
     def test_from_dict_empty_dict_has_defaults(self):
-        r"""Test that if from_dict is given an empty dict, it creates a PipelineContract with all default values."""
+        r"""from_dict with an empty dict produces a PipelineContract with all default values."""
         c = PipelineContract.from_dict({})
         assert c.target.class_names == []
         assert c.budget.max_retries == 2
@@ -213,7 +224,7 @@ class TestPipelineContractSerialization:
         assert isinstance(d, dict)
 
     def test_stage_configs_roundtrip(self):
-        r"""Test that the stage_configs field is preserved through to_dict and from_dict, even with nested dicts."""
+        r"""stage_configs is preserved through to_dict/from_dict, even with nested dicts."""
         c = PipelineContract(
             id="x",
             target=TargetSpec(class_names=[]),
@@ -231,11 +242,13 @@ class TestPipelineContractSerialization:
 # GateDecision
 # ---------------------------------------------------------------------------
 
+
 class TestGateDecision:
     r"""GateDecision represents the result of an Evaluator gate check,
     including the verdict (pass/retry/fail), the reason for the decision,
     and any relevant metrics. It is used by the Evaluator to
     communicate the outcome of the gate check."""
+
     def test_construction(self):
         r"""Test that we can construct a GateDecision with all fields and they are set correctly."""
         d = GateDecision(verdict="pass", reason="mAP50 met", metrics={"mAP50": 0.7}, retry_count=0)
@@ -245,7 +258,7 @@ class TestGateDecision:
         assert d.reason == "mAP50 met"
 
     def test_defaults(self):
-        r"""Test that if we construct a GateDecision with only verdict and reason, the metrics and retry_count default to empty dict and 0."""
+        r"""GateDecision with only verdict + reason: metrics defaults to {} and retry_count to 0."""
         d = GateDecision(verdict="retry", reason="low mAP50")
         assert d.metrics == {}
         assert d.retry_count == 0
@@ -254,6 +267,7 @@ class TestGateDecision:
 # ---------------------------------------------------------------------------
 # StageSummary.to_dict / from_dict
 # ---------------------------------------------------------------------------
+
 
 class TestStageSummary:
     def test_to_dict_roundtrip(self):

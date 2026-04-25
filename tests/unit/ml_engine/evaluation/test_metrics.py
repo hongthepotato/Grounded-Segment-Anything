@@ -63,7 +63,7 @@ class TestSegmentationMetricsPartialOverlap:
     def test_half_overlap(self) -> None:
         metrics = SegmentationMetrics(num_classes=1, class_names=["fg"], iou_threshold=0.3)
 
-        gt = _rect_mask(h=10, w=10, box=(0, 0, 4, 4)).unsqueeze(0)    # 16 px
+        gt = _rect_mask(h=10, w=10, box=(0, 0, 4, 4)).unsqueeze(0)  # 16 px
         pred = _rect_mask(h=10, w=10, box=(2, 0, 6, 4)).unsqueeze(0)  # 16 px
         # intersection = rows 2..4, cols 0..4 = 2 * 4 = 8 px
         # union = 16 + 16 - 8 = 24 px
@@ -121,7 +121,7 @@ class TestSegmentationMetricsEmptyInputs:
         result = metrics.compute()
 
         assert result["precision"] == pytest.approx(0.0, abs=1e-6)  # 0 TP / (0 TP + 0 FP)
-        assert result["recall"] == pytest.approx(0.0, abs=1e-6)     # 0 / 1
+        assert result["recall"] == pytest.approx(0.0, abs=1e-6)  # 0 / 1
 
     def test_empty_gt_all_fp(self) -> None:
         metrics = SegmentationMetrics(num_classes=1, class_names=["fg"])
@@ -167,15 +167,19 @@ class TestDetectionMetricsShape:
     def test_compute_returns_expected_keys(self) -> None:
         metrics = DetectionMetrics(num_classes=2, class_names=["a", "b"])
 
-        preds = [{
-            "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
-            "scores": torch.tensor([0.9]),
-            "labels": torch.tensor([0]),
-        }]
-        tgts = [{
-            "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
-            "labels": torch.tensor([0]),
-        }]
+        preds = [
+            {
+                "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
+                "scores": torch.tensor([0.9]),
+                "labels": torch.tensor([0]),
+            }
+        ]
+        tgts = [
+            {
+                "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
+                "labels": torch.tensor([0]),
+            }
+        ]
         metrics.update(preds, tgts)
         result = metrics.compute()
 
@@ -187,15 +191,19 @@ class TestDetectionMetricsShape:
     def test_per_class_counts_tracked(self) -> None:
         metrics = DetectionMetrics(num_classes=2, class_names=["a", "b"])
 
-        preds = [{
-            "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
-            "scores": torch.tensor([0.9]),
-            "labels": torch.tensor([0]),
-        }]
-        tgts = [{
-            "boxes": torch.tensor([[0, 0, 10, 10], [5, 5, 15, 15]], dtype=torch.float32),
-            "labels": torch.tensor([0, 1]),
-        }]
+        preds = [
+            {
+                "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
+                "scores": torch.tensor([0.9]),
+                "labels": torch.tensor([0]),
+            }
+        ]
+        tgts = [
+            {
+                "boxes": torch.tensor([[0, 0, 10, 10], [5, 5, 15, 15]], dtype=torch.float32),
+                "labels": torch.tensor([0, 1]),
+            }
+        ]
         metrics.update(preds, tgts)
         result = metrics.compute()
 
@@ -207,15 +215,19 @@ class TestDetectionMetricsReset:
     def test_reset_clears_counts(self) -> None:
         metrics = DetectionMetrics(num_classes=1, class_names=["a"])
 
-        preds = [{
-            "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
-            "scores": torch.tensor([0.9]),
-            "labels": torch.tensor([0]),
-        }]
-        tgts = [{
-            "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
-            "labels": torch.tensor([0]),
-        }]
+        preds = [
+            {
+                "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
+                "scores": torch.tensor([0.9]),
+                "labels": torch.tensor([0]),
+            }
+        ]
+        tgts = [
+            {
+                "boxes": torch.tensor([[0, 0, 10, 10]], dtype=torch.float32),
+                "labels": torch.tensor([0]),
+            }
+        ]
         metrics.update(preds, tgts)
         assert metrics.class_counts[0] == 1
         metrics.reset()

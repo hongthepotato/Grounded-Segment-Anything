@@ -11,7 +11,6 @@ import pytest
 
 from ml_engine.experiment.trial_log import TrialLog, TrialRecord
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -43,8 +42,10 @@ def rec(trial_id: str, metric: float, overrides: dict = None, status: str = "kee
 # Construction
 # ---------------------------------------------------------------------------
 
+
 class TestConstruction:
     r"""Tests for TrialLog constructor behavior."""
+
     def test_creates_output_dir(self, tmp_path):
         r"""Constructor should create output dir if it doesn't exist."""
         out_dir = tmp_path / "run-x" / "nested"
@@ -63,8 +64,10 @@ class TestConstruction:
 # append / best tracking
 # ---------------------------------------------------------------------------
 
+
 class TestAppend:
     r"""Tests for append() method and best metric tracking."""
+
     def test_append_adds_trial(self, tmp_path):
         r"""Appending a trial should add it to the log's trials list."""
         log = make_log(tmp_path)
@@ -150,8 +153,10 @@ class TestAppend:
 # trials property
 # ---------------------------------------------------------------------------
 
+
 class TestTrialsProperty:
     r"""Tests for the trials property, which should return a copy of the trials list."""
+
     def test_returns_copy(self, tmp_path):
         r"""Accessing the trials property should return a copy, not the original list."""
         log = make_log(tmp_path)
@@ -165,8 +170,10 @@ class TestTrialsProperty:
 # to_llm_context
 # ---------------------------------------------------------------------------
 
+
 class TestToLlmContext:
     r"""Tests for to_llm_context() method, which formats log info for LLM input."""
+
     def test_includes_run_id(self, tmp_path):
         r"""to_llm_context output should include the run_id."""
         log = make_log(tmp_path, run_id="my-run")
@@ -191,8 +198,12 @@ class TestToLlmContext:
         r"""A trial with primary_metric=None should show "N/A" in the LLM context."""
         log = make_log(tmp_path)
         no_metric = TrialRecord(
-            trial_id="t-none", overrides={}, primary_metric=None,
-            all_metrics={}, status="crashed", description="crashed",
+            trial_id="t-none",
+            overrides={},
+            primary_metric=None,
+            all_metrics={},
+            status="crashed",
+            description="crashed",
         )
         log.append(no_metric)
         text = log.to_llm_context()
@@ -210,8 +221,10 @@ class TestToLlmContext:
 # to_feedback_record
 # ---------------------------------------------------------------------------
 
+
 class TestToFeedbackRecord:
     r"""Tests for to_feedback_record() method, which exports log info for MemoryStore."""
+
     def test_contains_required_fields(self, tmp_path):
         r"""to_feedback_record output should contain run_id, best_metric, trial_count, and best_overrides."""
         log = make_log(tmp_path)
@@ -242,8 +255,10 @@ class TestToFeedbackRecord:
 # Persistence: _flush / load
 # ---------------------------------------------------------------------------
 
+
 class TestPersistenceLoad:
     r"""Tests for the load() class method, which should recover log state from disk."""
+
     def test_load_recovers_all_trials(self, tmp_path):
         r"""A log loaded from disk should have the same trials as were appended before saving."""
         out_dir = str(tmp_path / "load-test")
