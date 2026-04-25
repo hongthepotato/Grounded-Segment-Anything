@@ -17,7 +17,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-def load_config(config_path: str) -> Dict[str, Any]:
+def load_config(config_path: str | Path) -> Dict[str, Any]:
     """
     Load configuration from YAML file.
 
@@ -43,7 +43,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
-def save_config(config: Dict[str, Any], output_path: str) -> None:
+def save_config(config: Dict[str, Any], output_path: str | Path) -> None:
     """
     Save configuration to YAML file.
 
@@ -64,7 +64,7 @@ def save_config(config: Dict[str, Any], output_path: str) -> None:
     logger.info("Saved config to: %s", output_path)
 
 
-def load_json(json_path: str) -> Dict[str, Any]:
+def load_json(json_path: str | Path) -> Dict[str, Any]:
     """
     Load JSON file.
 
@@ -85,7 +85,7 @@ def load_json(json_path: str) -> Dict[str, Any]:
     return data
 
 
-def save_json(data: Dict[str, Any], output_path: str) -> None:
+def save_json(data: Dict[str, Any], output_path: str | Path) -> None:
     """Save data to JSON file."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

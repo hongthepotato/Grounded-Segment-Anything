@@ -98,7 +98,11 @@ def configure_logging(
     if format_type.lower() == FORMAT_TYPE_JSON:
         formatter = JSONFormatter()
     else:
-        # Use colored formatter for console if TTY detected
+        # `console_formatter` is annotated as the base `logging.Formatter` so
+        # mypy doesn't narrow the type to whichever branch's class is assigned
+        # first (ColoredTextFormatter and TextFormatter are sibling subclasses
+        # of logging.Formatter, not in a subclass relationship to each other).
+        console_formatter: logging.Formatter
         if sys.stdout.isatty():
             console_formatter = ColoredTextFormatter()
         else:
@@ -209,7 +213,10 @@ def get_job_logger(job_id: str, output_dir: str, name: str = "training") -> logg
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"{name}_{timestamp}.log"
 
-    # Create formatter with job context
+    # Create formatter with job context. Annotated as the base `logging.Formatter`
+    # so mypy accepts both branch assignments (JSONFormatter vs TextFormatter are
+    # sibling subclasses, not in a subclass relationship).
+    formatter: logging.Formatter
     if format_type.lower() == FORMAT_TYPE_JSON:
         formatter = JSONFormatter(extra_fields={"job_id": job_id})
     else:
