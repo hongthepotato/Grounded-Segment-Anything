@@ -18,7 +18,15 @@ class AugmentationRule:
 
     augmentations: List[str]
     reason: str
-    intensity_ranges: Dict[str, Dict[str, AlbumentationsParameter]]
+    # 3-level nesting: intensity → augmentation_name → param_name → param.
+    # The previous Dict[str, Dict[str, AlbumentationsParameter]] annotation
+    # was off-by-one — it claimed flat (param_name -> param) under the
+    # intensity key, but the data is actually grouped by augmentation_name
+    # first. The innermost value is `Any` (not `AlbumentationsParameter`)
+    # because a few entries (flare_roi/shadow_roi) hold raw tuples that pass
+    # through to albumentations unchanged. transform_builders dispatches on
+    # the actual value type at runtime; static narrowing here would lie.
+    intensity_ranges: Dict[str, Dict[str, Dict[str, Any]]]
 
     def __post_init__(self):
         """Validate rule structure at initialization"""
@@ -1145,8 +1153,8 @@ class CharacteristicTranslator:
 
         # Allow empty inputs - will create identity pipeline (no-op)
         # This is useful for dynamic configurations or GUI scenarios
-        merged_augmentations = {}
-        applied_rules = []
+        merged_augmentations: Dict[str, Dict[str, Any]] = {}
+        applied_rules: List[Dict[str, Any]] = []
 
         # Add characteristic-specific transforms
         for characteristic in characteristics:
@@ -1286,7 +1294,7 @@ class CharacteristicTranslator:
             Validation result
         """
         available_envs = self.get_available_environments()
-        validation_result = {"valid": True, "errors": [], "warnings": []}
+        validation_result: Dict[str, Any] = {"valid": True, "errors": [], "warnings": []}
 
         for env_key, env_value in environment.items():
             if env_key not in available_envs:

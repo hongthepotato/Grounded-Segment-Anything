@@ -86,7 +86,7 @@ class ConfigurableAugmentationPipeline:
     def _validate_input_data(
         self,
         image: np.ndarray,
-        masks: List[np.ndarray],
+        masks: Optional[List[np.ndarray]] = None,
         keypoints: Optional[List[List[int]]] = None,
         bboxes: Optional[List[List[int]]] = None,
     ) -> None:
@@ -121,7 +121,7 @@ class ConfigurableAugmentationPipeline:
 
         self._validate_bboxes(bboxes, image_h, image_w)
 
-    def _validate_masks(self, masks: List[np.ndarray], image_h: int, image_w: int) -> None:
+    def _validate_masks(self, masks: Optional[List[np.ndarray]], image_h: int, image_w: int) -> None:
         """
         Validate masks, check the type of the masks and the shape of the masks
 
@@ -157,7 +157,7 @@ class ConfigurableAugmentationPipeline:
                     f"got {mask.shape[0]}x{mask.shape[1]} and {image_h}x{image_w}"
                 )
 
-    def _validate_keypoints(self, keypoints: List[List[int]], image_h: int, image_w: int) -> None:
+    def _validate_keypoints(self, keypoints: Optional[List[List[int]]], image_h: int, image_w: int) -> None:
         """
         Validate keypoints, check the type of the keypoints and the shape of the keypoints
 
@@ -241,7 +241,7 @@ class ConfigurableAugmentationPipeline:
                     f"(width={image_w}, height={image_h})"
                 )
 
-    def _validate_bboxes(self, bboxes: List[List[int]], image_h: int, image_w: int) -> None:
+    def _validate_bboxes(self, bboxes: Optional[List[List[int]]], image_h: int, image_w: int) -> None:
         """
         Validate bboxes in COCO format [x, y, width, height].
 
@@ -457,22 +457,30 @@ class ConfigurableAugmentationPipeline:
 
         self._validate_input_data(image, masks, keypoints, bboxes)
 
-        # Prepare augmentation inputs
-        aug_input = {"image": image}
-
+        # `has_X` booleans capture presence-and-non-empty for the result
+        # section below (which can't re-check the original Optional inputs
+        # because they may have been mutated by the pipeline).
         has_masks = masks is not None and len(masks) > 0
         has_keypoints = keypoints is not None and len(keypoints) > 0
         has_bboxes = bboxes is not None and len(bboxes) > 0
 
-        if has_masks:
+        # `aug_input` mixes ndarray (image, stacked masks) and lists
+        # (keypoints, bboxes); annotate as Dict[str, Any] so mypy doesn't
+        # narrow to dict[str, ndarray] from the first key. The inline
+        # `is not None and len(...) > 0` checks (instead of the has_X
+        # booleans) let mypy narrow the Optional list types inside each
+        # block — has_X booleans aren't type-guards on their own.
+        aug_input: Dict[str, Any] = {"image": image}
+
+        if masks is not None and len(masks) > 0:
             aug_input["masks"] = np.stack(masks, axis=0)
             logger.debug("Stacked %d masks for augmentation", len(masks))
 
-        if has_keypoints:
+        if keypoints is not None and len(keypoints) > 0:
             aug_input["keypoints"] = keypoints
             logger.debug("Added %d keypoints for augmentation", len(keypoints))
 
-        if has_bboxes:
+        if bboxes is not None and len(bboxes) > 0:
             aug_input["bboxes"] = bboxes
             logger.debug("Added %d bounding boxes for augmentation", len(bboxes))
 
