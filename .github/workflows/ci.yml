@@ -78,13 +78,14 @@ jobs:
       - name: ruff format check
         run: uv run --no-sync ruff format --check .
 
-      # mypy stays advisory until TODOS #6 (typed overrides) and #13
-      # (mypy hygiene in ml_engine/export/merger.py) clear the baseline.
-      # Flipping this to gating before then would block every PR on
-      # pre-existing type errors that aren't the PR's concern.
+      # mypy gates merges (TODOS #6 cleared the 416-error baseline to 0
+      # across all gated dirs as of 2026-04-26 — see PR #34/#35/#37/#38/#39).
+      # Same pattern as the ruff gate above: errors on the staged dirs
+      # block the merge, transitive third-party imports (groundingdino,
+      # peft, segment_anything, etc.) get --ignore-missing-imports.
+      # augmentation/ added to scope (also clean per Step 2.3 of TODO #6).
       - name: mypy
-        run: uv run --no-sync mypy core ml_engine api --ignore-missing-imports
-        continue-on-error: true
+        run: uv run --no-sync mypy core ml_engine api augmentation --ignore-missing-imports
 
   unit:
     runs-on: ubuntu-24.04
