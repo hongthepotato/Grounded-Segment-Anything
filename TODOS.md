@@ -96,7 +96,19 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 ### 6. mypy baseline cleanup — drive 416 errors to zero, then flip the gate
 
-**Status:** Baseline measured 2026-04-25 — `uv run --no-sync mypy core ml_engine api --ignore-missing-imports` reports **410 errors in 50 files** (after Step 1 installed `types-PyYAML` and cleared 6 `yaml`-import errors). `continue-on-error: true` on the mypy step in `ci.yml` keeps CI passing while this baseline exists.
+**Status:** Path A chosen 2026-04-25 — committed to driving the baseline to zero across all maintained directories.
+
+**Live baseline:** **400 errors in 48 files** (after Step 1 stubs + Step 2 core/ — see progress below).
+
+`continue-on-error: true` on the mypy step in `ci.yml` keeps CI passing while this baseline exists. Step 3 flips that off after Step 2 finishes.
+
+**Progress:**
+- ✅ Step 1: installed `types-PyYAML` (cleared 6 yaml errors). Baseline 416 → 410.
+- ✅ Step 2.1: `core/` clean — 4 functions in `config.py` widened `path: str` → `path: str | Path`; 2 formatter locals in `logging_config.py` annotated as base `logging.Formatter`. Baseline 410 → 400.
+- ⬜ Step 2.2: `api/` (estimated ~30-50 own errors)
+- ⬜ Step 2.3: `augmentation/` (estimated ~25-50 own errors)
+- ⬜ Step 2.4: `ml_engine/` (the bulk; will need sub-PR splits like ruff cleanup did)
+- ⬜ Step 3: flip `continue-on-error` → false in ci.yml's mypy step
 
 **Step 1 outcome (shipped):** Installed `types-PyYAML` only. Surveyed our other third-party imports (PIL, tqdm, requests) — type stubs exist for those too, but installing them would NOT drop the count today: `--ignore-missing-imports` already suppresses errors for libraries without inline type info, and adding their stubs would START flagging code that uses them. That's a NET INCREASE in the visible baseline, not a decrease — wrong direction for a "quick win" PR. Those stubs should ride with the per-directory cleanup PRs (Step 2) when the related code is being touched anyway.
 
@@ -149,15 +161,15 @@ Step 3 (1 PR, 1 line):
 
 **Cons:** 416 existing errors require per-file judgment work. Ongoing per-PR cost to maintain types. ML libraries (PEFT, transformers, accelerate) use heavy `__getattr__` delegation that mypy can't model — `Any` casts will be needed at boundaries even after cleanup (item 13 documented this for PEFT).
 
-**Recommended next action: DECIDE.** Step 1 is done — the post-stubs baseline is 410 errors in 50 files, only marginally better than 416/53. The "missing stubs" surface turned out to be tiny. Now choose:
+**Recommended next action: continue Step 2.** Path A is the chosen direction. Next is `mypy-baseline-api/` (estimated ~30-50 errors). Use the same per-case judgment that worked for `core/`:
+- Path-as-string parameter pattern → widen to `str | Path`
+- Subclass-narrowing pattern → annotate as base type
+- Variable shadowing → rename or refactor
+- Truly intractable cases (PEFT-like `__getattr__` delegation) → `Any` cast at boundary, with comment
 
-- **Path A (full strict)** — commit to ~2-3 weeks of per-directory cleanup PRs (Step 2) followed by the gate flip (Step 3). Worth it if type bugs have been biting in production.
-- **Path B (status quo)** — leave mypy advisory forever; fix high-value modules opportunistically. Costs nothing now; defers all benefits.
-- **Path C (strict-on-critical-only — recommended)** — flip mypy to gating ONLY for `core/` (config, logging) and `api/schemas.py` (request/response wire format). Keep `ml_engine/` and others advisory. ~1 PR of work; captures most of the bug-prevention value with minimal cleanup overhead.
+If a particular file proves harder than expected, file a sub-TODO and move on. Don't let one stubborn file block the whole rollout.
 
-Step 2 ought to wait until this decision is made — kicking off per-directory cleanup PRs without knowing the end state is wasted work.
-
-**Depends on / blocked by:** the A/B/C decision above. None of the steps below it block each other.
+**Depends on / blocked by:** none. Step 2.2/2.3/2.4 don't block each other; can be done in any order or even in parallel.
 
 ---
 
