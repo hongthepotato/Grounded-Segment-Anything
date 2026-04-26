@@ -26,6 +26,7 @@ For more information, see README.md
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -112,7 +113,7 @@ def visualize_results(
     boxes: torch.Tensor,
     logits: torch.Tensor,
     phrases: list,
-    output_path: str = None,
+    output_path: Optional[str] = None,
 ):
     """Visualize detection results on image."""
     from groundingdino.util.inference import annotate
