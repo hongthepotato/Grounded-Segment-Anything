@@ -36,12 +36,12 @@ class BaseModelRef:
 class CreateByInfo:
     """Information about who created the artifact"""
 
-    # Optional because the trainer (called via subprocess_runner) doesn't
-    # currently propagate the parent job_id down to model_trainers/base.py
-    # at adapter-save time. Filing as a follow-up: plumbing job_id through
-    # would let us populate this consistently. For now, manifests written
-    # from training can have job_id=None; manifests written by other paths
-    # (tests, post-hoc tools) supply the real id.
+    # TODO #16: revert to `job_id: str` once the plumbing lands. Optional
+    # is a marker for the gap: the trainer (called via subprocess_runner)
+    # doesn't propagate the parent job_id down to model_trainers/base.py
+    # at adapter-save time, so manifests written from training currently
+    # have job_id=None. Manifests written by other paths (tests, post-hoc
+    # tools) supply the real id.
     job_id: Optional[str]
     timestamp: str
 
@@ -79,6 +79,7 @@ class BundleManifest:
     # model_name -> relative path (from where bundle.manifest.json lives) of
     # the corresponding adapter.manifest.json.
     artifacts: Dict[str, str]
+    # TODO #16: revert to `Dict[str, str]` once the plumbing lands.
     # Optional[str] mirrors CreateByInfo.job_id above — the trainer doesn't
     # currently propagate job_id down to bundle save, so values can be None.
     lineage: Dict[str, Optional[str]]  # "job_id"

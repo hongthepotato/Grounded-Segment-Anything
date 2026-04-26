@@ -343,6 +343,77 @@ Then the route's main loop becomes `async for event in _subscribe_to_events(...)
 
 ---
 
+### 16. Plumb `job_id` through training pipeline so artifact manifests carry real lineage (revert Optional schemas)
+
+**What:** Thread `job_id` from `_job_entry_point` (where it already exists) all the way down to `BaseModelTrainer.save_adapters()` and `Trainer._save_adapters()`. Then revert `CreateByInfo.job_id` and `BundleManifest.lineage` in `ml_engine/artifacts/schemas.py` from `Optional[str]` back to `str`/`Dict[str, str]` (their current Optional widening is a marker for this gap, not a desired type).
+
+**Why:** Today the artifact manifests written by training jobs have `created_by.job_id = None` and `lineage = {"job_id": None}` because the trainer can't see the parent job_id. The fact that the schemas had to be widened to Optional[str] in Step 2.4.3 of TODO #6 is the smell — the value is *known at job submission time* (line 79 of `api/routes/jobs.py` enqueues with a real id) but is dropped at the subprocess boundary in `subprocess_runner._job_entry_point` (line 409), which calls `handler.run(job_config=..., output_dir=..., progress_queue=..., cancel_event=...)` without forwarding the job_id it already holds (line 333).
+
+**Why now matters more:** Without lineage, you can't go from a `bundle.manifest.json` on disk back to the job that produced it. That breaks: post-hoc debugging ("which job made this bad model?"), audit/compliance ("who/when produced this artifact?"), automated cleanup ("delete artifacts from cancelled jobs"), and any future eval-tracking that wants to correlate model performance with training-job config.
+
+**Pros:**
+- Manifests become forensically useful (job_id → logs → config → diff against other jobs)
+- Schema reflects reality — no more "Optional because we lost the value mid-pipeline" workarounds
+- Removes one of two follow-up `# TODO: plumb job_id` comments in `ml_engine/artifacts/schemas.py` documenting the gap
+- Enables a future `GET /api/artifacts/from-job/{job_id}` query without external joins
+
+**Cons:**
+- 10-file refactor touching 4 handler subclasses + abstract base + subprocess_runner + Trainer + BaseModelTrainer + trial_runner + schemas. Medium-sized PR but mechanical.
+- Test surface: any test that constructs a `Trainer`, `BaseModelTrainer`, or invokes a `JobHandler.run(...)` directly needs to pass a synthetic `job_id`. Most production tests already use real job objects, but unit tests that bypass the queue (e.g., direct trainer instantiation in pytest fixtures) will need updating.
+- For trial-mode (`ExperimentLoopHandler` → `_trial_subprocess`), we need to decide what populates `job_id` for per-trial manifests. Options: (a) reuse the parent job_id (clean — every trial in an experiment shares the experiment's job_id, lineage groups them), (b) use the trial_id (e.g. `trial_a1b2c3d4`) so each trial's artifact is uniquely identifiable, (c) compose: `f"{job_id}/{trial_id}"`. Recommend (c) — preserves both the parent-job link and per-trial uniqueness without changing the schema field name.
+
+**Plumbing path (top-down):**
+
+1. `ml_engine/jobs/handlers/base.py`: add `job_id: str` to abstract `run()` signature
+2. `ml_engine/jobs/subprocess_runner.py:409`: pass `job_id=job_id` to `handler.run(...)` (the variable already exists on line 333)
+3. Each handler subclass — accept and forward:
+   - `auto_label.py` — pass to AutoLabeler constructor (currently writes no manifest, but ready for future)
+   - `teacher.py` — pass to `Trainer(job_id=job_id, ...)`
+   - `distillation.py` — pass through (StudentDistillationHandler may need to feed it into the YOLO training subprocess too)
+   - `experiment_loop.py` — store as parent job_id; per-trial subprocess composes `f"{job_id}/{trial_id}"` per option (c) above
+4. `ml_engine/training/trainer.py`:
+   - `Trainer.__init__` adds `job_id: str` parameter, stores `self.job_id: str`
+   - Forwards to per-model trainers in `_init_trainers`
+   - `_save_adapters` uses `self.job_id` in `BundleManifest(lineage={"job_id": self.job_id})`
+5. `ml_engine/training/model_trainers/base.py`:
+   - `BaseModelTrainer.__init__` adds `job_id: str`, stores `self.job_id: str`
+   - `save_adapters()` uses `self.job_id` in `CreateByInfo(job_id=self.job_id, timestamp=...)`
+6. `ml_engine/experiment/trial_runner.py`:
+   - `_trial_subprocess` accepts `job_id: str` and `trial_id: str` separately
+   - Composes `f"{job_id}/{trial_id}"` and passes to `Trainer(job_id=...)`
+7. `ml_engine/artifacts/schemas.py` — revert:
+   - `CreateByInfo.job_id: Optional[str]` → `str`
+   - `BundleManifest.lineage: Dict[str, Optional[str]]` → `Dict[str, str]`
+   - `BaseAdapterMismatch.__init__(expected, actual)` can stay Optional[str] — that one is genuinely about Optional fields on `BaseModelRef`, unrelated to this gap
+
+**Test surface (additions/changes):**
+
+Existing tests to update (any that construct Trainer/handlers directly):
+- `tests/unit/test_training_manager.py` — uses TrainingManager directly, no Trainer construction; should not need changes
+- `tests/unit/test_losses.py` — only loss math; no changes
+- `tests/contract/test_training_invariants.py` — verify whether it constructs Trainer directly; if yes, add fixture `job_id="test-job-{uuid}"`
+- `tests/unit/ml_engine/test_student_trainer.py` — likely needs job_id fixture
+- `tests/unit/ml_engine/artifacts/test_schemas.py` — already passes real `job_id="job-abc"` strings; no changes needed for the Optional→str revert (will type-check more strictly but the test data is compliant)
+- `tests/unit/ml_engine/distillation/test_pseudo_label.py` — uses real `job_id="test-job"` strings; no changes needed for the schema revert
+
+New tests to add (validates the plumbing actually works end-to-end):
+- `tests/unit/ml_engine/training/test_lineage.py` (new file):
+  - `test_trainer_propagates_job_id_to_per_model_trainers` — construct `Trainer(job_id="test-job-1", ...)`, assert `trainer.trainers["sam"].job_id == "test-job-1"`
+  - `test_save_adapters_writes_job_id_in_manifest` — run `BaseModelTrainer.save_adapters()` against a temp dir with a stub LoRA model, load the written `adapter.manifest.json`, assert `manifest["created_by"]["job_id"] == "test-job-1"`
+  - `test_save_bundle_writes_job_id_in_lineage` — same but for `Trainer._save_adapters` writing `bundle.manifest.json`, assert `manifest["lineage"]["job_id"] == "test-job-1"`
+- `tests/unit/ml_engine/jobs/handlers/test_run_signature.py` (new file):
+  - `test_all_handlers_accept_job_id` — for each registered handler in `TRAINER_REGISTRY`, assert `inspect.signature(handler.run).parameters` includes `"job_id"`. Catches future handlers that drift from the abstract signature.
+- `tests/integration/test_job_to_manifest_lineage.py` (new file, optional but high value):
+  - End-to-end: enqueue a tiny teacher-training job, run it through `JobManager`, wait for completion, load the bundle.manifest.json from the output dir, assert `lineage["job_id"]` matches the enqueued id. Catches any plumbing break in CI without needing the full GPU training path (use a stub trainer that writes a manifest in 1 epoch).
+- `tests/unit/ml_engine/experiment/test_trial_lineage.py` (new file):
+  - `test_trial_id_composes_with_job_id_in_manifest` — verify the `f"{job_id}/{trial_id}"` composition for trials produces a manifest whose `created_by.job_id` is the composed string. Decide whether to test that string parsing back into (job, trial) is supported (probably not — the composition is one-way for now).
+
+**Context:** Surfaced 2026-04-26 during Step 2.4.3 of TODO #6 (mypy cleanup of `ml_engine/training/`). The `CreateByInfo.job_id: Optional[str]` and `BundleManifest.lineage: Dict[str, Optional[str]]` changes in `ml_engine/artifacts/schemas.py` were required to make mypy pass without doing this refactor mid-cleanup. Both fields have a comment block at their definition pointing to this TODO. Once this lands, those comments + Optional widenings should be reverted.
+
+**Depends on / blocked by:** TODO #6 Step 2.4.3 PR landing first (so this branches off a clean baseline). Should NOT block the next subdirs of TODO #6 — those don't touch the artifact schema. Recommend shipping this AFTER all of TODO #6 lands so the revert isn't reviewed alongside other type changes (cleaner diff: "fields go from Optional[str] back to str, supported by 9 plumbing changes elsewhere").
+
+---
+
 ## Completed
 
 Historical record of items that have shipped. Kept rather than deleted so external
