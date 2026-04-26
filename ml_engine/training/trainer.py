@@ -215,14 +215,14 @@ class Trainer:
     def _init_visualizer(self) -> None:
         """Initialize prediction visualizer."""
         save_predictions = self.config.get("evaluation", {}).get("save_predictions", False)
+        # Optional visualizer — only created when save_predictions is on.
+        self.visualizer: Optional[PredictionVisualizer] = None
         if save_predictions:
             self.visualizer = PredictionVisualizer(
                 output_dir=str(self.output_dir / "predictions"),
                 max_samples_per_epoch=8,
                 enabled=True,
             )
-        else:
-            self.visualizer = None
 
     def train(self) -> Dict[str, float]:
         """
@@ -314,7 +314,9 @@ class Trainer:
 
     def _train_epoch(self, epoch: int) -> Dict[str, float]:
         """Train for one epoch across all models."""
-        metrics_acc = defaultdict(list)
+        # Annotate so mypy knows the values are list[float] (not list[Any]
+        # or float-narrowed from later inference).
+        metrics_acc: defaultdict[str, list[float]] = defaultdict(list)
         total_steps = len(self.train_loader)
 
         pbar = tqdm(self.train_loader, desc=f"Train {epoch + 1}")
@@ -323,11 +325,13 @@ class Trainer:
             if self.cancel_check and self.cancel_check():
                 raise TrainingCancelledException("Training cancelled")
 
-            # Train each model
+            # Train each model. Inner-loop var is `loss_v: float` (not just
+            # `v`) so mypy doesn't fix the function-scope type and reject
+            # the outer loop's `v: list[float]` reassignment below.
             for name, trainer in self.trainers.items():
                 losses = trainer.train_batch(batch)
-                for k, v in losses.items():
-                    metrics_acc[f"{name}_{k}"].append(v)
+                for k, loss_v in losses.items():
+                    metrics_acc[f"{name}_{k}"].append(loss_v)
 
             # Update progress bar
             postfix = {}
@@ -365,14 +369,14 @@ class Trainer:
     @torch.no_grad()
     def _validate_epoch(self, epoch: int) -> Dict[str, float]:
         """Validate for one epoch across all models."""
-        metrics_acc = defaultdict(list)
+        metrics_acc: defaultdict[str, list[float]] = defaultdict(list)
 
         pbar = tqdm(self.val_loader, desc="Validation")
         for batch in pbar:
             for name, trainer in self.trainers.items():
                 losses = trainer.validate_batch(batch)
-                for k, v in losses.items():
-                    metrics_acc[f"{name}_{k}"].append(v)
+                for k, loss_v in losses.items():
+                    metrics_acc[f"{name}_{k}"].append(loss_v)
 
             postfix = {}
             for k, v in metrics_acc.items():

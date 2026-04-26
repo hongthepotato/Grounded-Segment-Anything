@@ -39,7 +39,11 @@ class ArtifactCorruptedError(ArtifactError):
 class BaseAdapterMismatch(ArtifactError):
     """Adapter is structurally incompatible with the requested base model"""
 
-    def __init__(self, adapter_path: Path, expected: str, actual: str):
+    def __init__(self, adapter_path: Path, expected: Optional[str], actual: Optional[str]):
+        # expected/actual are Optional because BaseModelRef fields
+        # (checkpoint_path, model_type) are Optional — a None on either side
+        # is a legitimate mismatch case (e.g., an adapter without model_type
+        # metadata being checked against a base that requires it).
         self.expected = expected
         self.actual = actual
         super().__init__(
