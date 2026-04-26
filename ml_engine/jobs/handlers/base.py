@@ -7,6 +7,7 @@ that inherits from JobHandler and provides the run() method.
 
 import multiprocessing as mp
 from abc import ABC, abstractmethod
+from multiprocessing.synchronize import Event as MpEvent
 from typing import Any, Dict
 
 
@@ -40,7 +41,9 @@ class JobHandler(ABC):
         job_config: Dict[str, Any],
         output_dir: str,
         progress_queue: mp.Queue,
-        cancel_event: mp.Event,
+        # mp.Event is a factory function (returns a synchronize.Event
+        # instance), not a class — using it as an annotation breaks mypy.
+        cancel_event: MpEvent,
     ) -> None:
         """
         Execute the job.

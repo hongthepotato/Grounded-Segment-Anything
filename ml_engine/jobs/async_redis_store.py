@@ -47,6 +47,15 @@ class AsyncRedisJobStore:
     ):
         self.redis_url = redis_url
         self.db = db
+        # `self.redis: Any` instead of _aredis.Redis: redis-py's stubs
+        # declare async client methods as `Awaitable[X] | X` (an artifact
+        # of the same class inheriting both sync and async command mixins
+        # — see redis.asyncio.Redis.__mro__). That makes every
+        # `await self.redis.method()` below fail mypy with
+        # "Awaitable[X] | X is not Awaitable[Any]". Trade-off: lose
+        # method-name typo detection on the redis client; gain a clean
+        # baseline. Same workaround in the sync sibling RedisJobStore.
+        self.redis: Any
         if redis_client is not None:
             # Test path: caller passes a pre-built async client (e.g. fakeredis).
             self.redis = redis_client
