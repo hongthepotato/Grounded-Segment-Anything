@@ -414,6 +414,85 @@ New tests to add (validates the plumbing actually works end-to-end):
 
 ---
 
+### 17. Restore `text_threshold` token-level filtering in GroundingDINODetector (silent drop bug)
+
+**What:** The `text_threshold` parameter flows from the public API
+(`api/schemas.py:247`, default 0.5) all the way through:
+`POST /api/autolabel` → `autolabel.py:75` → `auto_label.py:82` →
+`DetectionThresholds.text` → `AutoLabeler.config.thresholds.text` →
+`detector.detect(text_threshold=...)` → and is **silently dropped** by
+`GroundingDINODetector.detect()` (`ml_engine/inference/detectors/grounding_dino.py`).
+The implementation currently accepts the param but does nothing with it
+(marked `_ = text_threshold` for linter silence). The original token-level
+filter (`logit > text_threshold` inside `logits_to_class_scores` /
+`get_phrases_from_posmap` per the demo files in `grounded_sam_demo.py:86`)
+was removed during a refactor and never restored.
+
+**Why this is a real bug:** The API contract advertises a knob the user
+expects to control text-prompt sensitivity. Today, changing
+`text_threshold` from 0.5 to 0.9 (or 0.1) has zero effect on the returned
+detections — only `box_threshold` and `nms_threshold` filter results.
+Users who tune the knob expecting changed behavior will report it as
+"the detector ignores my config" — and they'll be right.
+
+**Pros:**
+- Honors the public API contract; eliminates a silent no-op knob
+- Restores the original GroundingDINO paper's token-level filtering, which
+  matters when prompts have ambiguous/overlapping tokens (e.g.
+  "person, person riding a bike" — token-level filtering disambiguates)
+- Removes one of the few remaining `# TODO: text_threshold` comments and
+  the explanatory note in `DetectorProtocol.detect`'s docstring
+
+**Cons:**
+- Need to inspect `logits_to_class_scores` and decide where the threshold
+  applies — at the per-token sigmoid stage, or at the per-class aggregation
+  stage. The demos use it at the per-token stage
+  (`get_phrases_from_posmap(logit > text_threshold, ...)`); modern detect
+  doesn't use the phrase-extraction code path, so a 1:1 port doesn't apply.
+- Changing detection behavior is a behavior change; need a test that
+  asserts text_threshold actually filters (and isn't a placebo). Without
+  a test, "fixed" can silently regress to "still ignored" later.
+
+**Plumbing context (already partly done in Step 2.4.7 of TODO #6):**
+- `DetectorProtocol.detect` in `ml_engine/inference/detectors/base.py`
+  declares `text_threshold: float = 0.5` (kept).
+- `GroundingDINODetector.detect` in
+  `ml_engine/inference/detectors/grounding_dino.py` accepts but ignores
+  the param (`_ = text_threshold` placeholder + docstring TODO link).
+- `AutoLabeler` in `ml_engine/inference/auto_labeler.py:153` now passes
+  `text_threshold=self.config.thresholds.text` through (was previously
+  dropped at this layer too — restored as part of the typing fix so the
+  Protocol matches).
+
+**Test surface:**
+- `tests/unit/ml_engine/inference/test_grounding_dino_detector.py` (new):
+  - `test_text_threshold_filters_low_confidence_tokens` — synthesize a
+    prediction tensor where one token is high-confidence (>0.9) and one is
+    low (~0.3); assert that `detect(prompts=[...], text_threshold=0.5)`
+    keeps the high one and drops the low one. Will FAIL today (bug
+    documented), pass after the fix.
+  - `test_text_threshold_at_extremes` — text_threshold=0.0 keeps all,
+    text_threshold=1.0 drops all (sanity bookends).
+- `tests/integration/test_autolabel_text_threshold_e2e.py` (optional but
+  high value): submit an autolabel job with a high text_threshold against
+  a known-ambiguous image, assert fewer detections than with default 0.5.
+  Catches plumbing regressions in CI.
+
+**Context:** Surfaced 2026-04-26 during Step 2.4.7 of TODO #6 (mypy cleanup
+of `ml_engine/inference/`). The mypy gate flagged a Protocol/impl signature
+mismatch (`DetectorProtocol.detect` requires text_threshold; impl had it
+commented out). The typing-fix path could have been "delete from Protocol"
+(declare it dead) — but tracing upstream showed the value flows from a
+real public-API field, so the right fix is to honor the API contract
+instead of pruning it. Marker comment in `grounding_dino.py:detect()`
+docstring + `_ = text_threshold` placeholder point here.
+
+**Depends on / blocked by:** None. Independent of TODO #16's plumbing
+work. Recommend shipping with the test above so the fix can't silently
+regress.
+
+---
+
 ## Completed
 
 Historical record of items that have shipped. Kept rather than deleted so external
