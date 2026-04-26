@@ -156,7 +156,12 @@ class StateMachine:
     _PREFIX = "run:"
 
     def __init__(self, run_id: str, redis_async: _aredis.Redis):
-        self._r = redis_async
+        # `Any` workaround: redis-py's stubs declare async client methods as
+        # `Awaitable[T] | T` (sync/async overload artifact — see redis_store.py
+        # for the full rationale). Same trade-off here: lose method-name typo
+        # detection on the redis client; gain a clean baseline for the
+        # ~9 `await self._r.method()` calls below.
+        self._r: Any = redis_async
         self.run_id = run_id
         self._key = f"{self._PREFIX}{run_id}:state"
 
@@ -233,4 +238,6 @@ class StateMachine:
     @classmethod
     async def exists(cls, redis_async: _aredis.Redis, run_id: str) -> bool:
         """Check if state exists for given run_id."""
-        return (await redis_async.exists(f"{cls._PREFIX}{run_id}:state")) > 0
+        # Local Any rebind for the same redis-py overload reason as __init__.
+        r: Any = redis_async
+        return (await r.exists(f"{cls._PREFIX}{run_id}:state")) > 0

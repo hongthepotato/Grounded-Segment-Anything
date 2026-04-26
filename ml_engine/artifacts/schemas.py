@@ -36,7 +36,13 @@ class BaseModelRef:
 class CreateByInfo:
     """Information about who created the artifact"""
 
-    job_id: str
+    # TODO #16: revert to `job_id: str` once the plumbing lands. Optional
+    # is a marker for the gap: the trainer (called via subprocess_runner)
+    # doesn't propagate the parent job_id down to model_trainers/base.py
+    # at adapter-save time, so manifests written from training currently
+    # have job_id=None. Manifests written by other paths (tests, post-hoc
+    # tools) supply the real id.
+    job_id: Optional[str]
     timestamp: str
 
 
@@ -73,7 +79,10 @@ class BundleManifest:
     # model_name -> relative path (from where bundle.manifest.json lives) of
     # the corresponding adapter.manifest.json.
     artifacts: Dict[str, str]
-    lineage: Dict[str, str]  # "job_id"
+    # TODO #16: revert to `Dict[str, str]` once the plumbing lands.
+    # Optional[str] mirrors CreateByInfo.job_id above — the trainer doesn't
+    # currently propagate job_id down to bundle save, so values can be None.
+    lineage: Dict[str, Optional[str]]  # "job_id"
     merged_checkpoints: Optional[Dict[str, str]] = None  # model_naem -> relative path of merged model
 
     def save(self, path: Path) -> None:

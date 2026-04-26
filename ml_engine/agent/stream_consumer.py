@@ -107,7 +107,10 @@ class StreamConsumer(ABC):
         consumer_name: str,
     ):
         assert self.CONSUMER_GROUP, f"{type(self).__name__} must set CONSUMER_GROUP"
-        self._r = redis_client
+        # `Any` workaround for redis-py's Awaitable[T] | T overload artifact
+        # — see ml_engine/jobs/redis_store.py for the full rationale.
+        # Subclasses (AgentLoop, etc.) inherit this typing for `self._r`.
+        self._r: Any = redis_client
         self.run_id = run_id
         self._consumer_name = consumer_name
 

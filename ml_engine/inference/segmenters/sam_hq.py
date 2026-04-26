@@ -8,7 +8,7 @@ Implements SegmenterProtocol so it can be swapped with MobileSAMSegmenter.
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 import torch
@@ -55,7 +55,12 @@ class SAMHQSegmenter:
         self.model_type = model_type
         self.device = torch.device(device)
 
-        self._model = None
+        # Lazy-loaded SAM-HQ instance. Annotated Any (not Optional[Module])
+        # for the same reason as grounding_dino.GroundingDINODetector._model:
+        # the None state is a transient init detail (every consumer is gated
+        # by _load_model), and PEFT-wrapped attributes route through
+        # nn.Module.__getattr__ which mypy can't see through.
+        self._model: Any = None
         self._transform = ResizeLongestSide(SAM_INPUT_SIZE)
 
     def _load_model(self) -> None:

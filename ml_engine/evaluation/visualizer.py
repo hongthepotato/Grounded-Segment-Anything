@@ -6,7 +6,7 @@ Saves side-by-side comparisons of predictions vs ground truth.
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -44,9 +44,13 @@ class PredictionVisualizer:
         self._samples_this_epoch = 0
         self._current_epoch = -1
 
-        # Lazy import to avoid dependency issues
-        self._plt = None
-        self._Image = None
+        # Lazy import to avoid dependency issues. Annotated as Any rather
+        # than Optional[ModuleType] because the lazy-imported attributes
+        # (matplotlib.pyplot, PIL.Image, matplotlib.patches) carry no static
+        # type info we can usefully narrow against — and every call site
+        # below is gated by self.enabled / _lazy_import returning True.
+        self._plt: Any = None
+        self._Image: Any = None
 
     def _lazy_import(self):
         """Import visualization libraries only when needed."""
@@ -118,10 +122,21 @@ class PredictionVisualizer:
                 break
 
             img = images[i]
-            pred_boxes = predictions.get("boxes", [[]])[i] if predictions.get("boxes") is not None else []
-            pred_labels = predictions.get("labels", [[]])[i] if predictions.get("labels") is not None else []
-            gt_boxes = targets.get("boxes", [[]])[i] if targets.get("boxes") is not None else []
-            gt_labels = targets.get("labels", [[]])[i] if targets.get("labels") is not None else []
+            # Fallbacks are np.array([]) (not Python list []): _save_single
+            # is typed `pred_boxes: np.ndarray` and downstream _draw_boxes
+            # iterates them as arrays. The previous `else []` returned a
+            # Python list which silently violated the contract whenever a
+            # caller passed predictions/targets without the key (no runtime
+            # crash because lists also iterate, but the type was a lie).
+            empty: np.ndarray = np.array([])
+            pred_boxes: np.ndarray = (
+                predictions["boxes"][i] if predictions.get("boxes") is not None else empty
+            )
+            pred_labels: np.ndarray = (
+                predictions["labels"][i] if predictions.get("labels") is not None else empty
+            )
+            gt_boxes: np.ndarray = targets["boxes"][i] if targets.get("boxes") is not None else empty
+            gt_labels: np.ndarray = targets["labels"][i] if targets.get("labels") is not None else empty
 
             # Generate filename
             img_id = image_ids[i] if image_ids else self._samples_this_epoch

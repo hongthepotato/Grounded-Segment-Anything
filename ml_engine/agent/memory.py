@@ -60,7 +60,9 @@ class MemoryStore:
     """
 
     def __init__(self, redis_async: _aredis.Redis):
-        self._r = redis_async
+        # `Any` workaround for redis-py's Awaitable[T] | T overload artifact —
+        # see ml_engine/jobs/redis_store.py for the full rationale.
+        self._r: Any = redis_async
 
     async def write(self, type_: str, key: str, content: Dict[str, Any]) -> None:
         """

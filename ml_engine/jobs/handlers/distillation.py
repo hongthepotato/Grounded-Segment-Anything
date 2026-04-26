@@ -13,6 +13,7 @@ import logging
 import multiprocessing as mp
 import queue
 import shutil
+from multiprocessing.synchronize import Event as MpEvent
 from pathlib import Path
 from typing import Any, Dict
 
@@ -35,7 +36,7 @@ class StudentDistillationHandler(JobHandler):
         job_config: Dict[str, Any],
         output_dir: str,
         progress_queue: mp.Queue,
-        cancel_event: mp.Event,
+        cancel_event: MpEvent,
     ) -> None:
         from core.config import load_config, merge_configs
         from core.constants import DEFAULT_CONFIGS_DIR, transform_image_path

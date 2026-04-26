@@ -7,6 +7,7 @@ Handles the auto_label job type for automatic annotation using GroundingDINO + S
 import logging
 import multiprocessing as mp
 import queue
+from multiprocessing.synchronize import Event as MpEvent
 from pathlib import Path
 from typing import Any, Dict
 
@@ -26,7 +27,7 @@ class AutoLabelHandler(JobHandler):
         job_config: Dict[str, Any],
         output_dir: str,
         progress_queue: mp.Queue,
-        cancel_event: mp.Event,
+        cancel_event: MpEvent,
     ) -> None:
         """
         Execute auto-labeling job.

@@ -83,8 +83,8 @@ class CheckpointManager:
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
         metrics: Dict[str, float],
-        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-        scaler: Optional[torch.cuda.amp.GradScaler] = None,
+        scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
+        scaler: Optional[torch.amp.GradScaler] = None,
         extra_info: Optional[Dict] = None,
     ) -> Optional[Path]:
         """
@@ -183,7 +183,10 @@ class CheckpointManager:
 
         if is_better:
             self.best_metric = current
-            self.best_epoch = metrics.get("epoch", -1)
+            # metrics is Dict[str, float] but "epoch" is conceptually an int
+            # (callers stuff it into the same dict alongside losses); cast
+            # to keep best_epoch typed as int.
+            self.best_epoch = int(metrics.get("epoch", -1))
             self.patience_counter = 0
             return True
 
@@ -227,8 +230,8 @@ class CheckpointManager:
         checkpoint_path: str,
         model: nn.Module,
         optimizer: Optional[torch.optim.Optimizer] = None,
-        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-        scaler: Optional[torch.cuda.amp.GradScaler] = None,
+        scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
+        scaler: Optional[torch.amp.GradScaler] = None,
         load_optimizer: bool = True,
         load_rng_state: bool = True,
     ) -> Dict[str, Any]:
@@ -247,21 +250,23 @@ class CheckpointManager:
         Returns:
             Checkpoint dict with metadata
         """
-        # Resolve special names
+        # Resolve special names. Use a fresh `path: Path` instead of
+        # rebinding the str-typed `checkpoint_path` parameter (which mypy
+        # tracks as str through the whole function).
         if checkpoint_path == "best":
-            checkpoint_path = self.output_dir / "best.pth"
+            path = self.output_dir / "best.pth"
         elif checkpoint_path == "last":
-            checkpoint_path = self.output_dir / "last.pth"
+            path = self.output_dir / "last.pth"
         else:
-            checkpoint_path = Path(checkpoint_path)
+            path = Path(checkpoint_path)
 
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        if not path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {path}")
 
-        logger.info(f"Loading checkpoint: {checkpoint_path}")
+        logger.info(f"Loading checkpoint: {path}")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        checkpoint = torch.load(path, map_location=device)
 
         # Load model (handle trainable-only)
         trainable_only = checkpoint.get("trainable_only", False)

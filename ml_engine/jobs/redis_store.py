@@ -73,7 +73,11 @@ class RedisJobStore:
             decode_responses=False,  # We handle decoding ourselves
             max_connections=20,
         )
-        self.redis = redis.Redis(connection_pool=self.pool)
+        # `Any` workaround: redis-py stubs declare client methods as
+        # `Awaitable[X] | X` (sync/async overload artifact) which trips
+        # mypy across this file. See AsyncRedisJobStore.__init__ for the
+        # full rationale. Same trade-off applies here.
+        self.redis: Any = redis.Redis(connection_pool=self.pool)
 
         # Test connection
         try:

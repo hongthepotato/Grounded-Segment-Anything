@@ -161,7 +161,7 @@ class LLMClient:
             if role == "user":
                 # tool_result blocks become separate role=tool messages;
                 # text blocks fold into a single role=user message.
-                text_parts: List[str] = []
+                user_text_parts: List[str] = []
                 for block in content:
                     btype = block.get("type")
                     if btype == "tool_result":
@@ -180,17 +180,20 @@ class LLMClient:
                             }
                         )
                     elif btype == "text":
-                        text_parts.append(block.get("text", ""))
-                if text_parts:
-                    out.append({"role": "user", "content": "".join(text_parts)})
+                        user_text_parts.append(block.get("text", ""))
+                if user_text_parts:
+                    out.append({"role": "user", "content": "".join(user_text_parts)})
 
             elif role == "assistant":
-                text_parts: List[str] = []
+                # Renamed from text_parts (which is also used in the user
+                # branch above) to avoid a no-redef collision in the shared
+                # function scope, and to make the per-role intent explicit.
+                assistant_text_parts: List[str] = []
                 tool_calls: List[Dict[str, Any]] = []
                 for block in content:
                     btype = block.get("type")
                     if btype == "text":
-                        text_parts.append(block.get("text", ""))
+                        assistant_text_parts.append(block.get("text", ""))
                     elif btype == "tool_use":
                         tool_calls.append(
                             {
@@ -204,7 +207,7 @@ class LLMClient:
                         )
                 oai_msg: Dict[str, Any] = {
                     "role": "assistant",
-                    "content": "".join(text_parts) if text_parts else None,
+                    "content": "".join(assistant_text_parts) if assistant_text_parts else None,
                 }
                 if tool_calls:
                     oai_msg["tool_calls"] = tool_calls

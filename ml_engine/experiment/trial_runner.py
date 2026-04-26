@@ -12,6 +12,7 @@ import queue
 import time
 import uuid
 from dataclasses import dataclass
+from multiprocessing.synchronize import Event as MpEvent
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -40,7 +41,7 @@ def _trial_subprocess(
     output_dir: str,
     result_queue: mp.Queue,
     progress_queue: mp.Queue,
-    cancel_event: mp.Event,
+    cancel_event: MpEvent,
     primary_metric_key: str = _PRIMARY_METRIC_KEY,
 ) -> None:
     """Entry point for per-trial subprocess."""
@@ -177,7 +178,7 @@ class TrialRunner:
         ctx = mp.get_context("spawn")
         result_q: mp.Queue = ctx.Queue()
         progress_q: mp.Queue = ctx.Queue()
-        cancel_ev: mp.Event = ctx.Event()
+        cancel_ev: MpEvent = ctx.Event()
 
         proc = ctx.Process(
             target=_trial_subprocess,

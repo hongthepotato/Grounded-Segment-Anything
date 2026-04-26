@@ -98,6 +98,10 @@ class TrainingManager:
             )
         self.amp_dtype = _dtype_aliases[dtype_str]
 
+        # GradScaler is only meaningful for float16; bfloat16 uses native
+        # autocast without scaling, and AMP-disabled trains in fp32. Declare
+        # Optional up-front so mypy knows the None branches are valid.
+        self.scaler: Optional[GradScaler] = None
         if self.use_amp and self.amp_dtype == torch.float16:
             self.scaler = GradScaler(
                 init_scale=amp_cfg.get("init_scale", 65536),
@@ -107,10 +111,7 @@ class TrainingManager:
             )
             logger.info("AMP enabled (dtype=float16, init_scale=%s)", amp_cfg.get("init_scale", 65536))
         elif self.use_amp:
-            self.scaler = None
             logger.info("AMP enabled (dtype=%s, no GradScaler)", dtype_str)
-        else:
-            self.scaler = None
 
         # Gradient clipping
         clip_cfg = config.get("gradient_clipping", {})

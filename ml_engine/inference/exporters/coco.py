@@ -75,7 +75,12 @@ class COCOExporter:
                 class_id = class_ids[i]
                 score = scores[i] if i < len(scores) else 0.0
 
-                annotation = {
+                # Heterogeneous values (int IDs + float score + later list/array
+                # bbox + list[list[float]] segmentation). Without Dict[str, Any],
+                # mypy infers Dict[str, float] from the initial floats and rejects
+                # the bbox/segmentation/area assignments below. Same pattern as
+                # ml_engine/data/validators.py results dict.
+                annotation: Dict[str, Any] = {
                     "id": annotation_id,
                     "image_id": image_id,
                     "category_id": int(class_id) if class_id is not None else 0,

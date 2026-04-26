@@ -32,6 +32,7 @@ import queue
 import signal
 import sys
 from dataclasses import dataclass
+from multiprocessing.synchronize import Event as MpEvent
 from typing import Any, Dict, Optional
 
 from core.logging_config import get_logger
@@ -53,7 +54,7 @@ class SubprocessResult:
     cancelled: bool
     error_message: Optional[str] = None
     output_dir: Optional[str] = None
-    outcome: Dict[str, Any] = None  # contents of outcome.json, if written
+    outcome: Optional[Dict[str, Any]] = None  # contents of outcome.json, if written
 
     def __post_init__(self):
         if self.outcome is None:
@@ -120,7 +121,7 @@ class TrainingSubprocess:
         self._process: Optional[mp.Process] = None
         self._progress_queue: Optional[mp.Queue] = None
         self._result_queue: Optional[mp.Queue] = None
-        self._cancel_event: Optional[mp.Event] = None
+        self._cancel_event: Optional[MpEvent] = None
 
         # Cached result
         self._result: Optional[SubprocessResult] = None
@@ -201,6 +202,10 @@ class TrainingSubprocess:
             return False
 
         pid = self._process.pid
+        # mp.Process.pid is Optional[int]: None before start, int once
+        # running. The is_alive() guard at the top ensures we're past
+        # start, so pid is guaranteed non-None — assert for mypy.
+        assert pid is not None, "process is alive (checked above) but has no pid"
         logger.info("Cancelling training subprocess (pid=%d)", pid)
 
         # Step 1: Set cancel event (graceful)
@@ -332,7 +337,7 @@ def _job_entry_point(
     gpu_id: int,
     progress_queue: mp.Queue,
     result_queue: mp.Queue,
-    cancel_event: mp.Event,
+    cancel_event: MpEvent,
 ):
     """
     Entry point for training subprocess.

@@ -98,7 +98,7 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 **Status:** Path A chosen 2026-04-25 — committed to driving the baseline to zero across all maintained directories.
 
-**Live baseline:** **219 errors in 42 files** (after Step 1 stubs + Step 2.1 core/ + Step 2.2 api/ + Step 2.3 augmentation/ — see progress below).
+**Live baseline:** **0 errors across 119 source files** ✅ (ml_engine + core + api + augmentation all clean as of 2026-04-26). Step 3 (flip `continue-on-error: false` in ci.yml's mypy step) is now unblocked.
 
 `continue-on-error: true` on the mypy step in `ci.yml` keeps CI passing while this baseline exists. Step 3 flips that off after Step 2 finishes.
 
@@ -107,7 +107,15 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 - ✅ Step 2.1: `core/` clean — 4 functions in `config.py` widened `path: str` → `path: str | Path`; 2 formatter locals in `logging_config.py` annotated as base `logging.Formatter`. Baseline 410 → 400.
 - ✅ Step 2.2: `api/` clean — 13 own errors fixed. Patterns: 4 `Path(job.output_dir)` calls now guarded with explicit None checks (HTTPException 500 if missing); 3 var-annotated dict/list literals; 1 `job_to_response(Job | None)` guarded; deleted `autolabel.py`'s stale duplicate of `job_to_response` (canonical lives in `jobs.py`); replaced broken `subscribe_to_job_async` call in `websocket.py` with explicit `subscription_unavailable` frame + clean close (filed item 15 for proper implementation). Baseline 400 → 388.
 - ✅ Step 2.3: `augmentation/` clean — 169 own errors fixed. Two correctness fixes: (a) `AugmentationRule.intensity_ranges` annotation was off by one nesting level (`Dict[str, Dict[str, AlbumentationsParameter]]` → `Dict[str, Dict[str, Dict[str, Any]]]`) — that single fix cleared 153 of the 169 errors; (b) `_validate_input_data` + 3 `_validate_{masks,keypoints,bboxes}` helpers now take `Optional[List[...]]` matching what `apply()` actually passes in. Plus an `apply()` refactor: kept `has_X` booleans (used downstream) but added parallel inline `is not None and len(...) > 0` checks so mypy can narrow the Optional types (booleans aren't type guards). Annotated `aug_input: Dict[str, Any]` so mypy doesn't narrow from the first ndarray entry. Baseline 388 → 219.
-- ⬜ Step 2.4: `ml_engine/` (the bulk; will need sub-PR splits like ruff cleanup did)
+- ✅ Step 2.4: `ml_engine/` clean — 219 own errors fixed across 8 sub-PRs on `mypy-baseline-ml-engine`:
+  - **2.4.1 data/** (58 errors → 0): `Dict[str, Any]` annotations on heterogeneous validator-result dicts (one annotation cleared 25+ "object" errors), `.get()` → `[]` for required COCO keys (failing loud on malformed data), preprocessor `self.model: Any` boundary cast, real bug fixed: `scaleFill=False` → `scale_fill=False` (ultralytics renamed kwarg, `YOLOPreprocessor` has zero unit-test coverage so the runtime crash was masked).
+  - **2.4.2 jobs/** (53 errors → 0): redis-py `Awaitable[T] | T` overload artifact via `self.redis: Any`, `multiprocessing.Event` factory-vs-class confusion via `from multiprocessing.synchronize import Event as MpEvent`, `asyncio.gather` heterogeneous-type narrowing by pulling the only non-int call out of gather.
+  - **2.4.3 training/** (49 errors → 0): `self.model: Any` + `self.criterion: Any` in `model_trainers/base.py` (boundary cast covered all PEFT-attribute access in subclasses), `torch.amp.GradScaler` (canonical) + `LRScheduler` (public) name updates, **structural simplification**: dropped `GroundingDINOCriterion.losses` list + `get_loss()` dispatch (unused flexibility — only caller hardcoded ["labels", "boxes"]), inlined both loss calls in `forward()`. Surfaced TODO #16: `CreateByInfo.job_id` and `BundleManifest.lineage` had to be widened to `Optional[str]` because the trainer can't see its parent job_id — value is known at submission time but dropped at subprocess boundary.
+  - **2.4.4 agent/** (16 errors → 0): same redis `self._r: Any` workaround across `state_machine`, `memory`, and `stream_consumer` (the StreamConsumer fix covers all subclasses via inheritance), `text_parts` for-loop variable shadowing fixed by renaming to `user_text_parts` / `assistant_text_parts`.
+  - **2.4.5 evaluation/** (24 errors → 0): real bug fixed in `visualizer.py` — `else []` fallback returned Python list to a function typed `np.ndarray`, replaced with `np.array([])` so the type matches the contract; `peft_model: Any = model` boundary cast for `model.predict()`; `int()` cast for `Dict[int, list[float]]` indexing on `Tensor.item()` returns; lazy-import `self._plt: Any` pattern.
+  - **2.4.6 models/teacher/** (23 errors → 0): `self.model: Any` boundary cast in both `GroundingDINOLoRA` and `SAMHQLoRA` (16 PEFT attribute-access errors collapsed); `_get_base_model() -> Any` cascaded through `_get_image_encoder/_prompt_encoder/_mask_decoder` so SAM-specific method calls (`prompt_encoder.get_dense_pe()`) type-check.
+  - **2.4.7 inference/** (22 errors → 0): real bug filed as TODO #17 — `text_threshold` flowed from API → handler → DetectionThresholds → AutoLabeler and was silently dropped at `detector.detect()` (the original token-level filter was lost in refactor); restored as accepted-but-unused param with `_ = text_threshold` placeholder + restored `text_threshold=self.config.thresholds.text` in AutoLabeler. Lazy-init `self._model: Any = None` pattern across 3 segmenter/detector files.
+  - **2.4.8 distillation/ + experiment/ + export/templates/** (12 errors → 0): same `MpEvent` fix in `trial_runner.py`; explicit None re-narrowing in `mutators.py` all() generator (mypy can't propagate filter narrowing into nested generators); `assert manifest is not None` after the resolver-invariant guard in `pseudo_label.py`; fallback to spec class-level defaults when manifest fields are Optional.
 - ⬜ Step 3: flip `continue-on-error` → false in ci.yml's mypy step
 
 **Step 1 outcome (shipped):** Installed `types-PyYAML` only. Surveyed our other third-party imports (PIL, tqdm, requests) — type stubs exist for those too, but installing them would NOT drop the count today: `--ignore-missing-imports` already suppresses errors for libraries without inline type info, and adding their stubs would START flagging code that uses them. That's a NET INCREASE in the visible baseline, not a decrease — wrong direction for a "quick win" PR. Those stubs should ride with the per-directory cleanup PRs (Step 2) when the related code is being touched anyway.
@@ -161,7 +169,9 @@ Step 3 (1 PR, 1 line):
 
 **Cons:** 416 existing errors require per-file judgment work. Ongoing per-PR cost to maintain types. ML libraries (PEFT, transformers, accelerate) use heavy `__getattr__` delegation that mypy can't model — `Any` casts will be needed at boundaries even after cleanup (item 13 documented this for PEFT).
 
-**Recommended next action: continue Step 2.** Path A is the chosen direction. Next is `mypy-baseline-ml-engine/` (~219 remaining errors across 42 files — the bulk of the baseline). Will need sub-PR splits by subdirectory like ruff cleanup did. Use the same per-case judgment that worked for prior steps:
+**Recommended next action: ship Step 3** — flip `continue-on-error: true` → `false` on the mypy step in `.github/workflows/ci.yml`. The baseline is now 0 errors across the full `core ml_engine api augmentation` source set (119 source files). One-line CI change, zero source changes. After Step 3 lands, mypy gates merges the same way ruff does (TODO #9 / PR #33 set the precedent).
+
+**Earlier guidance that informed Step 2.4 (kept for posterity):** Use the same per-case judgment that worked for prior steps:
 - Path-as-string parameter pattern → widen to `str | Path`
 - Subclass-narrowing pattern → annotate as base type
 - Variable shadowing → rename or refactor
@@ -340,6 +350,156 @@ async def _subscribe_to_events(redis_async, job_id: str):
 Then the route's main loop becomes `async for event in _subscribe_to_events(...): await ws.send_json(event)` with the existing terminal-state detection.
 
 **Depends on / blocked by:** None for the implementation. Should NOT proceed until someone confirms the publish_event channel naming convention (`job:{id}:events` vs other) and the event payload schema. The deleted code's tests would have documented this — they're gone now.
+
+---
+
+### 16. Plumb `job_id` through training pipeline so artifact manifests carry real lineage (revert Optional schemas)
+
+**What:** Thread `job_id` from `_job_entry_point` (where it already exists) all the way down to `BaseModelTrainer.save_adapters()` and `Trainer._save_adapters()`. Then revert `CreateByInfo.job_id` and `BundleManifest.lineage` in `ml_engine/artifacts/schemas.py` from `Optional[str]` back to `str`/`Dict[str, str]` (their current Optional widening is a marker for this gap, not a desired type).
+
+**Why:** Today the artifact manifests written by training jobs have `created_by.job_id = None` and `lineage = {"job_id": None}` because the trainer can't see the parent job_id. The fact that the schemas had to be widened to Optional[str] in Step 2.4.3 of TODO #6 is the smell — the value is *known at job submission time* (line 79 of `api/routes/jobs.py` enqueues with a real id) but is dropped at the subprocess boundary in `subprocess_runner._job_entry_point` (line 409), which calls `handler.run(job_config=..., output_dir=..., progress_queue=..., cancel_event=...)` without forwarding the job_id it already holds (line 333).
+
+**Why now matters more:** Without lineage, you can't go from a `bundle.manifest.json` on disk back to the job that produced it. That breaks: post-hoc debugging ("which job made this bad model?"), audit/compliance ("who/when produced this artifact?"), automated cleanup ("delete artifacts from cancelled jobs"), and any future eval-tracking that wants to correlate model performance with training-job config.
+
+**Pros:**
+- Manifests become forensically useful (job_id → logs → config → diff against other jobs)
+- Schema reflects reality — no more "Optional because we lost the value mid-pipeline" workarounds
+- Removes one of two follow-up `# TODO: plumb job_id` comments in `ml_engine/artifacts/schemas.py` documenting the gap
+- Enables a future `GET /api/artifacts/from-job/{job_id}` query without external joins
+
+**Cons:**
+- 10-file refactor touching 4 handler subclasses + abstract base + subprocess_runner + Trainer + BaseModelTrainer + trial_runner + schemas. Medium-sized PR but mechanical.
+- Test surface: any test that constructs a `Trainer`, `BaseModelTrainer`, or invokes a `JobHandler.run(...)` directly needs to pass a synthetic `job_id`. Most production tests already use real job objects, but unit tests that bypass the queue (e.g., direct trainer instantiation in pytest fixtures) will need updating.
+- For trial-mode (`ExperimentLoopHandler` → `_trial_subprocess`), we need to decide what populates `job_id` for per-trial manifests. Options: (a) reuse the parent job_id (clean — every trial in an experiment shares the experiment's job_id, lineage groups them), (b) use the trial_id (e.g. `trial_a1b2c3d4`) so each trial's artifact is uniquely identifiable, (c) compose: `f"{job_id}/{trial_id}"`. Recommend (c) — preserves both the parent-job link and per-trial uniqueness without changing the schema field name.
+
+**Plumbing path (top-down):**
+
+1. `ml_engine/jobs/handlers/base.py`: add `job_id: str` to abstract `run()` signature
+2. `ml_engine/jobs/subprocess_runner.py:409`: pass `job_id=job_id` to `handler.run(...)` (the variable already exists on line 333)
+3. Each handler subclass — accept and forward:
+   - `auto_label.py` — pass to AutoLabeler constructor (currently writes no manifest, but ready for future)
+   - `teacher.py` — pass to `Trainer(job_id=job_id, ...)`
+   - `distillation.py` — pass through (StudentDistillationHandler may need to feed it into the YOLO training subprocess too)
+   - `experiment_loop.py` — store as parent job_id; per-trial subprocess composes `f"{job_id}/{trial_id}"` per option (c) above
+4. `ml_engine/training/trainer.py`:
+   - `Trainer.__init__` adds `job_id: str` parameter, stores `self.job_id: str`
+   - Forwards to per-model trainers in `_init_trainers`
+   - `_save_adapters` uses `self.job_id` in `BundleManifest(lineage={"job_id": self.job_id})`
+5. `ml_engine/training/model_trainers/base.py`:
+   - `BaseModelTrainer.__init__` adds `job_id: str`, stores `self.job_id: str`
+   - `save_adapters()` uses `self.job_id` in `CreateByInfo(job_id=self.job_id, timestamp=...)`
+6. `ml_engine/experiment/trial_runner.py`:
+   - `_trial_subprocess` accepts `job_id: str` and `trial_id: str` separately
+   - Composes `f"{job_id}/{trial_id}"` and passes to `Trainer(job_id=...)`
+7. `ml_engine/artifacts/schemas.py` — revert:
+   - `CreateByInfo.job_id: Optional[str]` → `str`
+   - `BundleManifest.lineage: Dict[str, Optional[str]]` → `Dict[str, str]`
+   - `BaseAdapterMismatch.__init__(expected, actual)` can stay Optional[str] — that one is genuinely about Optional fields on `BaseModelRef`, unrelated to this gap
+
+**Test surface (additions/changes):**
+
+Existing tests to update (any that construct Trainer/handlers directly):
+- `tests/unit/test_training_manager.py` — uses TrainingManager directly, no Trainer construction; should not need changes
+- `tests/unit/test_losses.py` — only loss math; no changes
+- `tests/contract/test_training_invariants.py` — verify whether it constructs Trainer directly; if yes, add fixture `job_id="test-job-{uuid}"`
+- `tests/unit/ml_engine/test_student_trainer.py` — likely needs job_id fixture
+- `tests/unit/ml_engine/artifacts/test_schemas.py` — already passes real `job_id="job-abc"` strings; no changes needed for the Optional→str revert (will type-check more strictly but the test data is compliant)
+- `tests/unit/ml_engine/distillation/test_pseudo_label.py` — uses real `job_id="test-job"` strings; no changes needed for the schema revert
+
+New tests to add (validates the plumbing actually works end-to-end):
+- `tests/unit/ml_engine/training/test_lineage.py` (new file):
+  - `test_trainer_propagates_job_id_to_per_model_trainers` — construct `Trainer(job_id="test-job-1", ...)`, assert `trainer.trainers["sam"].job_id == "test-job-1"`
+  - `test_save_adapters_writes_job_id_in_manifest` — run `BaseModelTrainer.save_adapters()` against a temp dir with a stub LoRA model, load the written `adapter.manifest.json`, assert `manifest["created_by"]["job_id"] == "test-job-1"`
+  - `test_save_bundle_writes_job_id_in_lineage` — same but for `Trainer._save_adapters` writing `bundle.manifest.json`, assert `manifest["lineage"]["job_id"] == "test-job-1"`
+- `tests/unit/ml_engine/jobs/handlers/test_run_signature.py` (new file):
+  - `test_all_handlers_accept_job_id` — for each registered handler in `TRAINER_REGISTRY`, assert `inspect.signature(handler.run).parameters` includes `"job_id"`. Catches future handlers that drift from the abstract signature.
+- `tests/integration/test_job_to_manifest_lineage.py` (new file, optional but high value):
+  - End-to-end: enqueue a tiny teacher-training job, run it through `JobManager`, wait for completion, load the bundle.manifest.json from the output dir, assert `lineage["job_id"]` matches the enqueued id. Catches any plumbing break in CI without needing the full GPU training path (use a stub trainer that writes a manifest in 1 epoch).
+- `tests/unit/ml_engine/experiment/test_trial_lineage.py` (new file):
+  - `test_trial_id_composes_with_job_id_in_manifest` — verify the `f"{job_id}/{trial_id}"` composition for trials produces a manifest whose `created_by.job_id` is the composed string. Decide whether to test that string parsing back into (job, trial) is supported (probably not — the composition is one-way for now).
+
+**Context:** Surfaced 2026-04-26 during Step 2.4.3 of TODO #6 (mypy cleanup of `ml_engine/training/`). The `CreateByInfo.job_id: Optional[str]` and `BundleManifest.lineage: Dict[str, Optional[str]]` changes in `ml_engine/artifacts/schemas.py` were required to make mypy pass without doing this refactor mid-cleanup. Both fields have a comment block at their definition pointing to this TODO. Once this lands, those comments + Optional widenings should be reverted.
+
+**Depends on / blocked by:** TODO #6 Step 2.4.3 PR landing first (so this branches off a clean baseline). Should NOT block the next subdirs of TODO #6 — those don't touch the artifact schema. Recommend shipping this AFTER all of TODO #6 lands so the revert isn't reviewed alongside other type changes (cleaner diff: "fields go from Optional[str] back to str, supported by 9 plumbing changes elsewhere").
+
+---
+
+### 17. Restore `text_threshold` token-level filtering in GroundingDINODetector (silent drop bug)
+
+**What:** The `text_threshold` parameter flows from the public API
+(`api/schemas.py:247`, default 0.5) all the way through:
+`POST /api/autolabel` → `autolabel.py:75` → `auto_label.py:82` →
+`DetectionThresholds.text` → `AutoLabeler.config.thresholds.text` →
+`detector.detect(text_threshold=...)` → and is **silently dropped** by
+`GroundingDINODetector.detect()` (`ml_engine/inference/detectors/grounding_dino.py`).
+The implementation currently accepts the param but does nothing with it
+(marked `_ = text_threshold` for linter silence). The original token-level
+filter (`logit > text_threshold` inside `logits_to_class_scores` /
+`get_phrases_from_posmap` per the demo files in `grounded_sam_demo.py:86`)
+was removed during a refactor and never restored.
+
+**Why this is a real bug:** The API contract advertises a knob the user
+expects to control text-prompt sensitivity. Today, changing
+`text_threshold` from 0.5 to 0.9 (or 0.1) has zero effect on the returned
+detections — only `box_threshold` and `nms_threshold` filter results.
+Users who tune the knob expecting changed behavior will report it as
+"the detector ignores my config" — and they'll be right.
+
+**Pros:**
+- Honors the public API contract; eliminates a silent no-op knob
+- Restores the original GroundingDINO paper's token-level filtering, which
+  matters when prompts have ambiguous/overlapping tokens (e.g.
+  "person, person riding a bike" — token-level filtering disambiguates)
+- Removes one of the few remaining `# TODO: text_threshold` comments and
+  the explanatory note in `DetectorProtocol.detect`'s docstring
+
+**Cons:**
+- Need to inspect `logits_to_class_scores` and decide where the threshold
+  applies — at the per-token sigmoid stage, or at the per-class aggregation
+  stage. The demos use it at the per-token stage
+  (`get_phrases_from_posmap(logit > text_threshold, ...)`); modern detect
+  doesn't use the phrase-extraction code path, so a 1:1 port doesn't apply.
+- Changing detection behavior is a behavior change; need a test that
+  asserts text_threshold actually filters (and isn't a placebo). Without
+  a test, "fixed" can silently regress to "still ignored" later.
+
+**Plumbing context (already partly done in Step 2.4.7 of TODO #6):**
+- `DetectorProtocol.detect` in `ml_engine/inference/detectors/base.py`
+  declares `text_threshold: float = 0.5` (kept).
+- `GroundingDINODetector.detect` in
+  `ml_engine/inference/detectors/grounding_dino.py` accepts but ignores
+  the param (`_ = text_threshold` placeholder + docstring TODO link).
+- `AutoLabeler` in `ml_engine/inference/auto_labeler.py:153` now passes
+  `text_threshold=self.config.thresholds.text` through (was previously
+  dropped at this layer too — restored as part of the typing fix so the
+  Protocol matches).
+
+**Test surface:**
+- `tests/unit/ml_engine/inference/test_grounding_dino_detector.py` (new):
+  - `test_text_threshold_filters_low_confidence_tokens` — synthesize a
+    prediction tensor where one token is high-confidence (>0.9) and one is
+    low (~0.3); assert that `detect(prompts=[...], text_threshold=0.5)`
+    keeps the high one and drops the low one. Will FAIL today (bug
+    documented), pass after the fix.
+  - `test_text_threshold_at_extremes` — text_threshold=0.0 keeps all,
+    text_threshold=1.0 drops all (sanity bookends).
+- `tests/integration/test_autolabel_text_threshold_e2e.py` (optional but
+  high value): submit an autolabel job with a high text_threshold against
+  a known-ambiguous image, assert fewer detections than with default 0.5.
+  Catches plumbing regressions in CI.
+
+**Context:** Surfaced 2026-04-26 during Step 2.4.7 of TODO #6 (mypy cleanup
+of `ml_engine/inference/`). The mypy gate flagged a Protocol/impl signature
+mismatch (`DetectorProtocol.detect` requires text_threshold; impl had it
+commented out). The typing-fix path could have been "delete from Protocol"
+(declare it dead) — but tracing upstream showed the value flows from a
+real public-API field, so the right fix is to honor the API contract
+instead of pruning it. Marker comment in `grounding_dino.py:detect()`
+docstring + `_ = text_threshold` placeholder point here.
+
+**Depends on / blocked by:** None. Independent of TODO #16's plumbing
+work. Recommend shipping with the test above so the fix can't silently
+regress.
 
 ---
 

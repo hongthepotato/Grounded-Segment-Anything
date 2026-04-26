@@ -6,7 +6,7 @@ This module provides loss functions for:
 - SAM: Segmentation loss (mask IoU + focal loss)
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -175,7 +175,6 @@ class GroundingDINOCriterion(nn.Module):
         num_classes: int,
         matcher: HungarianMatcher,
         weight_dict: Dict[str, float],
-        losses: Optional[List[str]] = None,
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
     ):
@@ -192,7 +191,6 @@ class GroundingDINOCriterion(nn.Module):
                     'loss_bbox_0': 5.0,
                     ...
                 }
-            losses: List of losses to compute. Defaults to ['labels', 'boxes'].
             focal_alpha: Alpha parameter for focal loss
             focal_gamma: Gamma parameter for focal loss
         """
@@ -200,7 +198,6 @@ class GroundingDINOCriterion(nn.Module):
         self.num_classes = num_classes
         self.matcher = matcher
         self.weight_dict = weight_dict
-        self.losses = list(losses) if losses is not None else ["labels", "boxes"]
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
 
@@ -395,22 +392,8 @@ class GroundingDINOCriterion(nn.Module):
         src_idx = torch.cat([src for (src, _) in indices])
         return batch_idx, src_idx
 
-    def get_loss(
-        self,
-        loss: str,
-        outputs: Dict[str, torch.Tensor],
-        targets: List[Dict[str, torch.Tensor]],
-        indices: List[Tuple[torch.Tensor, torch.Tensor]],
-        num_boxes: int,
-        **kwargs,
-    ) -> Dict[str, torch.Tensor]:
-        """Dispatch to appropriate loss function."""
-        loss_map = {"labels": self.loss_labels, "boxes": self.loss_boxes}
-        assert loss in loss_map, f"Unknown loss: {loss}"
-        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
-
     def forward(
-        self, outputs: Dict[str, torch.Tensor], targets: List[Dict[str, torch.Tensor]]
+        self, outputs: Dict[str, Any], targets: List[Dict[str, torch.Tensor]]
     ) -> Dict[str, torch.Tensor]:
         """
         Compute all losses.
@@ -421,6 +404,8 @@ class GroundingDINOCriterion(nn.Module):
                 - 'pred_boxes': [B, N, 4] final predictions
                 - 'aux_outputs': List of dicts with intermediate predictions (optional)
                 - 'enc_outputs': Dict with encoder predictions (optional)
+                The dict has heterogeneous values (Tensors + List[Dict] +
+                Dict), so it's typed Dict[str, Any] not Dict[str, Tensor].
             targets: List of target dicts (len=B) with:
                 - 'labels': [M] class labels
                 - 'boxes': [M, 4] boxes
@@ -435,45 +420,53 @@ class GroundingDINOCriterion(nn.Module):
         # 1. Match final layer predictions to targets
         indices = self.matcher(outputs_without_aux, targets)
 
-        # Compute number of boxes for normalization
-        num_boxes = sum(len(t["labels"]) for t in targets)
-        num_boxes = torch.as_tensor(
-            [num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device
+        # Compute number of boxes for normalization. The tensor roundtrip
+        # is just so we can clamp on the same device; semantically num_boxes
+        # is always an integer count (len() never returns 1.5 boxes).
+        # Distinct names per stage so mypy doesn't trip over the int → Tensor
+        # rebinding; explicit int() at the end matches the loss-method
+        # signatures that take num_boxes: int.
+        num_boxes_int = sum(len(t["labels"]) for t in targets)
+        num_boxes_tensor = torch.as_tensor(
+            [num_boxes_int],
+            dtype=torch.float,
+            device=next(v for v in outputs.values() if isinstance(v, torch.Tensor)).device,
         )
-        num_boxes = torch.clamp(num_boxes, min=1).item()
+        num_boxes = int(torch.clamp(num_boxes_tensor, min=1).item())
 
-        # 2. Compute losses for final layer
-        losses = {}
-        for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs_without_aux, targets, indices, num_boxes))
+        # 2. Compute losses for final layer (both labels + boxes always —
+        # the previous self.losses list + get_loss dispatch was unused
+        # flexibility; build_criterion always passes ["labels", "boxes"]).
+        losses: Dict[str, torch.Tensor] = {}
+        losses.update(self.loss_labels(outputs_without_aux, targets, indices, num_boxes))
+        losses.update(self.loss_boxes(outputs_without_aux, targets, indices, num_boxes))
 
-        # 3. Compute auxiliary losses from intermediate decoder layers
-        # Note: Propagate text_token_mask to auxiliary outputs for proper masking
+        # 3. Compute auxiliary losses from intermediate decoder layers.
+        # Propagate text_token_mask to aux outputs for proper masking. log=False
+        # on aux loss_labels suppresses redundant accuracy logging (final-layer
+        # call above already logs it).
         if "aux_outputs" in outputs:
             text_token_mask = outputs.get("text_token_mask", None)
             for i, aux_outputs in enumerate(outputs["aux_outputs"]):
-                # Add text_token_mask to aux_outputs if available
                 if text_token_mask is not None:
                     aux_outputs = {**aux_outputs, "text_token_mask": text_token_mask}
-                indices = self.matcher(aux_outputs, targets)
-                for loss in self.losses:
-                    kwargs = {"log": False} if loss == "labels" else {}
-                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
-                    l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
-                    losses.update(l_dict)
+                aux_indices = self.matcher(aux_outputs, targets)
+                aux_label_losses = self.loss_labels(aux_outputs, targets, aux_indices, num_boxes, log=False)
+                aux_box_losses = self.loss_boxes(aux_outputs, targets, aux_indices, num_boxes)
+                losses.update({f"{k}_{i}": v for k, v in aux_label_losses.items()})
+                losses.update({f"{k}_{i}": v for k, v in aux_box_losses.items()})
 
-        # 4. Compute encoder auxiliary loss (binary classification)
+        # 4. Compute encoder auxiliary loss (binary classification).
+        # Binary objectness targets: "something is here, class unknown".
+        # token_labels = all ones so every valid token position is activated
+        # uniformly; loss_labels masks padding via text_token_mask. Using
+        # class-specific token_labels here would contradict the zeroed class
+        # labels and train the encoder with the same signal as the decoder.
         if "enc_outputs" in outputs:
-            enc_outputs = outputs["enc_outputs"]
-            # Add text_token_mask to enc_outputs if available
+            enc_outputs: Dict[str, Any] = outputs["enc_outputs"]
             text_token_mask = outputs.get("text_token_mask", None)
             if text_token_mask is not None:
                 enc_outputs = {**enc_outputs, "text_token_mask": text_token_mask}
-            # For encoder, use binary objectness targets: "something is here, class unknown".
-            # token_labels are set to all-ones so every valid token position is activated
-            # uniformly — loss_labels will mask out padding via text_token_mask.
-            # Using class-specific token_labels here would contradict the zeroed class labels
-            # and train the encoder with the same signal as the final decoder layer.
             bin_targets = [
                 {
                     "labels": torch.zeros_like(t["labels"]),
@@ -482,12 +475,11 @@ class GroundingDINOCriterion(nn.Module):
                 }
                 for t in targets
             ]
-            indices = self.matcher(enc_outputs, bin_targets)
-            for loss in self.losses:
-                kwargs = {"log": False} if loss == "labels" else {}
-                l_dict = self.get_loss(loss, enc_outputs, bin_targets, indices, num_boxes, **kwargs)
-                l_dict = {k + "_enc": v for k, v in l_dict.items()}
-                losses.update(l_dict)
+            enc_indices = self.matcher(enc_outputs, bin_targets)
+            enc_label_losses = self.loss_labels(enc_outputs, bin_targets, enc_indices, num_boxes, log=False)
+            enc_box_losses = self.loss_boxes(enc_outputs, bin_targets, enc_indices, num_boxes)
+            losses.update({f"{k}_enc": v for k, v in enc_label_losses.items()})
+            losses.update({f"{k}_enc": v for k, v in enc_box_losses.items()})
 
         return losses
 
@@ -530,13 +522,10 @@ def build_criterion(
 
     weight_dict.update(aux_weight_dict)
 
-    losses = ["labels", "boxes"]
-
     criterion = GroundingDINOCriterion(
         num_classes=num_classes,
         matcher=matcher,
         weight_dict=weight_dict,
-        losses=losses,
         focal_alpha=focal_alpha,
         focal_gamma=focal_gamma,
     )

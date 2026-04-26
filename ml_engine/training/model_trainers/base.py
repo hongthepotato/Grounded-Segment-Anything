@@ -76,14 +76,26 @@ class BaseModelTrainer(ABC):
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.dataset_info = dataset_info
 
-        # Load model (subclass implements)
+        # Load model (subclass implements). Annotated as Any (not nn.Module)
+        # because subclasses access PEFT-wrapped attributes that go through
+        # nn.Module.__getattr__ — mypy resolves those to Tensor/Module via
+        # the stub and rejects every `.transformer`, `.tokenizer`, `.predict`
+        # access in grounding_dino.py / sam.py. Same boundary pattern as
+        # merger.py + peft_utils.save_lora_adapters (TODO #13). Trade-off:
+        # lose type-checking on nn.Module's actual methods (parameters,
+        # train, eval) which still work at runtime via duck typing.
         logger.info("Loading %s...", self.model_name)
-        self.model = self._load_model()
+        self.model: Any = self._load_model()
         self.model.to(self.device)
         logger.info("%s loaded", self.model_name)
 
-        # Create criterion (subclass implements)
-        self.criterion = self._create_criterion()
+        # Create criterion (subclass implements). Annotated as Any for the
+        # same reason as self.model above: subclasses access criterion-
+        # specific attributes (e.g. GroundingDINOCriterion.weight_dict)
+        # that aren't on the nn.Module base, and the criterion's __call__
+        # signature varies per task. mypy can't narrow nn.Module to the
+        # concrete subclass through the factory method.
+        self.criterion: Any = self._create_criterion()
 
         # Create optimizer and scheduler
         self.optimizer = self._create_optimizer()
@@ -142,6 +154,9 @@ class BaseModelTrainer(ABC):
 
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
 
+        # Annotate as the base type so SGD doesn't fail to assign to a
+        # mypy-narrowed AdamW slot.
+        optimizer: torch.optim.Optimizer
         if optimizer_type == "AdamW":
             optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
         elif optimizer_type == "SGD":
@@ -153,7 +168,7 @@ class BaseModelTrainer(ABC):
         logger.info("  Optimizer: %s (lr=%s)", optimizer_type, lr)
         return optimizer
 
-    def _create_scheduler(self) -> Optional[torch.optim.lr_scheduler._LRScheduler]:
+    def _create_scheduler(self) -> Optional[torch.optim.lr_scheduler.LRScheduler]:
         """Create learning rate scheduler."""
         total_epochs = self.config.get("epochs", 50)
         warmup_epochs = self.config.get("warmup_epochs", 3)
@@ -290,11 +305,15 @@ class BaseModelTrainer(ABC):
         """Save LoRA adapters for deployment."""
         if hasattr(self.model, "save_lora_adapters"):
             adapter_dir = self.output_dir / "lora_adapters"
-            self.model.save_lora_adapters(
+            # Same PEFT-via-nn.Module __getattr__ pattern as merger.py
+            # (TODO #13) and peft_utils.save_lora_adapters: cast through
+            # Any so the method call type-checks.
+            peft_model: Any = self.model
+            peft_model.save_lora_adapters(
                 output_dir=str(adapter_dir),
                 # safe_serialization=True
             )
-            peft_files = {}
+            peft_files: Dict[str, str] = {}
             for f in adapter_dir.iterdir():
                 if f.name.startswith("adapter_config"):
                     peft_files["config"] = f.name

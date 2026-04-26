@@ -7,7 +7,7 @@ Box-prompted segmentation using MobileSAM.
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List
 
 import numpy as np
 import torch
@@ -52,7 +52,11 @@ class MobileSAMSegmenter:
         self.checkpoint_path = checkpoint_path
         self.device = torch.device(device)
 
-        self._predictor: Optional[SamPredictor] = None
+        # Lazy-loaded SamPredictor. Annotated Any (not Optional[SamPredictor])
+        # because every consumer is gated by _load_model() — the None state
+        # is a transient init detail, and this avoids the union-attr noise
+        # at every `self._predictor.set_image(...)` call.
+        self._predictor: Any = None
 
     def _load_model(self) -> None:
         """Load model lazily on first use."""

@@ -149,11 +149,14 @@ class AutoLabeler:
 
             height, width = image_bgr.shape[:2]
 
-            # Single-image detection
+            # Single-image detection. text_threshold is forwarded for
+            # Protocol/API contract compliance even though the GroundingDINO
+            # implementation currently drops it (TODO #17).
             detection = detector.detect(
                 image=image_bgr,
                 prompts=class_prompts,
                 box_threshold=self.config.thresholds.box,
+                text_threshold=self.config.thresholds.text,
                 nms_threshold=self.config.thresholds.nms,
             )
 

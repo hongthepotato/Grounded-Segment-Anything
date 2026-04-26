@@ -10,7 +10,7 @@ averaging over each class's token positions.
 """
 
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import cv2
 import groundingdino.datasets.transforms as T
@@ -122,7 +122,13 @@ class GroundingDINODetector:
         self.config_path = config_path
         self.checkpoint_path = checkpoint_path
         self.device = torch.device(device)
-        self._model = None
+        # Lazy-loaded GroundingDINO instance. Annotated Any (not Optional[Module])
+        # because (a) it's set in _load_model and every consumer is gated by
+        # _load_model(), so the None state is a transient init detail; (b) the
+        # PEFT-wrapped model exposes attributes (.tokenizer, .to, .eval) via
+        # nn.Module.__getattr__ which mypy can't see through. Same boundary
+        # pattern as model_trainers/base.py self.model: Any.
+        self._model: Any = None
 
     def _load_model(self) -> None:
         if self._model is not None:
@@ -138,7 +144,7 @@ class GroundingDINODetector:
         image: np.ndarray,
         prompts: List[str],
         box_threshold: float = 0.5,
-        # text_threshold: float = 0.5,
+        text_threshold: float = 0.5,
         nms_threshold: float = 0.7,
     ) -> DetectionResult:
         """Detect objects in a single BGR image.
@@ -147,11 +153,19 @@ class GroundingDINODetector:
             image: BGR image (OpenCV format).
             prompts: Class names to detect.
             box_threshold: Minimum per-class score to keep a detection.
+            text_threshold: Token-level matching threshold. CURRENTLY
+                IGNORED — see TODO #17. The value flows from the API down
+                to here but is dropped by this implementation; the original
+                token-level filter (inside `logits_to_class_scores`) was
+                removed during refactor and never restored.
             nms_threshold: IoU threshold for NMS.
 
         Returns:
             DetectionResult with boxes, confidences, and class_ids.
         """
+        # text_threshold is accepted for Protocol/API contract compliance
+        # but currently unused (see TODO #17). Marked _ to silence linters.
+        _ = text_threshold
         self._load_model()
 
         caption = preprocess_caption(".".join(prompts))

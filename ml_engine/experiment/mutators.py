@@ -63,10 +63,17 @@ class SimpleMutator:
             # If no improvement in last 3 non-baseline trials, try a different key
             recent = [t for t in trials[-3:] if t.overrides and t.primary_metric is not None]
             baseline = recent[0].primary_metric if recent else None
+            # The list comprehension at line 64 already filtered for
+            # `t.primary_metric is not None`, but mypy can't propagate that
+            # narrowing into the inner generator. Repeat the explicit check
+            # so isclose() sees a float, not float | None.
             stagnant = (
                 len(recent) == 3
                 and baseline is not None
-                and all(math.isclose(t.primary_metric, baseline, rel_tol=1e-6) for t in recent)
+                and all(
+                    t.primary_metric is not None and math.isclose(t.primary_metric, baseline, rel_tol=1e-6)
+                    for t in recent
+                )
             )
             if stagnant:
                 candidates = [k for k in candidates if k != self._last_key] or candidates

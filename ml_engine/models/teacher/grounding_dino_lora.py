@@ -10,7 +10,7 @@ This module provides a wrapper for Grounding DINO with:
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from groundingdino.models import build_model
@@ -62,7 +62,7 @@ class GroundingDINOLoRA(nn.Module):
     def __init__(
         self,
         base_checkpoint: str,
-        lora_config: Dict = None,
+        lora_config: Optional[Dict] = None,
         freeze_backbone: bool = True,
         freeze_bbox_embed: bool = False,
         bert_model_path: Optional[str] = None,
@@ -90,8 +90,13 @@ class GroundingDINOLoRA(nn.Module):
         self._positive_map_cache: Optional[torch.Tensor] = None
         self._positive_map_class_key: Optional[str] = None
 
+        # `Any` annotation: self.model is a PEFT-wrapped GroundingDINO that
+        # exposes attributes (.tokenizer, .base_model, .get_features, ...) via
+        # nn.Module.__getattr__ — mypy resolves those through the Module stub
+        # to Tensor/Module and rejects every callsite. Same boundary pattern
+        # as model_trainers/base.py self.model: Any (TODO #13 / Step 2.4.3).
         logger.info("Loading Grounding DINO from: %s", base_checkpoint)
-        self.model = self._load_base_model(base_checkpoint)
+        self.model: Any = self._load_base_model(base_checkpoint)
 
         if not _skip_lora_setup:
             # Apply LoRA
@@ -170,18 +175,20 @@ class GroundingDINOLoRA(nn.Module):
         except Exception as e:
             raise RuntimeError(f"Failed to build Grounding DINO model: {e}") from e
 
-        # Load pretrained checkpoint
-        checkpoint_path = Path(checkpoint_path)
-        if not checkpoint_path.exists():
+        # Load pretrained checkpoint. Use a fresh `path: Path` instead of
+        # rebinding the str-typed `checkpoint_path` parameter (same shadowing
+        # pattern as core/config.py and checkpoint_manager.py).
+        path = Path(checkpoint_path)
+        if not path.exists():
             raise FileNotFoundError(
-                f"Checkpoint not found: {checkpoint_path}\n"
+                f"Checkpoint not found: {path}\n"
                 f"Download pretrained weights from:\n"
                 f"  https://github.com/IDEA-Research/GroundingDINO/releases"
             )
 
-        logger.info("Loading checkpoint: %s", checkpoint_path)
+        logger.info("Loading checkpoint: %s", path)
         try:
-            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+            checkpoint = torch.load(path, map_location="cpu")
         except Exception as e:
             raise RuntimeError(f"Failed to load checkpoint: {e}") from e
 

@@ -173,16 +173,15 @@ class AsyncJobManager:
         return await self.store.get_queue_length()
 
     async def get_queue_status(self) -> Dict[str, Any]:
-        (
-            workers,
-            queue_length,
-            pending,
-            running,
-            completed,
-            failed,
-            cancelled,
-        ) = await asyncio.gather(
-            self.store.list_workers(),
+        # Pulled list_workers() out of the gather so its concrete return
+        # type (List[WorkerInfo]) survives — asyncio.gather over heterogeneous
+        # awaitables collapses to list[Any] and the worker-iteration below
+        # then fails type-checking. The 6 remaining calls all return int, so
+        # gather's typed overloads handle them. Trade-off: list_workers runs
+        # sequentially first instead of in parallel with the SCARDs (~1-5ms
+        # extra wall time on a status endpoint, not in any hot path).
+        workers = await self.store.list_workers()
+        queue_length, pending, running, completed, failed, cancelled = await asyncio.gather(
             self.store.get_queue_length(),
             self.get_job_count("pending"),
             self.get_job_count("running"),

@@ -9,7 +9,7 @@ This module provides utilities for:
 
 import logging
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from peft import LoraConfig, get_peft_model
 from torch import nn
@@ -61,7 +61,11 @@ def apply_lora(model: nn.Module, lora_config: Dict, target_modules: Optional[Lis
         task_type=lora_config.get("task_type", "FEATURE_EXTRACTION"),
     )
 
-    model = get_peft_model(model, peft_config)
+    # PEFT's get_peft_model stub demands PreTrainedModel but it actually
+    # accepts any nn.Module at runtime (internal duck-typing). Same boundary-
+    # cast pattern as merger.py (TODO #13). The Any here only widens the
+    # arg type passed to PEFT, not the return type assigned back to model.
+    model = get_peft_model(model, peft_config)  # type: ignore[arg-type]
 
     logger.info("Applied LoRA with rank %s", peft_config.r)
     logger.info("Target modules: %s", peft_config.target_modules)
@@ -70,7 +74,7 @@ def apply_lora(model: nn.Module, lora_config: Dict, target_modules: Optional[Lis
     return model
 
 
-def verify_freezing(model: nn.Module, strict: bool = True) -> Dict[str, int]:
+def verify_freezing(model: nn.Module, strict: bool = True) -> Dict[str, float]:
     """
     Verify that base model is frozen and only LoRA adapters are trainable.
 
@@ -186,7 +190,13 @@ def save_lora_adapters(model: nn.Module, output_dir: str, safe_serialization: bo
     os.makedirs(output_dir, exist_ok=True)
 
     if hasattr(model, "save_pretrained"):
-        model.save_pretrained(output_dir, safe_serialization=safe_serialization)
+        # PEFT models forward attr access through nn.Module.__getattr__,
+        # which mypy resolves via the Module stub returning Tensor for
+        # unknown attrs. The hasattr guard above proves save_pretrained
+        # exists at runtime; cast through Any to call it. Same boundary
+        # pattern as merger.py (TODO #13).
+        peft_model: Any = model
+        peft_model.save_pretrained(output_dir, safe_serialization=safe_serialization)
         logger.info("Saved LoRA adapters to: %s", output_dir)
     else:
         raise ValueError(

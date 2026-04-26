@@ -65,7 +65,7 @@ class YOLOSegInference:
 
     def _parse_results(self, result) -> List[Dict]:
         """Extract structured detections from a single ultralytics Result."""
-        detections = []
+        detections: List[Dict] = []
 
         boxes = result.boxes
         masks = result.masks
