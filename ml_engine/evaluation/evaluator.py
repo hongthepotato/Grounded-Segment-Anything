@@ -109,8 +109,8 @@ class ModelEvaluator:
         metrics = DetectionMetrics(num_classes=num_classes, class_names=class_names)
 
         # Samples for visualization
-        success_samples = []
-        failure_samples = []
+        success_samples: List[Dict[str, Any]] = []
+        failure_samples: List[Dict[str, Any]] = []
 
         logger.info("Running detection evaluation on %d batches...", len(dataloader))
 
@@ -180,8 +180,8 @@ class ModelEvaluator:
         metrics = SegmentationMetrics(num_classes=num_classes, class_names=class_names)
 
         # Samples for visualization
-        success_samples = []
-        failure_samples = []
+        success_samples: List[Dict[str, Any]] = []
+        failure_samples: List[Dict[str, Any]] = []
 
         logger.info("Running segmentation evaluation on %d batches...", len(dataloader))
 
@@ -249,8 +249,13 @@ class ModelEvaluator:
         batch_size = gt_labels.shape[0]
         cat_id_to_idx = dataset_info["category_id_to_index"]
 
-        # Use model's predict() method - handles all token-to-class conversion internally
-        raw_predictions = model.predict(images, class_names, self.confidence_threshold)
+        # Use model's predict() method - handles all token-to-class conversion internally.
+        # Cast through Any: model is typed nn.Module but is actually a
+        # PEFT-wrapped GroundingDINO with a custom .predict() that mypy can't
+        # see through nn.Module.__getattr__. Same boundary pattern as
+        # model_trainers/base.py self.model: Any (TODO #13 / Step 2.4.3).
+        peft_model: Any = model
+        raw_predictions = peft_model.predict(images, class_names, self.confidence_threshold)
 
         # Convert to xyxy pixel coordinates and format for metrics
         predictions_list = []

@@ -237,14 +237,17 @@ class SegmentationMetrics:
         sorted_indices = torch.argsort(pred_scores, descending=True)
 
         for pred_idx in sorted_indices:
-            pred_label = pred_labels[pred_idx].item()
+            # Tensor.item() returns int | float | bool from the typing
+            # perspective; labels are integer-valued at runtime, so cast to
+            # int to match class_ious / class_dice indexing (Dict[int, ...]).
+            pred_label = int(pred_labels[pred_idx].item())
             best_iou = 0.0
             best_gt_idx = -1
 
             for gt_idx in range(len(tgt_masks)):
                 if gt_idx in matched_gt:
                     continue
-                if tgt_labels[gt_idx].item() != pred_label:
+                if int(tgt_labels[gt_idx].item()) != pred_label:
                     continue
 
                 iou = iou_matrix[pred_idx, gt_idx].item()
@@ -268,7 +271,8 @@ class SegmentationMetrics:
         # Without this, a model with 10% recall that segments perfectly reports mIoU=1.0.
         for gt_idx in range(len(tgt_masks)):
             if gt_idx not in matched_gt:
-                gt_label = tgt_labels[gt_idx].item()
+                # Same int() cast rationale as the matched-pred loop above.
+                gt_label = int(tgt_labels[gt_idx].item())
                 if 0 <= gt_label < self.num_classes:
                     self.class_ious[gt_label].append(0.0)
                     self.class_dice[gt_label].append(0.0)

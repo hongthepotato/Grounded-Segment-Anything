@@ -318,18 +318,21 @@ class ModelReportGenerator:
             output_path: Path to save JSON file
             also_save_text: Whether to also save a text summary
         """
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Use a fresh `path: Path` instead of rebinding the str-typed
+        # `output_path` parameter (same shadowing pattern as core/config.py
+        # and checkpoint_manager.py).
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         # Save JSON
-        with open(output_path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
 
-        logger.info("Saved evaluation report to: %s", output_path)
+        logger.info("Saved evaluation report to: %s", path)
 
         # Save text summary
         if also_save_text and "model_name" in report:
-            text_path = output_path.with_suffix(".txt")
+            text_path = path.with_suffix(".txt")
             summary_text = self.generate_summary_text(report)
 
             with open(text_path, "w", encoding="utf-8") as f:
