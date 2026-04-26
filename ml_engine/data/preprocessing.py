@@ -229,8 +229,12 @@ class GroundingDINOPreprocessor(BaseModelPreprocessor):
             target["boxes"] = boxes_xyxy
 
         image, target = resize(image, target, self.min_size, self.max_size)
+        # dino_totensor + dino_normalize convert PIL.Image to torch.Tensor.
+        # Mypy can't follow that through DINO's transforms (3rd-party, no
+        # stubs), so it keeps thinking `image` is still Image.Image and
+        # complains about .shape below. Rebind to a tensor-typed name.
         image, target = self.dino_totensor(image, target)
-        image, target = self.dino_normalize(image, target)
+        image_tensor, target = self.dino_normalize(image, target)
 
         transformed_boxes = None
         if "boxes" in target:
@@ -239,12 +243,12 @@ class GroundingDINOPreprocessor(BaseModelPreprocessor):
 
         metadata = {
             "original_size": (orig_height, orig_width),
-            "final_size": tuple(image.shape[-2:]),
+            "final_size": tuple(image_tensor.shape[-2:]),
             "model_name": self.model_name,
         }
 
         return {
-            "image": image,
+            "image": image_tensor,
             "boxes": transformed_boxes,
             "masks": None,  # DINO doesn't use masks
             "metadata": metadata,
@@ -265,10 +269,15 @@ class YOLOPreprocessor(BaseModelPreprocessor):
             from ultralytics.data.augment import LetterBox
 
             target_size = config["input_size"].get("size", 640)
+            # Note: ultralytics renamed the kwarg from `scaleFill` (camelCase,
+            # the original YOLOv8 API) to `scale_fill` (snake_case). Older
+            # code used `scaleFill=False` which raises TypeError on current
+            # ultralytics. mypy caught this — there's no unit test for
+            # YOLOPreprocessor so the runtime crash was masked.
             self.letterbox = LetterBox(
                 new_shape=(target_size, target_size),
                 auto=False,
-                scaleFill=False,
+                scale_fill=False,
                 scaleup=True,
             )
         except ImportError:
@@ -424,7 +433,12 @@ class MultiModelPreprocessor:
                 raise ValueError(f"No config found for {model_name} in {config_path}")
 
             preprocessor_class = self.PREPROCESSOR_REGISTRY[model_name]
-            self.preprocessors[model_name] = preprocessor_class(model_name, self.config[model_name])
+            # Registry values are concrete subclasses by contract (enforced
+            # by register_preprocessor + the seeded entries); mypy can only
+            # see Type[BaseModelPreprocessor] and warns the base is abstract.
+            self.preprocessors[model_name] = preprocessor_class(  # type: ignore[abstract]
+                model_name, self.config[model_name]
+            )
 
     def preprocess_batch(
         self,

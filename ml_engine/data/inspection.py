@@ -51,9 +51,12 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
         >>> print(info['has_boxes'])  # True
         >>> print(info['class_mapping'])  # {0: 'ear', 1: 'defect', ...}
     """
-    annotations = coco_data.get("annotations")
-    categories = coco_data.get("categories")
-    images = coco_data.get("images")
+    # Required keys per the COCO contract (documented above) — using direct
+    # access lets a missing key fail loudly instead of producing the silent
+    # `Any | None` -> "iterating None" crash that .get() invited.
+    annotations = coco_data["annotations"]
+    categories = coco_data["categories"]
+    images = coco_data["images"]
 
     has_boxes = any("bbox" in ann and ann["bbox"] is not None and ann["bbox"] != [] for ann in annotations)
     has_masks = any(
@@ -85,7 +88,7 @@ def inspect_dataset(coco_data: Dict[str, Any]) -> Dict[str, Any]:
     num_annotations = len(annotations)
 
     # Count annotations per class
-    class_counts = {}
+    class_counts: Dict[int, int] = {}
     for ann in annotations:
         cat_id = ann.get("category_id")
         if cat_id is not None:

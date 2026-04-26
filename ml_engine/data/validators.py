@@ -21,7 +21,7 @@ Category ID Handling:
 
 import copy
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
@@ -278,7 +278,7 @@ def _validate_segmentation(segmentation: Any, ann_idx: int) -> List[str]:
     Returns:
         List of validation errors (empty if valid)
     """
-    errors = []
+    errors: List[str] = []
 
     if segmentation is None or segmentation == []:
         return errors
@@ -692,7 +692,10 @@ def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         Dictionary with quality metrics and warnings
     """
-    results = {
+    # Heterogeneous values (int counters + dict[int, int] distributions + list[str]
+    # warnings) — without Dict[str, Any], mypy infers `object` for the value type
+    # and every result["..."] += 1 / .append(...) below blows up.
+    results: Dict[str, Any] = {
         "total_images": len(coco_data["images"]),
         "total_annotations": len(coco_data["annotations"]),
         "images_without_annotations": 0,
@@ -732,7 +735,11 @@ def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
             bbox = ann["bbox"]
             bbox_area = bbox[2] * bbox[3]
 
-            img_info = image_lookup.get(ann["image_id"])
+            # COCO contract: every ann.image_id refers to an image in
+            # coco_data["images"]. Use [] not .get() so malformed data
+            # (orphan annotation) raises KeyError loudly instead of
+            # crashing with TypeError on None["width"].
+            img_info = image_lookup[ann["image_id"]]
             img_area = img_info["width"] * img_info["height"]
 
             if bbox_area < img_area * 0.01:
@@ -748,7 +755,8 @@ def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
             bbox_area = bbox[2] * bbox[3]
 
             if bbox_area > 0:
-                img_info = image_lookup.get(ann["image_id"])
+                # Same contract as above — direct [] access.
+                img_info = image_lookup[ann["image_id"]]
                 try:
                     mask_area = compute_area_from_mask(
                         ann["segmentation"], img_info["height"], img_info["width"]
@@ -807,7 +815,7 @@ def check_data_quality(coco_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def split_dataset(
     coco_data: Dict[str, Any],
-    splits: Dict[str, float] = None,
+    splits: Optional[Dict[str, float]] = None,
     stratify: bool = True,
     random_seed: int = 42,
 ) -> Dict[str, Dict[str, Any]]:
@@ -877,7 +885,7 @@ def _validate_split_ratios(splits: Dict[str, float]) -> None:
 
 def _build_image_to_annotations_mapping(annotations: List[Dict]) -> Dict[int, List[Dict]]:
     """Build mapping from image_id to list of annotations."""
-    image_to_anns = {}
+    image_to_anns: Dict[int, List[Dict]] = {}
     for ann in annotations:
         image_id = ann["image_id"]
         if image_id not in image_to_anns:
@@ -952,7 +960,11 @@ def _stratified_split(
         y = label_matrix
 
         # First split: train vs (val + test)
+        # _validate_split_ratios already guarantees splits has positive ratios
+        # summing to 1.0, so "train" key existence is enforced by the contract,
+        # but mypy can't see that from the dict type alone — assert for narrowing.
         train_size = splits.get("train")
+        assert train_size is not None, "splits must contain 'train' key (enforced upstream)"
         msss = MultilabelStratifiedShuffleSplit(
             n_splits=1, test_size=1 - train_size, random_state=random_seed
         )
@@ -1055,11 +1067,11 @@ def _create_split_datasets(
     Returns:
         Dict mapping split_name → COCO format dict for that split
     """
-    result = {}
+    result: Dict[str, Dict[str, Any]] = {}
     all_category_ids = {cat["id"] for cat in categories}
 
     # Calculate overall class distribution for comparison
-    total_class_counts = {}
+    total_class_counts: Dict[int, int] = {}
     for ann in annotations:
         cat_id = ann["category_id"]
         total_class_counts[cat_id] = total_class_counts.get(cat_id, 0) + 1
@@ -1081,7 +1093,7 @@ def _create_split_datasets(
 
         # Optional: Log class distribution for this split (debugging)
         if logger.isEnabledFor(logging.DEBUG):
-            split_class_counts = {}
+            split_class_counts: Dict[int, int] = {}
             for ann in split_annotations:
                 cat_id = ann["category_id"]
                 split_class_counts[cat_id] = split_class_counts.get(cat_id, 0) + 1

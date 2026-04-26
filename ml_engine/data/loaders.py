@@ -220,8 +220,8 @@ class TeacherDataset(COCODataset):
         self,
         coco_data: Dict,
         image_path_resolver: Callable[[str], str],
-        preprocessor: MultiModelPreprocessor = None,
-        augmentation_pipeline: ConfigurableAugmentationPipeline = None,
+        preprocessor: MultiModelPreprocessor,
+        augmentation_pipeline: Optional[ConfigurableAugmentationPipeline] = None,
         return_boxes: bool = True,
         return_masks: bool = True,
         sam_single_object_sampling: bool = False,
@@ -307,7 +307,9 @@ class TeacherDataset(COCODataset):
                 # Default: use all objects
                 model_boxes = all_boxes
                 model_masks = all_masks
-                use_labels = sample_labels
+                # Normalize None → [] so use_labels matches the list type
+                # the SAM branch sets (and the np.array call below assumes).
+                use_labels = sample_labels if sample_labels else []
 
             # Handle empty/None cases
             if not self.return_boxes or model_boxes is None:
