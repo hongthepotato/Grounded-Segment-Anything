@@ -98,7 +98,7 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 **Status:** Path A chosen 2026-04-25 — committed to driving the baseline to zero across all maintained directories.
 
-**Live baseline:** **388 errors in 44 files** (after Step 1 stubs + Step 2.1 core/ + Step 2.2 api/ — see progress below).
+**Live baseline:** **219 errors in 42 files** (after Step 1 stubs + Step 2.1 core/ + Step 2.2 api/ + Step 2.3 augmentation/ — see progress below).
 
 `continue-on-error: true` on the mypy step in `ci.yml` keeps CI passing while this baseline exists. Step 3 flips that off after Step 2 finishes.
 
@@ -106,7 +106,7 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 - ✅ Step 1: installed `types-PyYAML` (cleared 6 yaml errors). Baseline 416 → 410.
 - ✅ Step 2.1: `core/` clean — 4 functions in `config.py` widened `path: str` → `path: str | Path`; 2 formatter locals in `logging_config.py` annotated as base `logging.Formatter`. Baseline 410 → 400.
 - ✅ Step 2.2: `api/` clean — 13 own errors fixed. Patterns: 4 `Path(job.output_dir)` calls now guarded with explicit None checks (HTTPException 500 if missing); 3 var-annotated dict/list literals; 1 `job_to_response(Job | None)` guarded; deleted `autolabel.py`'s stale duplicate of `job_to_response` (canonical lives in `jobs.py`); replaced broken `subscribe_to_job_async` call in `websocket.py` with explicit `subscription_unavailable` frame + clean close (filed item 15 for proper implementation). Baseline 400 → 388.
-- ⬜ Step 2.3: `augmentation/` (estimated ~25-50 own errors)
+- ✅ Step 2.3: `augmentation/` clean — 169 own errors fixed. Two correctness fixes: (a) `AugmentationRule.intensity_ranges` annotation was off by one nesting level (`Dict[str, Dict[str, AlbumentationsParameter]]` → `Dict[str, Dict[str, Dict[str, Any]]]`) — that single fix cleared 153 of the 169 errors; (b) `_validate_input_data` + 3 `_validate_{masks,keypoints,bboxes}` helpers now take `Optional[List[...]]` matching what `apply()` actually passes in. Plus an `apply()` refactor: kept `has_X` booleans (used downstream) but added parallel inline `is not None and len(...) > 0` checks so mypy can narrow the Optional types (booleans aren't type guards). Annotated `aug_input: Dict[str, Any]` so mypy doesn't narrow from the first ndarray entry. Baseline 388 → 219.
 - ⬜ Step 2.4: `ml_engine/` (the bulk; will need sub-PR splits like ruff cleanup did)
 - ⬜ Step 3: flip `continue-on-error` → false in ci.yml's mypy step
 
@@ -161,7 +161,7 @@ Step 3 (1 PR, 1 line):
 
 **Cons:** 416 existing errors require per-file judgment work. Ongoing per-PR cost to maintain types. ML libraries (PEFT, transformers, accelerate) use heavy `__getattr__` delegation that mypy can't model — `Any` casts will be needed at boundaries even after cleanup (item 13 documented this for PEFT).
 
-**Recommended next action: continue Step 2.** Path A is the chosen direction. Next is `mypy-baseline-api/` (estimated ~30-50 errors). Use the same per-case judgment that worked for `core/`:
+**Recommended next action: continue Step 2.** Path A is the chosen direction. Next is `mypy-baseline-ml-engine/` (~219 remaining errors across 42 files — the bulk of the baseline). Will need sub-PR splits by subdirectory like ruff cleanup did. Use the same per-case judgment that worked for prior steps:
 - Path-as-string parameter pattern → widen to `str | Path`
 - Subclass-narrowing pattern → annotate as base type
 - Variable shadowing → rename or refactor
