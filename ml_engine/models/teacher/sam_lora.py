@@ -10,7 +10,7 @@ This module provides a wrapper for SAM with:
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from segment_anything import sam_hq_model_registry  # Use SAM-HQ
@@ -60,7 +60,7 @@ class SAMHQLoRA(nn.Module):
         self,
         base_checkpoint: str,
         model_type: str = "vit_h",
-        lora_config: Dict = None,
+        lora_config: Optional[Dict] = None,
         image_encoder_mode: str = "lora",  # "frozen" | "lora" | "full"
         prompt_encoder_mode: str = "frozen",  # "frozen" | "lora" | "full"
         mask_decoder_mode: str = "full",  # "frozen" | "lora" | "full"
@@ -99,8 +99,12 @@ class SAMHQLoRA(nn.Module):
             "mask_decoder": mask_decoder_mode,
         }
 
+        # `Any` annotation: same PEFT-via-nn.Module __getattr__ pattern as
+        # grounding_dino_lora.py — subclass attribute access (.base_model,
+        # .image_encoder, .prompt_encoder, .mask_decoder) goes through
+        # nn.Module.__getattr__ and resolves to Tensor/Module via the stub.
         logger.info("Loading SAM-HQ (%s) from: %s", model_type, base_checkpoint)
-        self.model = self._load_base_model(base_checkpoint, model_type)
+        self.model: Any = self._load_base_model(base_checkpoint, model_type)
 
         if not _skip_lora_setup:
             logger.info("Configuring training modes: %s", self.component_modes)
@@ -131,16 +135,17 @@ class SAMHQLoRA(nn.Module):
         if model_type not in valid_types:
             raise ValueError(f"Invalid model_type: {model_type}\nValid types: {valid_types}")
 
-        # Check checkpoint exists
-        checkpoint_path = Path(checkpoint_path)
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Checkpoint for SAM-HQ not found: {checkpoint_path}")
+        # Check checkpoint exists. Use a fresh `path: Path` (same shadowing
+        # pattern as core/config.py and grounding_dino_lora.py).
+        path = Path(checkpoint_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Checkpoint for SAM-HQ not found: {path}")
 
         # Load model
         logger.info("Loading SAM-HQ %s model...", model_type)
-        logger.info("Checkpoint: %s", checkpoint_path)
+        logger.info("Checkpoint: %s", path)
 
-        sam = sam_hq_model_registry[model_type](checkpoint=str(checkpoint_path))
+        sam = sam_hq_model_registry[model_type](checkpoint=str(path))
 
         logger.info("✓ SAM-HQ model loaded successfully")
         logger.info("  - Image encoder: %s", type(sam.image_encoder).__name__)
@@ -207,27 +212,35 @@ class SAMHQLoRA(nn.Module):
                 f"Invalid mode '{mode}' for {component_name}. Must be 'frozen', 'lora', or 'full'"
             )
 
-    def _get_base_model(self) -> nn.Module:
+    def _get_base_model(self) -> Any:
         """
         Get the base SAM model, unwrapping PEFT wrapper if present.
 
         Returns:
-            The underlying SAM model with image_encoder, prompt_encoder, mask_decoder
+            The underlying SAM model with image_encoder, prompt_encoder, mask_decoder.
+
+        Note: typed Any (not nn.Module) so the SAM-specific attribute access
+        in _get_image_encoder/_get_prompt_encoder/_get_mask_decoder doesn't
+        trip mypy on nn.Module.__getattr__ → Tensor | Module resolution.
         """
         if hasattr(self.model, "base_model"):
             # PEFT-wrapped model: self.model.base_model.model
             return self.model.base_model.model
         return self.model
 
-    def _get_image_encoder(self) -> nn.Module:
+    # Returns are annotated Any (not nn.Module): callers access SAM-specific
+    # methods like prompt_encoder.get_dense_pe() that route through
+    # nn.Module.__getattr__ → Tensor | Module per the stub. Cascading the
+    # Any from _get_base_model() preserves call-site usability.
+    def _get_image_encoder(self) -> Any:
         """Get the image encoder (frozen during LoRA training)."""
         return self._get_base_model().image_encoder
 
-    def _get_prompt_encoder(self) -> nn.Module:
+    def _get_prompt_encoder(self) -> Any:
         """Get the prompt encoder (frozen during LoRA training)."""
         return self._get_base_model().prompt_encoder
 
-    def _get_mask_decoder(self) -> nn.Module:
+    def _get_mask_decoder(self) -> Any:
         """Get the mask decoder (has LoRA adapters)."""
         return self._get_base_model().mask_decoder
 
@@ -586,7 +599,7 @@ class GroundedSAM(nn.Module):
         self,
         grounding_dino_base: str,
         grounding_dino_lora: Optional[str] = None,
-        sam_base: str = None,
+        sam_base: Optional[str] = None,
         sam_lora: Optional[str] = None,
         use_merged: bool = False,
         bert_model_path: Optional[str] = None,
