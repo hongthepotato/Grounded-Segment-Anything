@@ -98,9 +98,9 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 **Status:** Path A chosen 2026-04-25 — committed to driving the baseline to zero across all maintained directories.
 
-**Live baseline:** **0 errors across 119 source files** ✅ (ml_engine + core + api + augmentation all clean as of 2026-04-26). Step 3 (flip `continue-on-error: false` in ci.yml's mypy step) is now unblocked.
+**Live baseline:** **0 errors across 119 source files** ✅ (ml_engine + core + api + augmentation all clean as of 2026-04-26). Mypy gate flipped to gating in Step 3 (PR `ci/gate-mypy-checks`).
 
-`continue-on-error: true` on the mypy step in `ci.yml` keeps CI passing while this baseline exists. Step 3 flips that off after Step 2 finishes.
+~~`continue-on-error: true` on the mypy step in `ci.yml` keeps CI passing while this baseline exists. Step 3 flips that off after Step 2 finishes.~~ ✅ Done — `continue-on-error` removed and `augmentation/` added to scope.
 
 **Progress:**
 - ✅ Step 1: installed `types-PyYAML` (cleared 6 yaml errors). Baseline 416 → 410.
@@ -116,7 +116,7 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
   - **2.4.6 models/teacher/** (23 errors → 0): `self.model: Any` boundary cast in both `GroundingDINOLoRA` and `SAMHQLoRA` (16 PEFT attribute-access errors collapsed); `_get_base_model() -> Any` cascaded through `_get_image_encoder/_prompt_encoder/_mask_decoder` so SAM-specific method calls (`prompt_encoder.get_dense_pe()`) type-check.
   - **2.4.7 inference/** (22 errors → 0): real bug filed as TODO #17 — `text_threshold` flowed from API → handler → DetectionThresholds → AutoLabeler and was silently dropped at `detector.detect()` (the original token-level filter was lost in refactor); restored as accepted-but-unused param with `_ = text_threshold` placeholder + restored `text_threshold=self.config.thresholds.text` in AutoLabeler. Lazy-init `self._model: Any = None` pattern across 3 segmenter/detector files.
   - **2.4.8 distillation/ + experiment/ + export/templates/** (12 errors → 0): same `MpEvent` fix in `trial_runner.py`; explicit None re-narrowing in `mutators.py` all() generator (mypy can't propagate filter narrowing into nested generators); `assert manifest is not None` after the resolver-invariant guard in `pseudo_label.py`; fallback to spec class-level defaults when manifest fields are Optional.
-- ⬜ Step 3: flip `continue-on-error` → false in ci.yml's mypy step
+- ✅ Step 3: removed `continue-on-error: true` from ci.yml's mypy step + added `augmentation/` to the gated source set (was only `core ml_engine api` previously). Same pattern as the ruff gate flip in PR #33.
 
 **Step 1 outcome (shipped):** Installed `types-PyYAML` only. Surveyed our other third-party imports (PIL, tqdm, requests) — type stubs exist for those too, but installing them would NOT drop the count today: `--ignore-missing-imports` already suppresses errors for libraries without inline type info, and adding their stubs would START flagging code that uses them. That's a NET INCREASE in the visible baseline, not a decrease — wrong direction for a "quick win" PR. Those stubs should ride with the per-directory cleanup PRs (Step 2) when the related code is being touched anyway.
 
@@ -169,7 +169,7 @@ Step 3 (1 PR, 1 line):
 
 **Cons:** 416 existing errors require per-file judgment work. Ongoing per-PR cost to maintain types. ML libraries (PEFT, transformers, accelerate) use heavy `__getattr__` delegation that mypy can't model — `Any` casts will be needed at boundaries even after cleanup (item 13 documented this for PEFT).
 
-**Recommended next action: ship Step 3** — flip `continue-on-error: true` → `false` on the mypy step in `.github/workflows/ci.yml`. The baseline is now 0 errors across the full `core ml_engine api augmentation` source set (119 source files). One-line CI change, zero source changes. After Step 3 lands, mypy gates merges the same way ruff does (TODO #9 / PR #33 set the precedent).
+**TODO #6 fully complete** ✅ as of 2026-04-26. Steps 1, 2.1–2.4 (8 sub-PRs), and 3 all merged. Mypy now gates merges across `core ml_engine api augmentation` (119 source files). Two follow-up TODOs surfaced during the cleanup: #16 (job_id propagation through training pipeline so manifests carry real lineage) and #17 (restore text_threshold token-level filtering in GroundingDINODetector — currently silently dropped). Both can ship independently.
 
 **Earlier guidance that informed Step 2.4 (kept for posterity):** Use the same per-case judgment that worked for prior steps:
 - Path-as-string parameter pattern → widen to `str | Path`
@@ -541,6 +541,35 @@ because its body uses no instance state — `self` is only there because it's
 an instance method. Avoids constructing a full augmentation pipeline for
 every test. Fast (~8s cold for all 44 tests), isolated from albumentations
 state.
+
+### 6. mypy baseline cleanup — drive 416 errors to zero, then flip the gate ✅
+
+**Completed:** 2026-04-26 across 9 PRs merged into `agentic`:
+- PR #34 (`chore/mypy-stubs-and-todos`): Step 1 — `types-PyYAML` stub install (416 → 410)
+- PR #35 (`mypy-baseline-core`): Step 2.1 — core/ clean (410 → 400)
+- PR #37 (`mypy-baseline-api`): Step 2.2 — api/ clean (400 → 388)
+- PR #38 (`mypy-baseline-augmentation`): Step 2.3 — augmentation/ clean (388 → 219)
+- PR #39 (`mypy-baseline-ml-engine`): Step 2.4 — ml_engine/ clean across 8 sub-commits (219 → 0)
+- This PR (`ci/gate-mypy-checks`): Step 3 — flipped `continue-on-error: false` + added augmentation/ to scope
+
+**What shipped:** Mypy now gates merges across `core ml_engine api augmentation` (119 source files, 0 errors) the same way ruff does (TODO #9 / PR #33 set the precedent).
+
+**Real bugs surfaced and fixed during cleanup:**
+- ultralytics `scaleFill` → `scale_fill` rename had broken `YOLOPreprocessor` at construction time; zero unit-test coverage masked the runtime crash (Step 2.4.1)
+- `PredictionVisualizer._save_single` `else []` fallback returned a Python list to a function typed `np.ndarray` — silent contract violation (Step 2.4.5)
+- `text_threshold` parameter flowed from public API down to `detector.detect()` and was silently dropped — filed as TODO #17 (Step 2.4.7)
+
+**Real bugs surfaced and DEFERRED (filed as separate TODOs):**
+- TODO #16: `CreateByInfo.job_id` widened to `Optional[str]` because the trainer can't see its parent job_id — value is known at submission time but dropped at the subprocess boundary
+- TODO #17: token-level filtering removed from GroundingDINODetector during a refactor; user-supplied `text_threshold` is currently a no-op
+
+**Patterns established (grep-able, all cross-reference each other):**
+- `self.X: Any` boundary cast for PEFT-via-`nn.Module.__getattr__` (12+ sites)
+- `self.redis: Any` for redis-py's `Awaitable[T] | T` overload artifact (5 sites)
+- `from multiprocessing.synchronize import Event as MpEvent` for `mp.Event` factory-vs-class confusion (8 files)
+- Path/str shadowing → fresh `path: Path` rebind (5 sites)
+- Lazy-init `self._X: Any = None` for modules/predictors set in `_load_model()` (4 sites)
+- `Dict[str, Any]` annotation on heterogeneous result/result-like dicts (6+ sites — covers ~30 cascading "object has no attribute" errors)
 
 ### 13. Type-annotate `ml_engine/export/merger.py` ✅
 
