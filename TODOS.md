@@ -98,14 +98,14 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 **Status:** Path A chosen 2026-04-25 — committed to driving the baseline to zero across all maintained directories.
 
-**Live baseline:** **400 errors in 48 files** (after Step 1 stubs + Step 2 core/ — see progress below).
+**Live baseline:** **388 errors in 44 files** (after Step 1 stubs + Step 2.1 core/ + Step 2.2 api/ — see progress below).
 
 `continue-on-error: true` on the mypy step in `ci.yml` keeps CI passing while this baseline exists. Step 3 flips that off after Step 2 finishes.
 
 **Progress:**
 - ✅ Step 1: installed `types-PyYAML` (cleared 6 yaml errors). Baseline 416 → 410.
 - ✅ Step 2.1: `core/` clean — 4 functions in `config.py` widened `path: str` → `path: str | Path`; 2 formatter locals in `logging_config.py` annotated as base `logging.Formatter`. Baseline 410 → 400.
-- ⬜ Step 2.2: `api/` (estimated ~30-50 own errors)
+- ✅ Step 2.2: `api/` clean — 13 own errors fixed. Patterns: 4 `Path(job.output_dir)` calls now guarded with explicit None checks (HTTPException 500 if missing); 3 var-annotated dict/list literals; 1 `job_to_response(Job | None)` guarded; deleted `autolabel.py`'s stale duplicate of `job_to_response` (canonical lives in `jobs.py`); replaced broken `subscribe_to_job_async` call in `websocket.py` with explicit `subscription_unavailable` frame + clean close (filed item 15 for proper implementation). Baseline 400 → 388.
 - ⬜ Step 2.3: `augmentation/` (estimated ~25-50 own errors)
 - ⬜ Step 2.4: `ml_engine/` (the bulk; will need sub-PR splits like ruff cleanup did)
 - ⬜ Step 3: flip `continue-on-error` → false in ci.yml's mypy step
@@ -294,6 +294,52 @@ If a particular file proves harder than expected, file a sub-TODO and move on. D
 3. After per-file decisions: either move the file under `tests/unit/` (so CI catches future regressions) or delete it.
 
 **Depends on / blocked by:** None. Independent of in-flight work.
+
+---
+
+### 15. WebSocket route `/ws/jobs/{job_id}` — restore live event tailing
+
+**What:** The `/ws/jobs/{job_id}` route used to live-tail Redis pub/sub events for a job's lifetime. The subscription mechanism (`AsyncJobManager.subscribe_to_job_async`) was deleted in commit `bfdff7f` ("remove subscription to job publish; change timing format") and never replaced. The route's caller (`api/routes/websocket.py:97`) kept calling the deleted method — which would have crashed with `AttributeError` on every connection if anyone exercised it (the integration test was `@pytest.mark.skip`'d during ci-and-tests work, so the bug never surfaced in CI).
+
+**Current degraded behavior** (set by the mypy-baseline-api PR): the route now serves the current job state (initial snapshot + terminal payload if applicable), then sends an explicit `subscription_unavailable` frame and closes cleanly. Clients that need live updates must poll `GET /api/jobs/{job_id}` instead.
+
+**Why fix it properly:**
+- Polling is wasteful at scale (every client poll hits Redis); pub/sub is event-driven
+- The route currently advertises a websocket URL but doesn't deliver the value websockets exist for
+- The `progress.update_progress` call path in `ml_engine/jobs/redis_store.py` already publishes events (see `publish_event` on `AsyncJobManager`) — there's a producer with no consumer
+
+**Pros:**
+- Closes the gap between the route's URL contract and its actual behavior
+- Real-time training progress for UI clients without per-second polling
+- Pairs naturally with the cancel-on-disconnect flow that's part of `AsyncJobManager`
+
+**Cons:**
+- Reintroducing pub/sub-to-asyncio bridging is non-trivial. Three plausible approaches:
+  1. **Polling-loop replacement:** simpler. Drop the websocket nature; convert to long-polling REST. Fewer moving parts but loses true live updates.
+  2. **Async Redis subscription via `redis.asyncio.client.PubSub`:** native asyncio path, no thread bridging. Requires careful task lifecycle management (cancel subscription on disconnect, handle Redis disconnects).
+  3. **Background thread + `run_coroutine_threadsafe`:** what the deleted code tried to do. Works but threads-in-async is finicky (the old code's `asyncio.get_event_loop()` call in a thread is a known footgun in modern Python).
+- Need integration test that actually connects and verifies a published event reaches the client (the existing test was skipped — needs unskipping AND event-flow assertions).
+
+**Context:** Producer side already emits events: `AsyncJobManager.publish_event(job_id, event)` is called from `ml_engine/jobs/worker.py` (training subprocess events) and `ml_engine/agent/loop.py` (agent runs). The Redis stream key pattern is `agent:{run_id}:events` for agents and `job:{job_id}:events` (or similar — verify) for jobs. Consumer side is what's missing.
+
+**Recommended approach:** option 2 (async Redis subscription). Cleaner than the deleted thread-based version, and asyncio-native fits FastAPI's runtime model. Sketch:
+
+```python
+async def _subscribe_to_events(redis_async, job_id: str):
+    pubsub = redis_async.pubsub()
+    await pubsub.subscribe(f"job:{job_id}:events")
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                yield json.loads(message["data"])
+    finally:
+        await pubsub.unsubscribe(f"job:{job_id}:events")
+        await pubsub.close()
+```
+
+Then the route's main loop becomes `async for event in _subscribe_to_events(...): await ws.send_json(event)` with the existing terminal-state detection.
+
+**Depends on / blocked by:** None for the implementation. Should NOT proceed until someone confirms the publish_event channel naming convention (`job:{id}:events` vs other) and the event payload schema. The deleted code's tests would have documented this — they're gone now.
 
 ---
 

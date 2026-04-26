@@ -16,17 +16,16 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
+from api.routes.jobs import job_to_response
 from api.schemas import (
     AutoLabelRequest,
     AutoLabelResultResponse,
-    JobProgressSchema,
-    JobResponse,
     VisualizationInfo,
     VisualizationListResponse,
     success_response,
 )
 from core.config import load_json, save_json
-from ml_engine.jobs import AsyncJobManager, Job, get_async_job_manager
+from ml_engine.jobs import AsyncJobManager, get_async_job_manager
 
 logger = logging.getLogger(__name__)
 
@@ -39,36 +38,11 @@ def get_manager() -> AsyncJobManager:
     return get_async_job_manager(redis_url)
 
 
-def job_to_response(job: Job) -> JobResponse:
-    """Convert Job model to JobResponse schema."""
-    progress = None
-    if job.progress:
-        progress = JobProgressSchema(
-            current_epoch=job.progress.current_epoch,
-            total_epochs=job.progress.total_epochs,
-            current_step=job.progress.current_step,
-            total_steps=job.progress.total_steps,
-            metrics=job.progress.metrics,
-            message=job.progress.message,
-            overall_progress=job.progress.overall_progress,
-        )
-
-    return JobResponse(
-        id=job.id,
-        type=job.type,
-        status=job.status.value,
-        config=job.config,
-        progress=progress,
-        worker_id=job.worker_id,
-        created_at=job.created_at,
-        started_at=job.started_at,
-        finished_at=job.finished_at,
-        error_message=job.error_message,
-        output_dir=job.output_dir,
-        duration_seconds=job.duration_seconds,
-        priority=job.priority,
-        tags=job.tags,
-    )
+# `job_to_response` is imported from api.routes.jobs (the canonical version).
+# A local duplicate used to live here but had drifted: it passed `config`,
+# `priority`, `tags` (silently dropped by pydantic's extra='ignore') and
+# never computed `accuracy` for completed jobs. Importing the canonical one
+# keeps autolabel responses in sync with the rest of the API.
 
 
 @router.post("")
@@ -149,6 +123,8 @@ async def get_results(job_id: str, manager: AsyncJobManager = Depends(get_manage
             status_code=400,
             detail=f"Job is not completed (status: {job.status.value}). Cannot get results.",
         )
+    if job.output_dir is None:
+        raise HTTPException(status_code=500, detail=f"Job {job_id} has no output_dir")
 
     # Load annotations from output directory
     output_dir = Path(job.output_dir)
@@ -192,6 +168,8 @@ async def list_visualizations(job_id: str, manager: AsyncJobManager = Depends(ge
             status_code=400,
             detail=(f"Job is not completed (status: {job.status.value}). Visualizations not available."),
         )
+    if job.output_dir is None:
+        raise HTTPException(status_code=500, detail=f"Job {job_id} has no output_dir")
 
     output_dir = Path(job.output_dir)
     viz_dir = output_dir / "visualizations"
@@ -201,7 +179,7 @@ async def list_visualizations(job_id: str, manager: AsyncJobManager = Depends(ge
 
     # Load annotations to get annotation counts per image
     annotations_path = output_dir / "annotations.json"
-    annotation_counts = {}
+    annotation_counts: dict[str, int] = {}
 
     if annotations_path.exists():
         try:
@@ -267,6 +245,8 @@ async def get_visualization(job_id: str, filename: str, manager: AsyncJobManager
             status_code=400,
             detail=(f"Job is not completed (status: {job.status.value}). Visualizations not available."),
         )
+    if job.output_dir is None:
+        raise HTTPException(status_code=500, detail=f"Job {job_id} has no output_dir")
 
     output_dir = Path(job.output_dir)
     viz_path = output_dir / "visualizations" / filename
@@ -311,6 +291,8 @@ async def save_annotations(job_id: str, annotations: dict, manager: AsyncJobMana
             status_code=400,
             detail=f"Job is not completed (status: {job.status.value}). Cannot save annotations.",
         )
+    if job.output_dir is None:
+        raise HTTPException(status_code=500, detail=f"Job {job_id} has no output_dir")
 
     output_dir = Path(job.output_dir)
 
