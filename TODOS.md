@@ -328,6 +328,129 @@ regress.
 
 ---
 
+### 18. Tighten remaining `api/schemas.py` enum/range validators (7 truly-breaking categories — needs frontend audit)
+
+**What:** 7 `api/schemas.py` fields still have docstring-vs-validator
+gaps after the safe subset shipped in PR test/p2-api-schemas. Each is
+either an enum (plain `str` where docstring lists allowed values), a
+range gap on a client-supplied field, or a non-empty-list constraint —
+all of which would BREAK existing callers if tightened naively.
+`tests/unit/api/test_schemas.py` documents each remaining gap as
+`xfail(strict=True)` — **37 individual xfails across 7 categories**.
+When each validator is tightened, the strict-xfail trips (test
+unexpectedly passes), CI fails, and the developer flips the
+`@pytest.mark.xfail` decorator off so the test becomes a regression
+guard.
+
+**Already shipped in test/p2-api-schemas (8 SAFE categories closed,
+32 xfails turned into regular passing tests):** overall_progress range,
+current_epoch ≤ total_epochs invariant, split_config sum=1.0, COCO
+width/height positive, COCO bbox length=4, COCO iscrowd binary, COCO
+score range, VisualizationInfo annotation_count non-negative.
+
+**Remaining 7 categories — DEFERRED for client coordination
+(37 xfails total — each test class in `test_schemas.py` carries the
+exact `reason=` line + source pointer):**
+
+- **4 enum gaps** (need frontend audit first — clients may be sending
+  capitalization variants or legacy synonyms today):
+  - `ApiResponse.status` — line 45, docstring says
+    `'succeed'|'failed'`. Tighten to `Literal['succeed', 'failed']`.
+    *9 xfails* in `TestApiResponseStatusEnumGap` covering empty string,
+    capitalization variants, semantic synonyms (`'OK'`, `'true'`,
+    `'yes'`, `'passed'`, etc.), and whitespace-padding.
+  - `JobCreate.job_type` — line 124, docstring says
+    `teacher_training|student_distillation` (plus `auto_label`,
+    `experiment_loop` per the handler registry). Build the Literal
+    from `JobType` enum in `ml_engine/jobs/models.py`. *6 xfails* in
+    `TestJobCreateJobTypeEnumGap`.
+  - `AutoLabelRequest.output_mode` — line 245, docstring says
+    `'boxes'|'masks'|'both'`. *7 xfails* in
+    `TestAutoLabelRequestOutputModeEnumGap`.
+  - `WorkerResponse.status` — line 188, docstring says
+    `'idle'|'busy'|'offline'`. *5 xfails* in
+    `TestWorkerResponseStatusEnumGap`.
+- **1 HTTP code range gap:**
+  - `ApiResponse.code` — line 44, should be `Field(ge=100, le=599)`.
+    *6 xfails* in `TestApiResponseCodeRangeGap` covering negatives,
+    zero, two-digit, four-digit codes. Risky because helper functions
+    / external callers may currently pass `code=0` or `code=499`
+    (custom). Audit `success_response` / `error_response` callsites
+    before tightening.
+- **1 non-empty-list gap:**
+  - `AutoLabelRequest.image_paths` + `classes` — lines 243-244, empty
+    list is meaningless for autolabel. Tighten to
+    `Field(min_length=1)`. *2 xfails* (1 per field) in
+    `TestAutoLabelRequestNonEmptyListGap`. Risky if any "validate
+    config / list known classes" path POSTs with empty lists for
+    introspection.
+- **1 paired-flag invariant:**
+  - `DistillationRequest.teacher_dir` + `unlabeled_image_paths` —
+    lines 266-271. Per docstring they're a paired flag (one without
+    the other is a misconfig). Needs `@model_validator(mode="after")`.
+    *2 xfails* (one per direction) in
+    `TestDistillationPairedFieldGap`.
+
+**Total: 9 + 6 + 7 + 5 + 6 + 2 + 2 = 37 xfails remaining.**
+
+**Why deferred:** Each of these would break clients currently sending
+non-conforming data with no warning. Need:
+- **Frontend audit** — does the FE send `"OK"` instead of `"succeed"`?
+  Capitalization variants for `output_mode`?
+- **Helper-callsite audit for `ApiResponse.code`** —
+  `success_response(code=...)` may have unusual int values in tests/
+  scripts.
+- **Decision on `image_paths=[]` semantics** — is "list known classes"
+  a use case?
+- **Coordination on paired-flag check** — current behavior may be
+  relied on by callers using only one half.
+
+**Pros:**
+- Closes the remaining 7 docstring-vs-reality gaps.
+- Turns the remaining 37 xfails in `test_schemas.py` into regression
+  guards.
+- Catches client bugs at the API boundary instead of deep in handler
+  code (e.g. unknown `output_mode` currently triggers a cryptic
+  `KeyError` somewhere in the autolabeler).
+
+**Cons:**
+- Breaking change. Each enum tightening needs an API-changelog note
+  and a frontend release that stops sending non-conforming values
+  before the schema flips.
+- Need to enumerate callers (FE, internal scripts, integration tests)
+  before each individual flip.
+
+**Recommended sequencing (2 sub-PRs after frontend audit):**
+
+1. **Enum tightenings** (4 categories, 27 xfails: 9 + 6 + 7 + 5) —
+   once frontend audit confirms no capitalization variants in flight.
+   Use `Literal[...]` from a shared module (consider
+   `ml_engine/jobs/models.py:JobType` for `job_type`).
+2. **HTTP code range + non-empty list + paired flag** (3 categories,
+   10 xfails: 6 + 2 + 2) — independent; can ship together once their
+   respective callers are audited.
+
+**Test surface:** No new tests needed — `tests/unit/api/test_schemas.py`
+already has them as `xfail(strict=True)`. Per gap fixed, flip the
+corresponding `@pytest.mark.xfail` decorator off. Strict-xfail means
+the test fails loudly if you forget to flip it. The class names all
+end in `Gap` for grep-ability — when all are fixed, `grep -r
+"EnumGap\|RangeGap\|TruncationGap\|InvariantGap\|PairedFieldGap" tests/`
+should return nothing.
+
+**Context:** Originally filed 2026-04-27 with 15 categories
+(69 xfails) during item #12.1. The 8 safe categories shipped in the
+same PR after auditing for client-breakage risk (32 xfails turned into
+regular tests); this entry now tracks only the 7 that genuinely need
+coordination before flipping. Each remaining xfail's `reason=` line
+points at the exact source line + recommended fix.
+
+**Depends on / blocked by:** Frontend audit for the enum tightenings.
+HTTP code + non-empty list + paired flag are independent of each other
+and the audit, but each wants a callsite enumeration before shipping.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
