@@ -33,6 +33,7 @@ class StudentDistillationHandler(JobHandler):
 
     def run(
         self,
+        job_id: str,
         job_config: Dict[str, Any],
         output_dir: str,
         progress_queue: mp.Queue,

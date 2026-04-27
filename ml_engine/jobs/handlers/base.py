@@ -38,6 +38,7 @@ class JobHandler(ABC):
     @abstractmethod
     def run(
         self,
+        job_id: str,
         job_config: Dict[str, Any],
         output_dir: str,
         progress_queue: mp.Queue,
@@ -53,6 +54,10 @@ class JobHandler(ABC):
         when the process exits.
 
         Args:
+            job_id: ID of the job that triggered this run. Required for
+                lineage in artifact manifests (CreateByInfo.job_id /
+                BundleManifest.lineage). Forwarded by subprocess_runner
+                from the parent JobManager.
             job_config: Job configuration dictionary
             output_dir: Output directory for job artifacts
             progress_queue: Queue to send progress updates (non-blocking put)

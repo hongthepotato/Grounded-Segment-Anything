@@ -75,6 +75,7 @@ class ExperimentLoop:
 
     def run(
         self,
+        job_id: str,
         data_manager,
         output_dir: str,
         budget: ExperimentBudget,
@@ -167,6 +168,7 @@ class ExperimentLoop:
             }
 
             result: TrialResult = runner.run(
+                job_id=job_id,
                 data_manager=data_manager,
                 overrides=effective_overrides,
                 base_output_dir=output_dir,

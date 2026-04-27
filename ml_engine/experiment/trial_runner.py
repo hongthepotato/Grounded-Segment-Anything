@@ -36,6 +36,7 @@ _PRIMARY_METRIC_KEY = "val_mAP50"
 
 
 def _trial_subprocess(
+    composed_job_id: str,
     data_manager,
     config: Dict[str, Any],
     output_dir: str,
@@ -44,7 +45,13 @@ def _trial_subprocess(
     cancel_event: MpEvent,
     primary_metric_key: str = _PRIMARY_METRIC_KEY,
 ) -> None:
-    """Entry point for per-trial subprocess."""
+    """Entry point for per-trial subprocess.
+
+    composed_job_id has the form `f"{parent_job_id}/{trial_id}"` (e.g.
+    "job-abc/trial_003") so artifact manifests written by the trial's
+    Trainer can be traced back to both the parent experiment job AND the
+    specific trial that produced them. See TODO #16 in TODOS.md.
+    """
     import sys as _sys
     from pathlib import Path as _Path
 
@@ -66,6 +73,7 @@ def _trial_subprocess(
 
     try:
         trainer = Trainer(
+            job_id=composed_job_id,
             data_manager=data_manager,
             output_dir=output_dir,
             config=config,
@@ -137,6 +145,7 @@ class TrialRunner:
 
     def run(
         self,
+        job_id: str,
         data_manager,
         overrides: Dict[str, Any],
         base_output_dir: str,
@@ -155,6 +164,10 @@ class TrialRunner:
         4. Return TrialResult
 
         Args:
+            job_id: Parent experiment job's id. Composed as
+                f"{job_id}/{trial_id}" before being passed into the trial
+                subprocess so artifact manifests carry both the parent and
+                the per-trial identifier (TODO #16 plumbing).
             data_manager: DataManager instance.
             overrides: Config overrides (dotted or nested dict), validated by ExperimentLoop.
             base_output_dir: Parent dir; trial output goes in {base_output_dir}/{trial_id}/.
@@ -167,6 +180,10 @@ class TrialRunner:
 
         trial_id = trial_id or f"trial_{uuid.uuid4().hex[:8]}"
         trial_output_dir = str(Path(base_output_dir) / trial_id)
+        # Composed id flows into the trial subprocess and ends up as the
+        # job_id field on every artifact manifest written by the trial's
+        # Trainer.
+        composed_job_id = f"{job_id}/{trial_id}"
 
         logger.info("Trial %s starting (overrides=%s)", trial_id, list(overrides.keys()))
         t0 = time.monotonic()
@@ -183,6 +200,7 @@ class TrialRunner:
         proc = ctx.Process(
             target=_trial_subprocess,
             args=(
+                composed_job_id,
                 data_manager,
                 config,
                 trial_output_dir,
