@@ -127,22 +127,6 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 ---
 
-### 9. Clean up ruff baseline (3593 findings at ci-and-tests merge time)
-
-**What:** Work through the ruff baseline in staged PRs. Measured at ci-and-tests merge: 1486 `W293` (blank-line-whitespace), 1027 `E501` (line-too-long), 367 `I001` (unsorted-imports), 291 `F401` (unused-import), 183 `W291` (trailing-whitespace), 34 `F841` (unused-variable), 31 `F821` (undefined-name) — the last one may include real bugs worth investigating. First pass: `uv run ruff check . --fix` auto-fixes ~1732 of these. Second pass: review and fix the non-auto-fixable ones.
-
-**Why:** CI currently runs ruff with `continue-on-error: true` — findings are reported but do not gate PRs. This defeats the point of a lint gate long-term. Also: `F821` (31 undefined-name errors) may flag real bugs in existing code.
-
-**Pros:** Real lint gate. Catches new drift before it lands. Uncovers F821 bugs that may be lurking.
-
-**Cons:** Large diff (~2000 lines touched by auto-fix alone). Reviewer fatigue if done in one PR. Best done per-directory in sequence (start with `core/`, then `api/`, then `ml_engine/`).
-
-**Context:** Ruff was configured in `pyproject.toml` from the project's first commit but never wired into CI or run manually. ci-and-tests PR wires it up but makes it non-blocking to ship the CI infrastructure without coupling to a cleanup effort.
-
-**Depends on / blocked by:** `ci-and-tests` PR merging. Each cleanup PR should remove `continue-on-error: true` from the affected file scope once that directory's findings reach zero.
-
----
-
 ### 11. Inference module integration tests (detectors, segmenters, auto_labeler, visualizer)
 
 **What:** Add integration tests under `tests/integration/` against tiny real SAM/GroundingDINO weights for `ml_engine/inference/detectors/*`, `ml_engine/inference/segmenters/*`, `ml_engine/inference/auto_labeler.py`, `ml_engine/inference/visualizer.py`. Use a minimal checkpoint (e.g., `SAM-small` variant or custom-trained tiny weights) hosted as a CI fixture.
@@ -353,6 +337,7 @@ Item numbers are stable so commit messages and PR descriptions referencing
 
 - **#4** Pre-commit hooks ✅ → [docs/decisions/04-pre-commit-hooks.md](docs/decisions/04-pre-commit-hooks.md) — local + CI lint parity via `uv run --no-sync`. Shipped 2026-04-24 (PR #26).
 - **#6** mypy baseline cleanup — drive 416 errors to zero, then flip the gate ✅ → [docs/decisions/06-mypy-baseline-cleanup.md](docs/decisions/06-mypy-baseline-cleanup.md) — 9 PRs total. Mypy now gates merges across `core ml_engine api augmentation` (119 source files, 0 errors). Surfaced 3 real production bugs + filed TODOs #16 and #17 for follow-ups. Establishes the boundary-`Any`, redis-overload, `MpEvent`, path-shadow, and lazy-init-`Any` patterns most subsequent type work follows. Shipped 2026-04-26.
+- **#9** Clean up ruff baseline (3593 findings at ci-and-tests merge time) ✅ → [docs/decisions/09-ruff-baseline-cleanup.md](docs/decisions/09-ruff-baseline-cleanup.md) — 5 PRs total (#29-32 per-directory cleanup + #33 gate flip). Ruff now gates merges. Set the per-directory-cleanup-then-flip-the-gate precedent that #6 later followed for mypy. Shipped 2026-04-25.
 - **#10** Error-path coverage for `augmentation_factory._validate_bboxes` ✅ → [docs/decisions/10-augmentation-validator-tests.md](docs/decisions/10-augmentation-validator-tests.md) — 44 parametrized tests, every error branch under test, ~8s runtime. Shipped 2026-04-24.
 - **#13** Type-annotate `ml_engine/export/merger.py` ✅ → [docs/decisions/13-merger-py-mypy-fix.md](docs/decisions/13-merger-py-mypy-fix.md) — established the `Any`-at-the-boundary precedent for PEFT's `__getattr__` delegation. Shipped 2026-04-25 (`chore/mypy-merger-hygiene`).
 - **#16** Plumb `job_id` through training pipeline so artifact manifests carry real lineage ✅ → [docs/decisions/16-job-id-lineage-plumbing.md](docs/decisions/16-job-id-lineage-plumbing.md) — first follow-up surfaced by #6. Trial subprocesses use composed `f"{job_id}/{trial_id}"` form. Shipped 2026-04-27 (PR #41).

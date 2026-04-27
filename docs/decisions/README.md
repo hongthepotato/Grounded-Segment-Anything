@@ -27,7 +27,8 @@ If you're new to the project and want the design rationale for current
 patterns, read in chronological order:
 
 1. [04-pre-commit-hooks.md](04-pre-commit-hooks.md) — local + CI lint parity
-2. [10-augmentation-validator-tests.md](10-augmentation-validator-tests.md) — error-path test coverage approach
-3. [13-merger-py-mypy-fix.md](13-merger-py-mypy-fix.md) — `Any`-at-the-boundary precedent for PEFT
-4. [06-mypy-baseline-cleanup.md](06-mypy-baseline-cleanup.md) — the big one; established the patterns most subsequent type work follows
-5. [16-job-id-lineage-plumbing.md](16-job-id-lineage-plumbing.md) — first follow-up that surfaced from #6
+2. [09-ruff-baseline-cleanup.md](09-ruff-baseline-cleanup.md) — set the per-directory-cleanup-then-flip-the-gate precedent that #6 later followed for mypy
+3. [10-augmentation-validator-tests.md](10-augmentation-validator-tests.md) — error-path test coverage approach
+4. [13-merger-py-mypy-fix.md](13-merger-py-mypy-fix.md) — `Any`-at-the-boundary precedent for PEFT
+5. [06-mypy-baseline-cleanup.md](06-mypy-baseline-cleanup.md) — the big one; established the patterns most subsequent type work follows
+6. [16-job-id-lineage-plumbing.md](16-job-id-lineage-plumbing.md) — first follow-up that surfaced from #6
