@@ -9,20 +9,30 @@ code actually enforces.
 
 Targets:
 - `convert_to_numeric()` — string/numeric coercion + rejection of
-  None/non-numeric/other types
+  None/bool/non-finite/non-numeric/other types
 - `RangeParameter` — dataclass with __post_init__ validation,
   to_albumentations_format(), sample(), .scalar() classmethod,
   .integer_range() classmethod, .is_scalar()
 - `NestedParameter` — dict-of-Any → dict-of-AlbumentationsParameter
   conversion, error-path coverage for each rejected value type
 
-Real bugs / edge cases probed below (each marked with comments + xfail
-where the behavior is buggy enough to deserve a fix):
-- Bool-as-int silent acceptance (Python's `isinstance(True, int) is True`)
-- is_integer=True silently truncating float bounds (e.g., (0.5, 0.9) → (0, 0))
-- numpy scalars not recognized as numeric
-- float('inf') in integer_range raises OverflowError but isn't caught
-- Float-equality in is_scalar() (0.1 + 0.2 != 0.3)
+Real bugs surfaced AND FIXED in the same PR (5 categories — see
+TODO #19's original draft, now resolved):
+- Bool-as-int silent acceptance (Python's `isinstance(True, int) is True`):
+  fixed by adding an explicit `isinstance(value, bool)` rejection BEFORE
+  the int/float check.
+- Non-finite floats ('inf', '-inf', 'nan' as strings or floats): fixed
+  by explicit rejection with a clear error message — random.uniform/
+  randint with infinite bounds is meaningless.
+- is_integer=True silently truncating float bounds via int(): fixed by
+  raising ValueError on non-integer bounds in __post_init__. Use
+  RangeParameter.integer_range() for explicit float→int conversion.
+- OverflowError leak in integer_range: fixed by adding OverflowError to
+  the except tuple. Now defensive — convert_to_numeric rejects
+  non-finite floats up front so OverflowError is unreachable in normal
+  use, but the guard remains for future safety.
+- Float-equality in is_scalar(): fixed by switching to math.isclose so
+  RangeParameter(0.1 + 0.2, 0.3).is_scalar() correctly returns True.
 """
 
 from __future__ import annotations
@@ -135,68 +145,43 @@ class TestConvertToNumericEdgeCases:
         with pytest.raises(TypeError, match="not a valid number"):
             convert_to_numeric("   ")
 
-    @pytest.mark.parametrize("value", ["inf", "-inf", "nan"])
-    def test_inf_nan_strings_currently_rejected(self, value):
-        """
-        Documenting current behavior: "inf" / "-inf" / "nan" lack `.` and
-        `e`, so the routing at parameter_system.py:31 sends them to
-        `int(value)` which raises ValueError → wrapped as TypeError. The
-        docstring says "string representations of numbers" are accepted;
-        Python's `float()` would accept these. The xfail below is the
-        opposite assertion — pinning the gap.
-        """
-        with pytest.raises(TypeError, match="not a valid number"):
+    @pytest.mark.parametrize(
+        "value",
+        ["inf", "-inf", "+inf", "nan", "INF", "  inf  "],
+        ids=lambda v: f"v={v!r}",
+    )
+    def test_non_finite_strings_rejected_with_clear_message(self, value):
+        """Non-finite float strings get an explicit error (not the generic
+        'not a valid number'), so the user sees WHY they're rejected.
+        Whitespace + case variants are all caught via .strip().lower()."""
+        with pytest.raises(TypeError, match="Non-finite float string"):
             convert_to_numeric(value)
 
     @pytest.mark.parametrize(
-        "value,expected_func",
-        [
-            ("inf", lambda v: v == float("inf")),
-            ("-inf", lambda v: v == float("-inf")),
-            ("nan", lambda v: v != v),  # NaN != NaN is the standard NaN check
-        ],
+        "value",
+        [float("inf"), float("-inf"), float("nan")],
+        ids=lambda v: f"v={v!r}",
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="parameter_system.py:31 — routing on `'.' not in value and "
-        "'e' not in value.lower()` sends 'inf'/'nan' to int() (which "
-        "rejects them) instead of float() (which accepts them). Docstring "
-        "says 'string representations of numbers' are accepted but special-"
-        "value floats fall through. Either route 'inf'/'-inf'/'nan' to "
-        "float() explicitly, or document them as not-accepted.",
-    )
-    def test_inf_nan_strings_should_be_accepted_as_float(self, value, expected_func):
-        result = convert_to_numeric(value)
-        assert expected_func(result)
+    def test_non_finite_floats_rejected(self, value):
+        """Direct float('inf')/float('nan') values also rejected — the
+        finite-check runs on the int/float pass-through branch too."""
+        with pytest.raises(TypeError, match="Non-finite float"):
+            convert_to_numeric(value)
 
 
-class TestConvertToNumericBoolGap:
+class TestConvertToNumericBoolRejection:
     """
-    `isinstance(True, int)` is True in Python, so True/False fall into the
-    int pass-through branch and `convert_to_numeric(True)` returns the bool
-    True (not the int 1). Downstream `RangeParameter(True, False)` then
-    raises (True > False), but `RangeParameter(False, True)` silently
-    creates a [0.0, 1.0] range from boolean inputs. Whether to treat
-    bool-as-int as user error is a design call; pinning current behavior
-    here so a fix moves the test off the xfail.
+    `isinstance(True, int)` is True in Python, so without an explicit
+    bool guard, `convert_to_numeric(True)` would return the bool True
+    and downstream RangeParameter would happily accept booleans as
+    numeric inputs. Source has an explicit `isinstance(value, bool)`
+    check BEFORE the int/float branch.
     """
 
-    def test_bool_currently_passes_through_as_int(self):
-        """True passes through (because bool is a subclass of int)."""
-        assert convert_to_numeric(True) is True
-        assert convert_to_numeric(False) is False
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason="parameter_system.py:24 — `isinstance(value, (int, float))` "
-        "matches bool because bool subclasses int. Document by adding an "
-        "explicit `if isinstance(value, bool): raise TypeError(...)` BEFORE "
-        "the int/float check. RangeParameter shouldn't silently accept "
-        "boolean inputs.",
-    )
-    def test_bool_should_be_rejected(self):
-        with pytest.raises(TypeError):
-            convert_to_numeric(True)
+    @pytest.mark.parametrize("value", [True, False])
+    def test_bool_rejected(self, value):
+        with pytest.raises(TypeError, match="Cannot convert bool"):
+            convert_to_numeric(value)
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +252,10 @@ class TestRangeParameterToAlbumentationsFormat:
         assert result == (0, 10)
         assert all(isinstance(x, int) for x in result)
 
-    def test_integer_truncates_float_bounds(self):
-        """is_integer=True with float bounds: int() truncates toward zero.
-        Source line 78. Documenting behavior — could be a footgun."""
-        p = RangeParameter(0.9, 5.7, is_integer=True)
+    def test_integer_with_integer_valued_floats_accepted(self):
+        """is_integer=True accepts float bounds that are integer-valued
+        (e.g., 5.0 == int(5.0)). Only non-integer floats are rejected."""
+        p = RangeParameter(0.0, 5.0, is_integer=True)
         assert p.to_albumentations_format() == (0, 5)
 
     def test_continuous_preserves_float_bounds(self):
@@ -278,37 +263,47 @@ class TestRangeParameterToAlbumentationsFormat:
         assert p.to_albumentations_format() == (0.123, 0.456)
 
 
-class TestRangeParameterIntegerTruncationGap:
+class TestRangeParameterIntegerBoundsValidation:
     """
-    `is_integer=True` with float bounds < 1 collapses to a degenerate
-    [0, 0] range silently — the user thinks they have a range and gets
-    a forced scalar. Real footgun for albumentations params like
-    `num_holes` where someone might pass (0.5, 2.0) intending [1, 2]
-    but getting [0, 2].
+    `is_integer=True` with non-integer float bounds is rejected at
+    construction time. Without this check, `int()` later silently
+    floors-toward-zero — `RangeParameter(0.5, 0.9, is_integer=True)`
+    would collapse to [0, 0] and the user would think they have a
+    range but get a forced scalar. Real footgun for albumentations
+    params like `num_holes`. Use `.integer_range()` for explicit
+    float→int conversion.
     """
 
     @pytest.mark.parametrize(
-        "min_val,max_val,expected_collapse",
+        "min_val,max_val",
         [
-            (0.1, 0.9, (0, 0)),  # both truncate to 0 — silent scalar
-            (0.5, 0.99, (0, 0)),  # ditto
-            (-0.5, 0.5, (0, 0)),  # bracket zero — both truncate to 0
+            (0.1, 0.9),  # both sub-unit — would have collapsed to [0, 0]
+            (0.5, 0.99),  # ditto
+            (-0.5, 0.5),  # straddles zero
+            (0.5, 5.0),  # only min is non-integer
+            (0.0, 5.7),  # only max is non-integer
+            (-0.5, 5.5),  # both non-integer
         ],
+        ids=lambda v: f"v={v}",
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="parameter_system.py:78 (to_albumentations_format) and "
-        "parameter_system.py:84 (sample) — is_integer=True silently "
-        "truncates float bounds via int(). Sub-unit float ranges collapse "
-        "to [0, 0]. Either round() instead of int(), or raise on non-integer "
-        "bounds when is_integer=True.",
+    def test_non_integer_bounds_rejected(self, min_val, max_val):
+        with pytest.raises(ValueError, match="is_integer=True requires integer bounds"):
+            RangeParameter(min_val, max_val, is_integer=True)
+
+    @pytest.mark.parametrize(
+        "min_val,max_val",
+        [(0, 5), (0.0, 5.0), (-3, 3), ("0", "10")],
+        ids=lambda v: f"v={v!r}",
     )
-    def test_subunit_float_range_should_not_silently_collapse(self, min_val, max_val, expected_collapse):
-        p = RangeParameter(min_val, max_val, is_integer=True)
-        # The xfail is asserting this DOES NOT happen — i.e., the code
-        # SHOULD reject or round. Today it collapses, so this assertion
-        # fails and the xfail "passes".
-        assert p.to_albumentations_format() != expected_collapse
+    def test_integer_valued_bounds_accepted(self, min_val, max_val):
+        """Pure ints AND float-valued integers (5.0, 0.0) both pass."""
+        RangeParameter(min_val, max_val, is_integer=True)
+
+    def test_error_message_suggests_integer_range(self):
+        """The error message points at the explicit-truncation API
+        (.integer_range) so the user has a clear migration path."""
+        with pytest.raises(ValueError, match="integer_range"):
+            RangeParameter(0.5, 0.9, is_integer=True)
 
 
 class TestRangeParameterSample:
@@ -418,24 +413,26 @@ class TestRangeParameterIntegerRangeClassmethod:
             RangeParameter.integer_range(bad_value, 10)
 
 
-class TestRangeParameterIntegerRangeOverflowGap:
+class TestRangeParameterIntegerRangeNonFiniteHandling:
     """
     `int(float('inf'))` raises OverflowError, not ValueError or TypeError.
-    `integer_range` only catches `(TypeError, ValueError)` — OverflowError
-    leaks through.
+    Today: convert_to_numeric rejects float('inf') up-front (with a clear
+    "Non-finite float" message), so integer_range never gets to call
+    int() on inf — but the except clause includes OverflowError as a
+    defensive guard for future changes.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="parameter_system.py:111 — except clause is "
-        "`(TypeError, ValueError)`. `int(float('inf'))` raises "
-        "OverflowError; integer_range(float('inf'), 10) leaks the raw "
-        "OverflowError instead of the wrapped ValueError. Add OverflowError "
-        "to the except tuple.",
-    )
-    def test_inf_should_raise_value_error_not_overflow(self):
+    def test_inf_rejected_with_clear_message(self):
+        """convert_to_numeric inside integer_range rejects float('inf'),
+        and integer_range wraps the TypeError as ValueError per its
+        contract."""
         with pytest.raises(ValueError, match="numeric values"):
             RangeParameter.integer_range(float("inf"), 10)
+
+    def test_inf_string_rejected(self):
+        """Same path via the string form."""
+        with pytest.raises(ValueError, match="numeric values"):
+            RangeParameter.integer_range("inf", 10)
 
 
 class TestRangeParameterIsScalar:
@@ -453,23 +450,23 @@ class TestRangeParameterIsScalar:
         assert p.is_scalar() is expected
 
 
-class TestRangeParameterIsScalarFloatEqualityGap:
+class TestRangeParameterIsScalarFloatTolerance:
     """
-    Float equality is fragile: 0.1 + 0.2 == 0.3 is False. If a caller
-    constructs `RangeParameter(0.1 + 0.2, 0.3)` they intuitively expect
-    is_scalar() to be True (same value mathematically). It returns
-    False today. Worth a note — math.isclose() would be the fix.
+    is_scalar() uses math.isclose so float-representation drift doesn't
+    falsely report a scalar as a range. RangeParameter(0.1 + 0.2, 0.3)
+    was a real footgun before the fix — `==` reported False because
+    0.1 + 0.2 == 0.30000000000000004.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="parameter_system.py:116 — is_scalar() uses `==` on floats. "
-        "Use math.isclose() to handle floating-point representation drift "
-        "(0.1 + 0.2 != 0.3 exactly).",
-    )
-    def test_floating_point_drift_should_still_be_scalar(self):
+    def test_floating_point_drift_still_counts_as_scalar(self):
         p = RangeParameter(0.1 + 0.2, 0.3)
-        assert p.is_scalar()  # currently False due to fp drift
+        assert p.is_scalar()
+
+    def test_meaningfully_different_floats_not_scalar(self):
+        """Sanity: math.isclose's default tolerance still distinguishes
+        actually-different values."""
+        p = RangeParameter(0.3, 0.5)
+        assert not p.is_scalar()
 
 
 # ---------------------------------------------------------------------------
