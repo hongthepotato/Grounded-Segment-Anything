@@ -32,3 +32,4 @@ patterns, read in chronological order:
 4. [13-merger-py-mypy-fix.md](13-merger-py-mypy-fix.md) — `Any`-at-the-boundary precedent for PEFT
 5. [06-mypy-baseline-cleanup.md](06-mypy-baseline-cleanup.md) — the big one; established the patterns most subsequent type work follows
 6. [16-job-id-lineage-plumbing.md](16-job-id-lineage-plumbing.md) — first follow-up that surfaced from #6
+7. [12-p2-unit-test-roster.md](12-p2-unit-test-roster.md) — established the `xfail(strict=True)` as embedded to-do list pattern (used by TODOs #18 + #19) plus the audit-before-deferring discipline for harsh tests

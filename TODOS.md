@@ -143,34 +143,6 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 ---
 
-### 12. Priority-2 unit test roster — 6 remaining files from ci-and-tests design doc
-
-**What:** Add six unit test files that were listed in the `ci-and-tests` design doc's Priority-2 roster ("include if time permits") but were not shipped in the PR and are not tracked elsewhere. Per-file targets (all target modules verified present on `agentic` at PR-close time):
-
-- `tests/unit/ml_engine/export/test_merger.py` — covers `ml_engine/export/merger.py` (~150 lines). Compatible artifacts merge, incompatible artifacts reject, metadata preservation.
-- `tests/unit/ml_engine/export/test_packager.py` — covers `ml_engine/export/packager.py` (~185 lines). Packaging output format, file inclusion/exclusion rules, filename sanitization.
-- `tests/unit/ml_engine/distillation/test_pseudo_label.py` — covers `ml_engine/distillation/pseudo_label.py` (~141 lines). Pseudo-label generation on synthetic teacher outputs: confidence thresholds, empty-prediction handling, label-format correctness.
-- `tests/unit/augmentation/test_parameter_system.py` — covers `augmentation/parameter_system.py` (~165 lines). Parameter parsing + validation: out-of-range values, type coercion, defaults.
-- `tests/unit/augmentation/test_characteristic_translator.py` — covers `augmentation/characteristic_translator.py` (~1362 lines — biggest target; triage to highest-value code paths first, don't boil this sub-ocean in one PR). Translation correctness between characteristic spec and concrete transform params.
-- `tests/unit/api/test_schemas.py` — covers `api/schemas.py` (~382 lines). API pydantic schemas: request/response envelope structure, required-field enforcement, validation-error shape.
-
-**Why:** The design doc (`~/.gstack/projects/hongthepotato-Grounded-Segment-Anything/shen_h-agentic-design-20260422-223526.md` lines 204-212) explicitly listed these as "include if time permits, follow-up PR otherwise." They were deferred, and without a tracking entry the promise was about to fall off the radar. Captured here so the bookkeeping survives the merge. The seventh P2 file (`test_augmentation_factory.py`) was covered by item 10 which has now shipped (see Completed section below).
-
-**Pros:**
-- Raises unit coverage above the 52% baseline the ratchet starts at, giving real headroom toward the 70% design target.
-- Each module is a thin-ish, pure-Python unit target — no CUDA, no model weights, no network. Fast tests.
-- Six small focused PRs (or two grouped PRs by domain: `export+distillation`, `augmentation+api`) is lower reviewer fatigue than one combined PR.
-
-**Cons:**
-- Six files, even at Priority-2 scope, is 300-600 lines of test code. Spread across multiple PRs to keep reviews tight.
-- `test_characteristic_translator.py` targets a 1362-line module and could expand scope indefinitely — cap at highest-value paths for the first pass (factory dispatch + the 5 most-used characteristics), add a TODO for the rest.
-
-**Context:** Deferred from the original ci-and-tests PR (~3400 lines new) to keep that PR shippable. PR is CI-green at 52% combined coverage, merged with COVERAGE_MIN ratchet seeded at 50. Each new test file from this roster bumps real coverage and unlocks a COVERAGE_MIN bump in the same PR.
-
-**Depends on / blocked by:** `ci-and-tests` PR merging (for the test infrastructure and markers). No other blockers. Recommended sequencing: look at `tests/unit/augmentation/test_augmentation_factory.py` (shipped in item 10) for the pytest-parametrize + class-grouping pattern when adding the augmentation/ tests in this item.
-
----
-
 ### 14. `tests/test_sam_lora.py` — 13 pre-existing failures + a CI scope gap
 
 **What:** Investigate and resolve 13 pre-existing test failures in `tests/test_sam_lora.py`. Discovered 2026-04-25 while running the full `pytest tests` (vs the narrower `pytest tests/unit tests/integration tests/contract` that CI runs). Verified pre-existing via `git stash` against `agentic`'s baseline — NOT introduced by any PR in this work stream.
@@ -509,5 +481,6 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#6** mypy baseline cleanup — drive 416 errors to zero, then flip the gate ✅ → [docs/decisions/06-mypy-baseline-cleanup.md](docs/decisions/06-mypy-baseline-cleanup.md) — 9 PRs total. Mypy now gates merges across `core ml_engine api augmentation` (119 source files, 0 errors). Surfaced 3 real production bugs + filed TODOs #16 and #17 for follow-ups. Establishes the boundary-`Any`, redis-overload, `MpEvent`, path-shadow, and lazy-init-`Any` patterns most subsequent type work follows. Shipped 2026-04-26.
 - **#9** Clean up ruff baseline (3593 findings at ci-and-tests merge time) ✅ → [docs/decisions/09-ruff-baseline-cleanup.md](docs/decisions/09-ruff-baseline-cleanup.md) — 5 PRs total (#29-32 per-directory cleanup + #33 gate flip). Ruff now gates merges. Set the per-directory-cleanup-then-flip-the-gate precedent that #6 later followed for mypy. Shipped 2026-04-25.
 - **#10** Error-path coverage for `augmentation_factory._validate_bboxes` ✅ → [docs/decisions/10-augmentation-validator-tests.md](docs/decisions/10-augmentation-validator-tests.md) — 44 parametrized tests, every error branch under test, ~8s runtime. Shipped 2026-04-24.
+- **#12** Priority-2 unit test roster — 6 remaining files from ci-and-tests design doc ✅ → [docs/decisions/12-p2-unit-test-roster.md](docs/decisions/12-p2-unit-test-roster.md) — 4 PRs total. ~470 new tests (375 passing + 47 xfail markers documenting source gaps; 13 of those gaps fixed inline, 38 remain in TODOs #18 + #19). Established the `xfail(strict=True)` as embedded to-do list pattern. Shipped 2026-04-27.
 - **#13** Type-annotate `ml_engine/export/merger.py` ✅ → [docs/decisions/13-merger-py-mypy-fix.md](docs/decisions/13-merger-py-mypy-fix.md) — established the `Any`-at-the-boundary precedent for PEFT's `__getattr__` delegation. Shipped 2026-04-25 (`chore/mypy-merger-hygiene`).
 - **#16** Plumb `job_id` through training pipeline so artifact manifests carry real lineage ✅ → [docs/decisions/16-job-id-lineage-plumbing.md](docs/decisions/16-job-id-lineage-plumbing.md) — first follow-up surfaced by #6. Trial subprocesses use composed `f"{job_id}/{trial_id}"` form. Shipped 2026-04-27 (PR #41).
