@@ -196,23 +196,15 @@ class TestJobProgressSchema:
         )
 
 
-class TestJobProgressOverallProgressRangeGap:
-    """
-    Docstring at api/schemas.py:98 says overall_progress is "0.0 to 1.0".
-    Field has no `ge=0.0, le=1.0`. Accepts anything.
-    """
+class TestJobProgressOverallProgressRange:
+    """overall_progress is enforced as 0.0-1.0 per Field(ge=0.0, le=1.0)."""
 
     @pytest.mark.parametrize(
         "bad_progress",
         [-0.01, -1.0, 1.01, 2.0, 100.0, float("inf")],
         ids=lambda v: f"progress={v}",
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:98 — overall_progress is `float` with no range. "
-        "Docstring promises 0.0-1.0. Tighten to `Field(ge=0.0, le=1.0)`.",
-    )
-    def test_out_of_range_progress_should_reject(self, bad_progress):
+    def test_out_of_range_progress_rejected(self, bad_progress):
         with pytest.raises(ValidationError):
             JobProgressSchema(overall_progress=bad_progress)
 
@@ -221,27 +213,33 @@ class TestJobProgressOverallProgressRangeGap:
         JobProgressSchema(overall_progress=ok_progress)
 
 
-class TestJobProgressEpochInvariantGap:
-    """
-    Conceptual invariant: current_epoch <= total_epochs. Not enforced
-    (no model_validator). A worker that sends current_epoch=99 with
-    total_epochs=10 is accepted as valid progress. This is a clear
-    sign the worker is misreporting state.
-    """
+class TestJobProgressEpochInvariant:
+    """current_epoch <= total_epochs (and same for steps) enforced via
+    model_validator. A worker that misreports progress is caught at the
+    schema boundary instead of leaking bad state into the UI."""
 
     @pytest.mark.parametrize(
         "current,total",
         [(5, 3), (100, 1), (1, 0)],
         ids=lambda v: f"v={v}",
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:89-98 — no model_validator enforcing "
-        "current_epoch <= total_epochs (or current_step <= total_steps).",
-    )
-    def test_current_exceeds_total_should_reject(self, current, total):
-        with pytest.raises(ValidationError):
+    def test_current_exceeds_total_rejected(self, current, total):
+        with pytest.raises(ValidationError, match="must be <="):
             JobProgressSchema(current_epoch=current, total_epochs=total)
+
+    def test_current_step_exceeds_total_step_rejected(self):
+        with pytest.raises(ValidationError, match="must be <="):
+            JobProgressSchema(current_step=10, total_steps=5)
+
+    def test_equal_current_and_total_accepted(self):
+        """current == total is the "training complete" state — must be allowed."""
+        JobProgressSchema(current_epoch=5, total_epochs=5)
+        JobProgressSchema(current_step=100, total_steps=100)
+
+    def test_negative_epoch_rejected(self):
+        """Field(ge=0) on the int fields catches negative epochs/steps."""
+        with pytest.raises(ValidationError):
+            JobProgressSchema(current_epoch=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -397,8 +395,9 @@ class TestDistillationRequestRequiredFields:
         assert "image_paths" in str(exc_info.value)
 
 
-class TestDistillationRequestSplitConfigGap:
-    """Docstring at api/schemas.py:277 says 'sum=1.0'. No model_validator."""
+class TestDistillationRequestSplitConfig:
+    """split_config ratios must be non-negative and sum to ~1.0
+    (math.isclose tolerates fp drift in the sum)."""
 
     @pytest.mark.parametrize(
         "bad_split",
@@ -411,13 +410,7 @@ class TestDistillationRequestSplitConfigGap:
         ],
         ids=lambda v: f"split={v}",
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:276 — split_config has no validator enforcing "
-        "the docstring promise 'sum=1.0'. Add a model_validator that checks "
-        "sum and rejects negative ratios.",
-    )
-    def test_invalid_split_should_reject(self, bad_split):
+    def test_invalid_split_rejected(self, bad_split):
         with pytest.raises(ValidationError):
             DistillationRequest(
                 data_path="x.json",
@@ -425,12 +418,25 @@ class TestDistillationRequestSplitConfigGap:
                 split_config=bad_split,
             )
 
-    def test_valid_split_accepted(self):
+    @pytest.mark.parametrize(
+        "ok_split",
+        [
+            {"train": 0.7, "val": 0.15, "test": 0.15},
+            {"train": 0.8, "val": 0.2},  # 2-way split, sums to 1.0
+            {"train": 1.0},  # all-train, also valid
+        ],
+        ids=lambda v: f"split={v}",
+    )
+    def test_valid_split_accepted(self, ok_split):
         DistillationRequest(
             data_path="x.json",
             image_paths=["a.jpg"],
-            split_config={"train": 0.7, "val": 0.15, "test": 0.15},
+            split_config=ok_split,
         )
+
+    def test_split_config_none_accepted(self):
+        """split_config is Optional — None should still be valid."""
+        DistillationRequest(data_path="x.json", image_paths=["a.jpg"])
 
 
 class TestDistillationPairedFieldGap:
@@ -474,20 +480,14 @@ class TestDistillationPairedFieldGap:
 # ---------------------------------------------------------------------------
 
 
-class TestCOCOImageSchemaDimensionGap:
-    """COCO image dimensions must be positive — width=0 or height=-1 are not
-    valid images. Schema is `int` with no `gt=0`."""
+class TestCOCOImageSchemaDimensions:
+    """COCO image dimensions enforced as positive (gt=0)."""
 
     @pytest.mark.parametrize(
         "bad_w,bad_h",
         [(0, 100), (-1, 100), (100, 0), (100, -50), (-1, -1)],
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:292-293 — width/height are `int` with no `gt=0`. "
-        "COCO format requires positive dimensions.",
-    )
-    def test_non_positive_dims_should_reject(self, bad_w, bad_h):
+    def test_non_positive_dims_rejected(self, bad_w, bad_h):
         with pytest.raises(ValidationError):
             COCOImageSchema(id=1, file_name="a.jpg", width=bad_w, height=bad_h)
 
@@ -506,55 +506,55 @@ class TestCOCOAnnotationSchema:
         COCOAnnotationSchema(id=1, image_id=2, category_id=3, bbox=[10.0, 20.0, 50.0, 50.0])
 
 
-class TestCOCOAnnotationBboxLengthGap:
-    """COCO bbox is exactly [x, y, w, h] — 4 elements. Schema is
-    `Optional[List[float]]` with no length constraint. A bbox of length 3
-    or 5 is structurally invalid but accepted today."""
+class TestCOCOAnnotationBboxLength:
+    """COCO bbox enforced as exactly 4 elements [x, y, w, h] via
+    Field(min_length=4, max_length=4)."""
 
     @pytest.mark.parametrize(
         "bad_bbox",
         [[], [1.0], [1.0, 2.0], [1.0, 2.0, 3.0], [1.0, 2.0, 3.0, 4.0, 5.0]],
         ids=lambda v: f"len={len(v)}",
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:302 — bbox is `Optional[List[float]]` with no "
-        "length constraint. COCO format requires exactly 4 elements [x,y,w,h]. "
-        "Tighten to `min_length=4, max_length=4` or use a Tuple[float, float, float, float].",
-    )
-    def test_wrong_length_bbox_should_reject(self, bad_bbox):
+    def test_wrong_length_bbox_rejected(self, bad_bbox):
         with pytest.raises(ValidationError):
             COCOAnnotationSchema(id=1, image_id=2, category_id=3, bbox=bad_bbox)
 
+    def test_exactly_four_floats_accepted(self):
+        a = COCOAnnotationSchema(id=1, image_id=2, category_id=3, bbox=[10.0, 20.0, 50.0, 50.0])
+        assert a.bbox == [10.0, 20.0, 50.0, 50.0]
 
-class TestCOCOAnnotationIsCrowdGap:
-    """COCO iscrowd is binary (0 = polygon, 1 = RLE). Schema accepts any
-    int. -1 or 99 are nonsense but pass."""
+    def test_bbox_none_still_accepted(self):
+        """bbox is Optional — None is the 'mask-only annotation' case."""
+        a = COCOAnnotationSchema(id=1, image_id=2, category_id=3, bbox=None)
+        assert a.bbox is None
+
+
+class TestCOCOAnnotationIsCrowd:
+    """COCO iscrowd enforced as binary 0/1 via Literal[0, 1]."""
 
     @pytest.mark.parametrize("bad_iscrowd", [-1, 2, 5, 100])
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:306 — iscrowd is `int` with no enum. COCO "
-        "spec is binary 0/1. Tighten to Literal[0, 1].",
-    )
-    def test_non_binary_iscrowd_should_reject(self, bad_iscrowd):
+    def test_non_binary_iscrowd_rejected(self, bad_iscrowd):
         with pytest.raises(ValidationError):
             COCOAnnotationSchema(id=1, image_id=2, category_id=3, iscrowd=bad_iscrowd)
 
+    @pytest.mark.parametrize("ok_iscrowd", [0, 1])
+    def test_binary_iscrowd_accepted(self, ok_iscrowd):
+        a = COCOAnnotationSchema(id=1, image_id=2, category_id=3, iscrowd=ok_iscrowd)
+        assert a.iscrowd == ok_iscrowd
 
-class TestCOCOAnnotationScoreRangeGap:
-    """score is detection confidence — should be 0..1. Schema is plain
-    `Optional[float]`."""
+
+class TestCOCOAnnotationScoreRange:
+    """Detection confidence enforced as 0.0-1.0 via Field(ge=0.0, le=1.0)."""
 
     @pytest.mark.parametrize("bad_score", [-0.1, 1.5, 100.0])
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:305 — score is `Optional[float]` with no "
-        "range. Detection confidence must be 0.0-1.0.",
-    )
-    def test_out_of_range_score_should_reject(self, bad_score):
+    def test_out_of_range_score_rejected(self, bad_score):
         with pytest.raises(ValidationError):
             COCOAnnotationSchema(id=1, image_id=2, category_id=3, score=bad_score)
+
+    @pytest.mark.parametrize("ok_score", [0.0, 0.5, 1.0])
+    def test_in_range_score_accepted(self, ok_score):
+        a = COCOAnnotationSchema(id=1, image_id=2, category_id=3, score=ok_score)
+        assert a.score == ok_score
 
 
 class TestCOCOCategorySchema:
@@ -722,12 +722,12 @@ class TestVisualizationInfo:
         v = VisualizationInfo(filename="a.png", original="a.jpg", annotation_count=3)
         assert v.annotation_count == 3
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:333 — annotation_count is `int` with no "
-        "`ge=0`. A negative count is nonsense but accepted.",
-    )
-    def test_negative_annotation_count_should_reject(self):
+    def test_zero_annotation_count_accepted(self):
+        """Zero is a legitimate count (image with no annotations)."""
+        v = VisualizationInfo(filename="a.png", original="a.jpg", annotation_count=0)
+        assert v.annotation_count == 0
+
+    def test_negative_annotation_count_rejected(self):
         with pytest.raises(ValidationError):
             VisualizationInfo(filename="a.png", original="a.jpg", annotation_count=-1)
 

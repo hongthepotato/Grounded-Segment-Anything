@@ -10,10 +10,11 @@ This module defines:
 - QueueStatusResponse: Queue status information
 """
 
+import math
 from datetime import datetime
-from typing import Any, Dict, Generic, List, Optional, TypeVar
+from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Generic type for wrapped data
 T = TypeVar("T")
@@ -89,16 +90,34 @@ def error_response(error: str, code: int = 400) -> dict:
 class JobProgressSchema(BaseModel):
     """Progress information during training."""
 
-    current_epoch: int = 0
-    total_epochs: int = 0
-    current_step: int = 0
-    total_steps: int = 0
+    current_epoch: int = Field(default=0, ge=0)
+    total_epochs: int = Field(default=0, ge=0)
+    current_step: int = Field(default=0, ge=0)
+    total_steps: int = Field(default=0, ge=0)
     metrics: Dict[str, float] = Field(default_factory=dict)
     message: str = ""
-    overall_progress: float = Field(default=0.0, description="Overall training progress (0.0 to 1.0)")
+    overall_progress: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Overall training progress (0.0 to 1.0)"
+    )
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="after")
+    def _check_epoch_step_invariants(self) -> "JobProgressSchema":
+        """Trainer-controlled invariants: current must not exceed total.
+        A trainer that reports current_epoch=99 with total_epochs=10 has a
+        bug — catch at the schema boundary instead of letting bad progress
+        leak into the UI."""
+        if self.current_epoch > self.total_epochs:
+            raise ValueError(
+                f"current_epoch ({self.current_epoch}) must be <= total_epochs ({self.total_epochs})"
+            )
+        if self.current_step > self.total_steps:
+            raise ValueError(
+                f"current_step ({self.current_step}) must be <= total_steps ({self.total_steps})"
+            )
+        return self
 
 
 class JobCreate(BaseModel):
@@ -283,14 +302,31 @@ class DistillationRequest(BaseModel):
     )
     tags: List[str] = Field(default_factory=list, description="Optional tags for filtering")
 
+    @model_validator(mode="after")
+    def _check_split_config(self) -> "DistillationRequest":
+        """If split_config is provided, ratios must be non-negative and
+        sum to ~1.0. math.isclose tolerates fp drift (0.7 + 0.15 + 0.15
+        is exactly 1.0 most of the time, but not for all combinations)."""
+        if self.split_config is None:
+            return self
+        for split_name, ratio in self.split_config.items():
+            if ratio < 0:
+                raise ValueError(f"split_config['{split_name}'] = {ratio} must be >= 0")
+        total = sum(self.split_config.values())
+        if not math.isclose(total, 1.0, rel_tol=1e-9, abs_tol=1e-9):
+            raise ValueError(
+                f"split_config ratios must sum to 1.0, got {total} (values: {self.split_config})"
+            )
+        return self
+
 
 class COCOImageSchema(BaseModel):
     """COCO image entry."""
 
     id: int = Field(..., description="Image ID")
     file_name: str = Field(..., description="Image filename")
-    width: int = Field(..., description="Image width")
-    height: int = Field(..., description="Image height")
+    width: int = Field(..., gt=0, description="Image width (positive)")
+    height: int = Field(..., gt=0, description="Image height (positive)")
 
 
 class COCOAnnotationSchema(BaseModel):
@@ -299,11 +335,16 @@ class COCOAnnotationSchema(BaseModel):
     id: int = Field(..., description="Annotation ID")
     image_id: int = Field(..., description="Image ID")
     category_id: int = Field(..., description="Category ID")
-    bbox: Optional[List[float]] = Field(default=None, description="Bounding box [x, y, w, h]")
+    bbox: Optional[List[float]] = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+        description="Bounding box [x, y, w, h] — exactly 4 elements per COCO spec",
+    )
     segmentation: Optional[List[List[float]]] = Field(default=None, description="Polygon segmentation")
     area: Optional[float] = Field(default=None, description="Area in pixels")
-    score: Optional[float] = Field(default=None, description="Detection confidence")
-    iscrowd: int = Field(default=0, description="Is crowd annotation")
+    score: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Detection confidence (0.0-1.0)")
+    iscrowd: Literal[0, 1] = Field(default=0, description="Is crowd annotation (binary 0/1)")
 
 
 class COCOCategorySchema(BaseModel):
@@ -330,7 +371,7 @@ class VisualizationInfo(BaseModel):
 
     filename: str = Field(..., description="Visualization filename")
     original: str = Field(..., description="Original image filename")
-    annotation_count: int = Field(..., description="Number of annotations in this image")
+    annotation_count: int = Field(..., ge=0, description="Number of annotations in this image (non-negative)")
 
 
 class VisualizationListResponse(BaseModel):
