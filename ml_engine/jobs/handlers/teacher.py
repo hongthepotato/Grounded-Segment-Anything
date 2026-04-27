@@ -25,6 +25,7 @@ class TeacherTrainingHandler(JobHandler):
 
     def run(
         self,
+        job_id: str,
         job_config: Dict[str, Any],
         output_dir: str,
         progress_queue: mp.Queue,
@@ -81,8 +82,11 @@ class TeacherTrainingHandler(JobHandler):
         def cancel_check() -> bool:
             return cancel_event.is_set()
 
-        # Create and run trainer
+        # Create and run trainer. job_id is forwarded so artifact manifests
+        # written by save_adapters / _save_adapters carry real lineage
+        # (closes TODO #16).
         trainer = Trainer(
+            job_id=job_id,
             data_manager=data_manager,
             output_dir=output_dir,
             config=config,

@@ -353,7 +353,13 @@ Then the route's main loop becomes `async for event in _subscribe_to_events(...)
 
 ---
 
-### 16. Plumb `job_id` through training pipeline so artifact manifests carry real lineage (revert Optional schemas)
+### 16. Plumb `job_id` through training pipeline so artifact manifests carry real lineage (revert Optional schemas) ✅
+
+**Completed:** 2026-04-27 on `feat/job-id-lineage-plumbing`. (Original entry below for context.)
+
+**What shipped:** `job_id` now flows from `_job_entry_point` → `JobHandler.run()` → `Trainer.__init__` → `BaseModelTrainer.__init__` → `CreateByInfo` and `BundleManifest.lineage`. For experiment trials, `TrialRunner.run()` composes `f"{job_id}/{trial_id}"` (e.g. `"job-abc/trial_003"`) before passing into the trial subprocess so per-trial manifests are uniquely identifiable while still tracing back to the parent experiment job. `CreateByInfo.job_id` and `BundleManifest.lineage` reverted from `Optional[str]` back to `str` / `Dict[str, str]`. New `tests/unit/ml_engine/test_lineage.py` (16 tests) pins the contract: handler signatures must accept `job_id`, the trial subprocess's first positional arg is `composed_job_id`, schema types are non-Optional, manifest save/load roundtrip preserves the value verbatim.
+
+---
 
 **What:** Thread `job_id` from `_job_entry_point` (where it already exists) all the way down to `BaseModelTrainer.save_adapters()` and `Trainer._save_adapters()`. Then revert `CreateByInfo.job_id` and `BundleManifest.lineage` in `ml_engine/artifacts/schemas.py` from `Optional[str]` back to `str`/`Dict[str, str]` (their current Optional widening is a marker for this gap, not a desired type).
 

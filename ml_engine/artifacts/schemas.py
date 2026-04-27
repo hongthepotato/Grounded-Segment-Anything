@@ -34,15 +34,16 @@ class BaseModelRef:
 
 @dataclass
 class CreateByInfo:
-    """Information about who created the artifact"""
+    """Information about who created the artifact.
 
-    # TODO #16: revert to `job_id: str` once the plumbing lands. Optional
-    # is a marker for the gap: the trainer (called via subprocess_runner)
-    # doesn't propagate the parent job_id down to model_trainers/base.py
-    # at adapter-save time, so manifests written from training currently
-    # have job_id=None. Manifests written by other paths (tests, post-hoc
-    # tools) supply the real id.
-    job_id: Optional[str]
+    job_id flows down from the JobHandler through Trainer/BaseModelTrainer
+    to save_adapters() — see ml_engine/jobs/handlers/base.py:JobHandler.run.
+    For experiment trials, the value is composed as `f"{job_id}/{trial_id}"`
+    in trial_runner.py so manifests can be traced back to both the parent
+    experiment job and the specific trial.
+    """
+
+    job_id: str
     timestamp: str
 
 
@@ -79,10 +80,9 @@ class BundleManifest:
     # model_name -> relative path (from where bundle.manifest.json lives) of
     # the corresponding adapter.manifest.json.
     artifacts: Dict[str, str]
-    # TODO #16: revert to `Dict[str, str]` once the plumbing lands.
-    # Optional[str] mirrors CreateByInfo.job_id above — the trainer doesn't
-    # currently propagate job_id down to bundle save, so values can be None.
-    lineage: Dict[str, Optional[str]]  # "job_id"
+    # {"job_id": "..."} populated by Trainer._save_adapters from
+    # self.job_id (forwarded from the JobHandler). See CreateByInfo above.
+    lineage: Dict[str, str]  # "job_id"
     merged_checkpoints: Optional[Dict[str, str]] = None  # model_naem -> relative path of merged model
 
     def save(self, path: Path) -> None:

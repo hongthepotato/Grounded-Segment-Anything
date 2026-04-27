@@ -43,6 +43,7 @@ class SAMTrainer(BaseModelTrainer):
 
     def __init__(
         self,
+        job_id: str,
         config: Dict[str, Any],
         device: torch.device,
         output_dir: Path,
@@ -52,6 +53,7 @@ class SAMTrainer(BaseModelTrainer):
         Initialize the SAM trainer.
 
         Args:
+            job_id: Lineage id forwarded from the parent Trainer (TODO #16).
             config: Model configuration with keys:
                 - model.base_checkpoint: Path to pretrained weights
                 - model.model_type: Model type (vit_h, vit_l, vit_b)
@@ -64,7 +66,7 @@ class SAMTrainer(BaseModelTrainer):
             output_dir: Root output directory
             dataset_info: Dataset metadata
         """
-        super().__init__(config, device, output_dir, dataset_info)
+        super().__init__(job_id, config, device, output_dir, dataset_info)
 
     def _load_model(self) -> nn.Module:
         """Load SAM-HQ with LoRA adapters."""

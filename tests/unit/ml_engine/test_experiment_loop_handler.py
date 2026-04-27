@@ -106,6 +106,7 @@ def _run_handler(
 
             handler = ExperimentLoopHandler()
             handler.run(
+                job_id="test-job-experiment-loop",
                 job_config=job_config,
                 output_dir=output_dir,
                 progress_queue=ctx.Queue(),
@@ -243,6 +244,7 @@ class TestBudgetConstruction:
                 instance.run.side_effect = capture
                 MockLoop.return_value = instance
                 ExperimentLoopHandler().run(
+                    job_id="test-job-budget-capture",
                     job_config=job_config,
                     output_dir=output_dir,
                     progress_queue=ctx.Queue(),
@@ -293,6 +295,7 @@ class TestValidation:
             ):
                 with pytest.raises(ValueError, match=match):
                     ExperimentLoopHandler().run(
+                        job_id="test-job-validation",
                         job_config=job_config,
                         output_dir=output_dir,
                         progress_queue=ctx.Queue(),

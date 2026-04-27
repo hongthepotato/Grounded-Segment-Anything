@@ -56,6 +56,7 @@ class BaseModelTrainer(ABC):
 
     def __init__(
         self,
+        job_id: str,
         config: Dict[str, Any],
         device: torch.device,
         output_dir: Path,
@@ -65,11 +66,15 @@ class BaseModelTrainer(ABC):
         Initialize the base trainer.
 
         Args:
+            job_id: Lineage id forwarded by the parent Trainer (which got
+                it from the JobHandler / subprocess_runner). Recorded in
+                CreateByInfo.job_id when save_adapters() writes a manifest.
             config: Model-specific configuration
             device: Device to train on
             output_dir: Root output directory
             dataset_info: Dataset metadata (class mapping, etc.)
         """
+        self.job_id = job_id
         self.config = config
         self.device = device
         self.output_dir = output_dir / self.model_name
@@ -332,7 +337,7 @@ class BaseModelTrainer(ABC):
                 model_family=self.model_name,
                 base_model=base_model,
                 peft_files=peft_files,
-                created_by=CreateByInfo(job_id=None, timestamp=datetime.now().isoformat()),
+                created_by=CreateByInfo(job_id=self.job_id, timestamp=datetime.now().isoformat()),
                 checksums=None,
             )
             manifest_path = adapter_dir / "adapter.manifest.json"

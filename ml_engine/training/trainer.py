@@ -81,6 +81,7 @@ class Trainer:
 
     def __init__(
         self,
+        job_id: str,
         data_manager: DataManager,
         output_dir: str,
         config: Dict[str, Any],
@@ -92,6 +93,12 @@ class Trainer:
         Initialize the Trainer.
 
         Args:
+            job_id: ID of the job (or composed `f"{job_id}/{trial_id}"` for
+                experiment trials) that triggered this training run.
+                Recorded in artifact manifests via CreateByInfo.job_id and
+                BundleManifest.lineage so manifests can be traced back to
+                their producing job. Required (no default) — passing an
+                empty string is allowed for ad-hoc / test contexts.
             data_manager: DataManager instance with train/val/test splits
             output_dir: Output directory for checkpoints and logs
             config: Training configuration
@@ -99,6 +106,7 @@ class Trainer:
             progress_callback: Optional callback for progress reporting
             cancel_check: Optional function that returns True to cancel training
         """
+        self.job_id = job_id
         self.data_manager = data_manager
         self.output_dir = Path(output_dir)
         self.config = config
@@ -204,6 +212,7 @@ class Trainer:
             }
 
             self.trainers[model_name] = trainer_cls(
+                job_id=self.job_id,
                 config=model_config,
                 device=self.device,
                 output_dir=self.output_dir,
@@ -403,9 +412,7 @@ class Trainer:
         bundle_manifest = BundleManifest(
             bundle_type="teacher_training_output",
             artifacts=artifacts,
-            lineage={
-                "job_id": None,
-            },
+            lineage={"job_id": self.job_id},
             merged_checkpoints=None,
         )
         bundle_manifest.save(self.output_dir / "bundle.manifest.json")

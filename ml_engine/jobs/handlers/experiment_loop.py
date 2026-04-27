@@ -52,6 +52,7 @@ class ExperimentLoopHandler(JobHandler):
 
     def run(
         self,
+        job_id: str,
         job_config: Dict[str, Any],
         output_dir: str,
         progress_queue: mp.Queue,
@@ -143,8 +144,12 @@ class ExperimentLoopHandler(JobHandler):
             return cancel_event.is_set()
 
         # --- Run ---
+        # job_id flows down to per-trial subprocesses where it's composed
+        # as f"{job_id}/{trial_id}" before being recorded in artifact
+        # manifests (TODO #16 plumbing).
         loop = ExperimentLoop(guard=guard)
         result = loop.run(
+            job_id=job_id,
             data_manager=data_manager,
             output_dir=output_dir,
             budget=budget,

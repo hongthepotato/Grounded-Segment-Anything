@@ -45,6 +45,7 @@ class GroundingDINOTrainer(BaseModelTrainer):
 
     def __init__(
         self,
+        job_id: str,
         config: Dict[str, Any],
         device: torch.device,
         output_dir: Path,
@@ -54,6 +55,7 @@ class GroundingDINOTrainer(BaseModelTrainer):
         Initialize the Grounding DINO trainer.
 
         Args:
+            job_id: Lineage id forwarded from the parent Trainer (TODO #16).
             config: Model configuration with keys:
                 - model.base_checkpoint: Path to pretrained weights
                 - lora: LoRA configuration (r, lora_alpha, target_modules, lora_dropout)
@@ -71,7 +73,7 @@ class GroundingDINOTrainer(BaseModelTrainer):
         self._positive_map_cache: Optional[torch.Tensor] = None
         self._positive_map_max_len: Optional[int] = None
 
-        super().__init__(config, device, output_dir, dataset_info)
+        super().__init__(job_id, config, device, output_dir, dataset_info)
 
     def _load_model(self) -> nn.Module:
         """Load Grounding DINO with LoRA adapters."""

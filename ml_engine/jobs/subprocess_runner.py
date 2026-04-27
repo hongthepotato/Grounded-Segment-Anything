@@ -406,7 +406,11 @@ def _job_entry_point(
         from ml_engine.jobs.registry import get_handler
 
         handler = get_handler(job_type)
+        # job_id is forwarded so handlers (and the Trainer they spawn) can
+        # populate CreateByInfo.job_id / BundleManifest.lineage with real
+        # lineage. Closes the gap that TODO #16 documented.
         handler.run(
+            job_id=job_id,
             job_config=job_config,
             output_dir=output_dir,
             progress_queue=progress_queue,
