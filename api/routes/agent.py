@@ -82,6 +82,7 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
     from ml_engine.agent.contracts import PipelineContract
     from ml_engine.agent.coordinator import Coordinator
     from ml_engine.agent.llm_client import LLMClient
+    from ml_engine.agent.state_machine import StateMachine
 
     r = _get_async_redis()
     contract = PipelineContract.from_dict(contract_dict)
@@ -110,6 +111,20 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
         exc = t.exception()
         if exc:
             logger.error("Coordinator task for run %s failed: %s", run_id, exc)
+
+            async def _mark_failed() -> None:
+                try:
+                    await StateMachine(run_id=run_id, redis_async=r).transition(
+                        "failed_unrecoverable", error_message=str(exc)
+                    )
+                except Exception as mark_err:
+                    logger.error(
+                        "Failed to mark run %s as failed_unrecoverable: %s",
+                        run_id,
+                        mark_err,
+                    )
+
+            asyncio.create_task(_mark_failed(), name=f"coordinator-crash-{run_id[:8]}")
         else:
             logger.info("Coordinator task for run %s completed", run_id)
         _coordinator_tasks.pop(run_id, None)

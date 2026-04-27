@@ -30,27 +30,6 @@ Three related design gaps surfaced during the first `/plan → /approve` integra
 
 ---
 
-### 2. Transition state to `failed_unrecoverable` when Coordinator task crashes
-
-**What:** In the `_on_done` callback at [api/routes/agent.py:93-99](api/routes/agent.py#L93-L99), when the Coordinator task raises, transition the run's state to `failed_unrecoverable` with the exception message stored in `error_message`, in addition to the existing `logger.error(...)`.
-
-**Why:** Today, a Coordinator crash logs and vanishes. The run stays in whatever state it was in when the task started (typically `planning`). `/status` returns a healthy-looking response with `coordinator_active: false` and no error context — indistinguishable from "running normally." The only visible symptom is that subsequent `/approve` calls return a cryptic state-transition 400.
-
-**Pros:**
-- Crashes become visible via `/status` and the event stream.
-- Frontend can show a clear failure state instead of a hung spinner.
-- Terminal state prevents nonsense retry attempts.
-
-**Cons:**
-- `_on_done` runs in an async context but isn't itself async — need to schedule the state transition (e.g. `asyncio.create_task(...)`) since `_on_done` is a sync callback.
-- "Crash" is not always unrecoverable; a transient import error is different from a logic bug. Consider `failed_retrying` for some cases. Start simple (always `failed_unrecoverable`), refine later.
-
-**Context:** Current `_on_done` at [api/routes/agent.py:93-99](api/routes/agent.py#L93-L99). `StateMachine.transition` accepts `error_message` as a kwarg, see [ml_engine/agent/state_machine.py:122-139](ml_engine/agent/state_machine.py#L122-L139). Allowed transitions from `planning` include `failed_unrecoverable` ([state_machine.py:69](ml_engine/agent/state_machine.py#L69)). From other states, check `TRANSITIONS` — failed exits may not be reachable from every state and will need adding.
-
-**Depends on / blocked by:** None. Smallest fix of the three; can ship independently.
-
----
-
 ### 3. Make `POST /api/agent/approve` idempotent
 
 **What:** When `/approve` is called on a run whose state is already past `created` (i.e. already approved), return a non-error response that either re-spawns the Coordinator task (if absent) or returns 409 with a clear "already approved" message. Don't return the current 400 with an internal state-transition error.
@@ -470,6 +449,21 @@ roster — `test_characteristic_translator.py`).
 
 ---
 
+### 20. Refine Coordinator crash classification (failed_retrying for transient errors)
+
+All Coordinator crashes currently → `failed_unrecoverable` (shipped in #2). Transient
+failures (import errors, Redis connection reset, network timeout) should route to
+`failed_retrying` instead to allow automatic recovery. Needs: (a) classify the exception
+type at the `_on_done` site in `api/routes/agent.py`; (b) verify `failed_retrying` has a
+re-launch path back to an active state (current TRANSITIONS do; `_start_coordinator` is
+already idempotent). Full context in
+[docs/decisions/02-coordinator-crash-failed-unrecoverable.md](docs/decisions/02-coordinator-crash-failed-unrecoverable.md).
+
+**Depends on / blocked by:** TODO #1 (auto-resume infra) — retrying is only useful once a
+re-launched Coordinator can actually pick up the run.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
@@ -477,6 +471,7 @@ patterns established, lessons learned) lives in [docs/decisions/](docs/decisions
 Item numbers are stable so commit messages and PR descriptions referencing
 "item N" / "TODO #N" still resolve.
 
+- **#2** Coordinator crash → `failed_unrecoverable` ✅ → [docs/decisions/02-coordinator-crash-failed-unrecoverable.md](docs/decisions/02-coordinator-crash-failed-unrecoverable.md) — `_on_done` now schedules state transition on task exception; TRANSITIONS expanded to allow `failed_unrecoverable` from all 5 previously-missing non-terminal states; 5 unit tests. Shipped 2026-04-27.
 - **#4** Pre-commit hooks ✅ → [docs/decisions/04-pre-commit-hooks.md](docs/decisions/04-pre-commit-hooks.md) — local + CI lint parity via `uv run --no-sync`. Shipped 2026-04-24 (PR #26).
 - **#6** mypy baseline cleanup — drive 416 errors to zero, then flip the gate ✅ → [docs/decisions/06-mypy-baseline-cleanup.md](docs/decisions/06-mypy-baseline-cleanup.md) — 9 PRs total. Mypy now gates merges across `core ml_engine api augmentation` (119 source files, 0 errors). Surfaced 3 real production bugs + filed TODOs #16 and #17 for follow-ups. Establishes the boundary-`Any`, redis-overload, `MpEvent`, path-shadow, and lazy-init-`Any` patterns most subsequent type work follows. Shipped 2026-04-26.
 - **#9** Clean up ruff baseline (3593 findings at ci-and-tests merge time) ✅ → [docs/decisions/09-ruff-baseline-cleanup.md](docs/decisions/09-ruff-baseline-cleanup.md) — 5 PRs total (#29-32 per-directory cleanup + #33 gate flip). Ruff now gates merges. Set the per-directory-cleanup-then-flip-the-gate precedent that #6 later followed for mypy. Shipped 2026-04-25.
