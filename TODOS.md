@@ -451,6 +451,53 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
+### 19. `_keep_higher_p` crashes with KeyError when a transform's params lack `p`
+
+**What:** `CharacteristicTranslator._keep_higher_p` at
+`augmentation/characteristic_translator.py:1109-1110` does
+`existing["p"]` and `new["p"]` directly. If a future rule defines a
+transform without a `p` parameter, the dedup path crashes with a bare
+`KeyError: 'p'` — confusing if the rule author doesn't know dedup is
+the consumer.
+
+**Test surface:** 1 xfail in `tests/unit/augmentation/test_characteristic_translator.py`
+(`TestKeepHigherPMissingProbabilityKey::test_missing_p_should_raise_clear_error`)
+documents the gap. When the fix lands, flip the `@pytest.mark.xfail`
+decorator off.
+
+**Fix options (1-3 lines):**
+
+- **Lenient:** treat missing `p` as priority 0 — `existing.get("p", 0.0)`
+  / `new.get("p", 0.0)`. Existing rule (with `p`) wins by default.
+- **Strict:** add the `p` check to `AugmentationRule.__post_init__` so
+  malformed rules fail loudly at module-import time, not at translate-
+  call time. The test in
+  `TestCharacteristicSchemaIntegrity::test_every_transform_has_probability`
+  enforces this for the 5 spot-checked characteristics; promoting it
+  to `__post_init__` covers all 21 rules.
+- **Both:** validate at construction (strict) AND fall back to 0.0 in
+  the dedup path (defense-in-depth for future runtime-mutated rules).
+
+**Why deferred:** Cosmetic / defensive. No live rule violates the
+constraint today (the schema-integrity tests pass for all 5 spot-
+checked characteristics; spot-checking the remaining 16 is mechanical).
+Worth filing so a fix lands the next time someone touches the rules.
+
+**Pros:** Clearer error for the rule author; defense-in-depth.
+
+**Cons:** None of consequence. The lenient fallback could mask a
+typo'd `p` key (`prob` instead of `p`) by treating it as priority 0.
+
+**Test surface:** No new tests needed — `test_characteristic_translator.py`
+already has the xfail.
+
+**Context:** Surfaced 2026-04-27 during item #12.3 (P2 unit test
+roster — `test_characteristic_translator.py`).
+
+**Depends on / blocked by:** None.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
