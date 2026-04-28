@@ -421,6 +421,65 @@ re-launched Coordinator can actually pick up the run.
 
 ---
 
+### 21. `pending_contract_approval` — no endpoint to advance out of it (blocker)
+
+**What:** `TRANSITIONS["pending_contract_approval"]` allows `["auto_labeling", "teacher_training", "cancelled", "failed_unrecoverable"]`, but no API endpoint drives any of those transitions. `/gate/{run_id}/{action}` only handles `pending_approval`. `/approve` only handles `created → planning`. A run that reaches `pending_contract_approval` — whether first time or after a restart — is permanently stuck.
+
+**Why:** `pending_contract_approval` is listed in `HUMAN_GATE_STAGES` in `coordinator.py`, so the Coordinator ignores all stream events in this state. The design assumes an external actor (human or endpoint) drives the transition, but that actor doesn't exist yet.
+
+**Decision needed:** Two options with different UX implications:
+
+- **Option A — Human-gated pause.** Keep `pending_contract_approval` as a deliberate review point. Add `POST /api/agent/contract/{run_id}/accept` (→ `auto_labeling` or `teacher_training`) and `POST /api/agent/contract/{run_id}/reject` (→ `cancelled`). The frontend shows the LLM-refined contract for approval before the pipeline starts. This mirrors the `pending_approval` gate at the end.
+- **Option B — Auto-advance.** Remove `pending_contract_approval` from `HUMAN_GATE_STAGES`. The Coordinator calls `advance_gate` twice in the `contract_approved` handler: first `planning → pending_contract_approval`, then immediately `pending_contract_approval → auto_labeling`. Effectively a no-op pause state; keep the state in the machine for observability but don't block on human input. Simpler, but loses the contract review UX.
+
+**Context:** State machine at [ml_engine/agent/state_machine.py:67-91](ml_engine/agent/state_machine.py#L67-L91). `HUMAN_GATE_STAGES` at [ml_engine/agent/coordinator.py:51](ml_engine/agent/coordinator.py#L51). Gate endpoint at [api/routes/agent.py:362-414](api/routes/agent.py#L362-L414).
+
+**Depends on / blocked by:** None. Self-contained. Should be resolved before any end-to-end integration testing since the happy path goes through this state.
+
+---
+
+### 22. `failed_retrying` — no retry dispatch (stuck state)
+
+**What:** When a job fails and `retry_count < max_retries`, `on_event` transitions the SM to `failed_retrying` and returns ([coordinator.py:462-467](ml_engine/agent/coordinator.py#L462-L467)). Nothing dispatches a retry job. No event is published to trigger a re-dispatch. On restart, the Coordinator resumes and waits — but there is no pending event in the stream. The run is stuck in `failed_retrying` forever.
+
+**Why:** The transition to `failed_retrying` was added to allow retries, but the actual retry dispatch logic was never implemented.
+
+**Fix:** After `sm.transition("failed_retrying")`, publish a `retry_requested` event to the stream (`type`, `stage`, `run_id`, `retry_count`). The Coordinator's `on_event` handler picks it up on the next loop iteration, reads the last dispatched stage from `LoopState` or the SM metadata, and re-dispatches via `dispatch_stage`. Alternatively, the Coordinator can call `dispatch_stage` directly in the `job_failed` handler before returning (simpler, but skips the event log).
+
+**Context:** `on_event` job_failed branch at [ml_engine/agent/coordinator.py:461-468](ml_engine/agent/coordinator.py#L461-L468). `TRANSITIONS["failed_retrying"]` at [ml_engine/agent/state_machine.py:84-89](ml_engine/agent/state_machine.py#L84-L89).
+
+**Depends on / blocked by:** TODO #20 (crash classification) — the distinction between `failed_retrying` and `failed_unrecoverable` only matters once retry dispatch actually works.
+
+---
+
+### 23. Worker tasks never self-terminate after run reaches terminal state
+
+**What:** `StreamConsumer.should_stop()` always returns `False` ([stream_consumer.py:320-322](ml_engine/agent/stream_consumer.py#L320-L322)). After a run reaches `done`, `escalated`, or `cancelled` (e.g., via `/gate/{run_id}/approve`), the Coordinator, ExecutorWorker, and EvaluatorWorker tasks keep polling the stream indefinitely via `asyncio.gather`. `_on_done` (in `_start_coordinator`) fires only when the task completes — which never happens. The tasks are leaked per completed run.
+
+**Why:** `should_stop()` was left as a no-op stub. The state machine check inside `on_event` silently drops events when terminal, but doesn't cause the loop to exit.
+
+**Fix:** Override `should_stop()` in each worker (or in `AgentLoop` / the base class) to call `sm.current_state()` and return `True` when the state is in `TERMINAL_STATES`. The `should_stop()` call is inside the main `while True` loop in `StreamConsumer.run()`, so returning `True` breaks out cleanly.
+
+**Context:** `should_stop()` stub at [ml_engine/agent/stream_consumer.py:320-322](ml_engine/agent/stream_consumer.py#L320-L322). Main loop check at [ml_engine/agent/stream_consumer.py:148-154](ml_engine/agent/stream_consumer.py#L148-L154). `asyncio.gather` in `Coordinator.run()` at [ml_engine/agent/coordinator.py:616-620](ml_engine/agent/coordinator.py#L616-L620).
+
+**Depends on / blocked by:** None. Low urgency — impact is a handful of idle polling tasks per completed run, not a correctness issue.
+
+---
+
+### 24. Multi-instance Coordinator collision — no distributed lock on resume
+
+**What:** `resume_orphaned_coordinators()` has no distributed lock. If two FastAPI replicas start simultaneously (rolling deploy, blue/green, crash-loop restart), both scan Redis and both call `_start_coordinator` for the same non-terminal runs. Two Coordinator tasks share the same consumer group name (`"coordinator"`) with the same `consumer_name="coordinator-0"`. Redis delivers each message to one consumer in the group, but two concurrent consumers with the same name have undefined delivery behavior — messages can be double-processed or starved.
+
+**Why:** `_start_coordinator` is idempotent within a single process (`_coordinator_tasks` dict prevents duplicate tasks in-process), but the guard is in-memory and not shared across replicas.
+
+**Fix:** Before launching a Coordinator, acquire a Redis lock (`SET run:{run_id}:coordinator_lock NX PX 30000`). Release on Coordinator exit (or let it TTL if the process dies). Only one replica holds the lock at a time. The other replica's `_start_coordinator` call silently no-ops if the lock is taken.
+
+**Context:** `resume_orphaned_coordinators` at [api/routes/agent.py:142-171](api/routes/agent.py#L142-L171). `_start_coordinator` idempotency guard at [api/routes/agent.py:77-79](api/routes/agent.py#L77-L79).
+
+**Depends on / blocked by:** Only relevant at >1 replica. Current single-instance dev is unaffected. Defer until multi-instance deployment is planned.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
