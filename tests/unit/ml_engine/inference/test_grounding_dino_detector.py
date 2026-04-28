@@ -17,7 +17,7 @@ Probes:
 from __future__ import annotations
 
 from typing import Dict, List
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -41,8 +41,6 @@ def _detector(
     boxes: torch.Tensor,
 ) -> GroundingDINODetector:
     """Detector with real __init__ but model replaced by a mock."""
-    from unittest.mock import MagicMock
-
     d = GroundingDINODetector("dummy_cfg", "dummy_ckpt", device="cpu")
     mock_model = MagicMock()
     mock_model.return_value = {
@@ -172,23 +170,15 @@ class TestLogitsToClassScoresAdversarial:
         # Without threshold, class 0 still contributes
         assert scores_no_thresh[0, 0].item() == pytest.approx(0.4)
 
-    def test_masking_can_flip_winner_from_strong_to_weak_class(self):
-        # Class 0 wins without threshold (0.8 > 0.6).
-        # With threshold=0.7: class 0's token (0.6) is zeroed; class 1's (0.8) passes.
-        # Winner flips to class 1.
+    def test_masking_zeroes_losing_class_token(self):
+        # Class 0=0.8 (strong), class 1=0.6 (weak); threshold=0.7 zeroes class 1's token
+        # (0.6 ≤ 0.7). Class 0 still wins, but class 1 drops from 0.6 to 0.0.
         positive_map = {0: [0], 1: [1]}
-        logits = torch.tensor([[0.6, 0.8]])  # raw already-sigmoided placeholder
-
-        # Without threshold: class 0=0.6, class 1=0.8 → class 1 already wins, bad example
-        # Let's use: class 0=0.8 (strong), class 1=0.6; threshold zeroes class 1's token
         logits = torch.tensor([[0.8, 0.6]])
         scores_no = logits_to_class_scores(logits, positive_map, 2, text_threshold=0.0)
         scores_th = logits_to_class_scores(logits, positive_map, 2, text_threshold=0.7)
 
-        # No threshold: class 0=0.8 wins
         assert scores_no[0].argmax().item() == 0
-        # Threshold 0.7: class 0=0.8 passes (0.8>0.7), class 1=0.6 zeroed (0.6≤0.7)
-        # class 0 still wins — but class 1 is now 0.0
         assert scores_th[0, 0].item() == pytest.approx(0.8)
         assert scores_th[0, 1].item() == pytest.approx(0.0)
 
@@ -356,12 +346,14 @@ class TestDetectTextThresholdAdversarial:
 
     # --- threshold=0.0 is a true no-op relative to box_threshold alone ---
 
-    def test_threshold_zero_identical_to_no_threshold(self):
+    def test_threshold_zero_is_no_op(self):
+        # text_threshold=0.0 preserves all tokens — scores [0.9, 0.6, 0.1] all pass
+        # box_threshold=0.05. text_threshold=0.5 zeroes the 0.1 query → only 2 survive.
         detector, pm = self._build([0.9, 0.6, 0.1])
-        r1 = _run_detect(detector, ["cat"], pm, box_threshold=0.05, text_threshold=0.0)
-        r2 = _run_detect(detector, ["cat"], pm, box_threshold=0.05, text_threshold=0.0)
-        assert len(r1) == len(r2)
-        assert np.allclose(np.sort(r1.confidences), np.sort(r2.confidences))
+        r_zero = _run_detect(detector, ["cat"], pm, box_threshold=0.05, text_threshold=0.0)
+        r_active = _run_detect(detector, ["cat"], pm, box_threshold=0.05, text_threshold=0.5)
+        assert len(r_zero) == 3, "text_threshold=0.0 must not filter any detections"
+        assert len(r_active) == 2, "text_threshold=0.5 must zero the 0.1-score query"
 
     # --- confidence values after masking are not rescaled ---
 
@@ -486,3 +478,25 @@ class TestDetectTextThresholdAdversarial:
                 f"detection count must not increase as threshold rises: "
                 f"threshold {thresholds[i]}→{thresholds[i + 1]} gave {counts[i]}→{counts[i + 1]}"
             )
+
+    def test_empty_positive_map_returns_empty_result(self):
+        # When build_positive_map returns {} (tokenizer can't map any class),
+        # detect() must return an empty DetectionResult without raising.
+        detector, _ = self._build([0.9])
+        image = np.zeros((100, 100, 3), dtype=np.uint8)
+        with (
+            patch(f"{_MODULE}.preprocess_caption", return_value="mocked."),
+            patch(f"{_MODULE}.preprocess_image", return_value=torch.zeros(3, 32, 32)),
+            patch(f"{_MODULE}.build_positive_map", return_value={}),
+        ):
+            result = detector.detect(
+                image,
+                ["cat"],
+                box_threshold=0.5,
+                text_threshold=0.5,
+                nms_threshold=0.5,
+            )
+        assert len(result) == 0
+        assert result.boxes_xyxy.shape == (0, 4)
+        assert result.confidences.shape == (0,)
+        assert result.class_ids.shape == (0,)
