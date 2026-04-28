@@ -592,6 +592,11 @@ class SegmentationLoss(nn.Module):
             Dict with loss components and total loss
         """
         pred_masks = predictions["pred_masks"]
+        if pred_masks.ndim != 4:
+            raise ValueError(
+                f"pred_masks must be 4D [B,N,H,W], got {pred_masks.ndim}D. "
+                "Multimask [B,N,K,H,W] must be reduced before passing to SegmentationLoss."
+            )
         target_masks = targets["masks"]
         valid_mask = targets.get(
             "valid_mask",
@@ -657,7 +662,7 @@ class SegmentationLoss(nn.Module):
             self.loss_weights["focal"] * loss_focal
             + self.loss_weights["dice"] * loss_dice
             + self.loss_weights["iou"] * loss_iou
-            + self.loss_weights.get("iou_quality", 1.0) * loss_iou_quality
+            + self.loss_weights.get("iou_quality", 0.0) * loss_iou_quality
         )
 
         return {

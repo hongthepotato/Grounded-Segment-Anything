@@ -360,6 +360,11 @@ class SAMHQLoRA(nn.Module):
                 f"box_prompts must contain at least 1 object per image (shape[1] > 0), "
                 f"got shape {tuple(box_prompts.shape)}"
             )
+        if point_prompts is not None and point_prompts[0].shape[1] == 0:
+            raise ValueError(
+                f"point_prompts must contain at least 1 object per image, "
+                f"got shape {tuple(point_prompts[0].shape)}"
+            )
 
         # Allocate output tensors
         all_masks = []
