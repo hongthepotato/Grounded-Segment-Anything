@@ -181,7 +181,12 @@ class StateMachine:
         logger.info("Run %s initialized (state=created)", self.run_id)
 
     async def get_proposed_contract(self) -> Optional[Dict[str, Any]]:
-        """Return the contract proposed at plan time, or None if not stored."""
+        """Return the contract proposed at plan time, or None if not stored.
+
+        Note: ``{}`` (empty dict) is stored by initialize() when no contract is
+        provided, and is treated as "not set" (returns None). Real contracts are
+        always non-empty PipelineContract dicts.
+        """
         raw = await self._r.hget(self._key, "proposed_contract")
         if not raw:
             return None
@@ -189,6 +194,7 @@ class StateMachine:
             result = json.loads(_decode(raw))
             return result if result else None
         except json.JSONDecodeError:
+            logger.warning("Run %s: malformed JSON in proposed_contract field", self.run_id)
             return None
 
     async def load(self) -> Dict[str, Any]:
@@ -247,8 +253,9 @@ class StateMachine:
             return None
         try:
             result = json.loads(_decode(raw))
-            return result if result else None
+            return result if result is not None else None
         except json.JSONDecodeError:
+            logger.warning("Run %s: malformed JSON in approved_contract field", self.run_id)
             return None
 
     @classmethod

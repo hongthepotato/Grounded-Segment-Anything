@@ -36,6 +36,7 @@ from api.routes.jobs import router as jobs_router
 from api.routes.websocket import router as websocket_router
 from api.schemas import error_response, success_response
 from core.logging_config import configure_logging, get_logger
+from ml_engine.agent.redis_clients import close_async_redis_client
 from ml_engine.jobs import close_async_job_managers, get_async_job_manager
 
 # Configure logging at module load time (before FastAPI starts)
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Training Job Manager API...")
     await close_async_job_managers()
+    await close_async_redis_client()
     logger.info("Shutdown complete")
 
 

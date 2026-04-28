@@ -108,6 +108,10 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
     )
 
     def _on_done(t: asyncio.Task) -> None:
+        _coordinator_tasks.pop(run_id, None)
+        if t.cancelled():
+            logger.info("Coordinator task for run %s was cancelled", run_id)
+            return
         exc = t.exception()
         if exc:
             logger.error("Coordinator task for run %s failed: %s", run_id, exc)
@@ -127,7 +131,6 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
             asyncio.create_task(_mark_failed(), name=f"coordinator-crash-{run_id[:8]}")
         else:
             logger.info("Coordinator task for run %s completed", run_id)
-        _coordinator_tasks.pop(run_id, None)
 
     task.add_done_callback(_on_done)
     _coordinator_tasks[run_id] = task
@@ -252,6 +255,9 @@ async def propose_plan(body: PlanRequest):
     )
 
 
+# TODO: /approve and /gate have no authentication — any caller can approve a
+# contract or make a gate decision for any run_id. Add an API-key guard or
+# integrate with the project's auth layer before exposing this service publicly.
 @router.post("/approve")
 async def approve_plan(body: ApproveRequest):
     """
@@ -282,6 +288,11 @@ async def approve_plan(body: ApproveRequest):
             detail=f"Run {body.run_id!r} is in terminal state {current!r} and cannot be re-approved",
         )
 
+    # Persist the approved contract BEFORE any state transition so that orphan
+    # recovery can always reconstruct the Coordinator — even if the process dies
+    # between the transition write and the end of this handler.
+    await sm.store_approved_contract(body.contract)
+
     if current == "created":
         # First approval: transition, publish the trigger event, record contract.
         try:
@@ -302,10 +313,6 @@ async def approve_plan(body: ApproveRequest):
         # Idempotent re-approve: Coordinator resumes from stream PEL/cursor —
         # no need to re-publish contract_approved (already ACKed or in PEL).
         logger.info("Idempotent re-approve for run %s (current state: %s)", body.run_id, current)
-
-    # Always persist the (possibly updated) approved contract so startup
-    # auto-resume can reconstruct the Coordinator after a container restart.
-    await sm.store_approved_contract(body.contract)
 
     # Start or re-launch the Coordinator task (no-op if already running).
     _start_coordinator(body.run_id, body.contract)
