@@ -25,6 +25,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.routes.agent import resume_orphaned_coordinators
 from api.routes.agent import router as agent_router
 from api.routes.agent import ws_router as agent_ws_router
 from api.routes.autolabel import router as autolabel_router
@@ -66,6 +67,10 @@ async def lifespan(app: FastAPI):
         removed = await manager.cleanup_stale_workers(timeout_seconds=120)
         if removed > 0:
             logger.info("Removed %d stale workers", removed)
+
+        # Re-launch Coordinator tasks for any runs that were in-progress when
+        # the previous API process died. Safe to call even on a fresh Redis.
+        await resume_orphaned_coordinators()
 
     except Exception as e:
         logger.error("Failed to connect to Redis: %s", e)
