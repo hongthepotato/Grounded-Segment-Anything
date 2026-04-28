@@ -355,6 +355,16 @@ class SAMHQLoRA(nn.Module):
         # Validate prompts
         if box_prompts is None and point_prompts is None:
             raise ValueError("Either box_prompts or point_prompts must be provided")
+        if box_prompts is not None and box_prompts.shape[1] == 0:
+            raise ValueError(
+                f"box_prompts must contain at least 1 object per image (shape[1] > 0), "
+                f"got shape {tuple(box_prompts.shape)}"
+            )
+        if point_prompts is not None and point_prompts[0].shape[1] == 0:
+            raise ValueError(
+                f"point_prompts must contain at least 1 object per image, "
+                f"got shape {tuple(point_prompts[0].shape)}"
+            )
 
         # Allocate output tensors
         all_masks = []
@@ -463,17 +473,33 @@ class SAMHQLoRA(nn.Module):
         Use this method to upscale to full resolution for visualization or output.
 
         Args:
-            masks: Predicted masks [B, N, 256, 256] or [B, N, num_masks, 256, 256]
+            masks: Predicted masks [B, N, 256, 256] or [B, N, K, 256, 256]
+                   where K = num_masks (3 when multimask_output=True)
             target_size: Target (height, width), e.g., (1024, 1024) or original image size
 
         Returns:
-            Upscaled masks at target resolution
+            Upscaled masks at target resolution, same rank as input
 
         Example:
             >>> outputs = model(images, box_prompts=boxes)
             >>> pred_masks_256 = outputs['pred_masks']  # [B, N, 256, 256]
             >>> pred_masks_full = SAMHQLoRA.upscale_masks(pred_masks_256, (1024, 1024))
+            >>> # multimask case: [B, N, 3, 256, 256] -> [B, N, 3, 1024, 1024]
+            >>> pred_multi_full = SAMHQLoRA.upscale_masks(multi_masks, (1024, 1024))
         """
+        if masks.dim() not in (4, 5):
+            raise ValueError(
+                f"upscale_masks expects 4D [B,N,H,W] or 5D [B,N,K,H,W] input, got {masks.dim()}D"
+            )
+        if masks.dim() == 5:
+            # [B, N, K, H, W]: flatten batch+prompts so F.interpolate (bilinear = 4D)
+            # sees [B*N, K, H, W], then restore the original leading shape.
+            B, N, K, H, W = masks.shape
+            flat = masks.reshape(B * N, K, H, W)
+            upscaled = torch.nn.functional.interpolate(
+                flat, size=target_size, mode="bilinear", align_corners=False
+            )
+            return upscaled.reshape(B, N, K, *target_size)
         return torch.nn.functional.interpolate(masks, size=target_size, mode="bilinear", align_corners=False)
 
     def save_lora_adapters(self, output_dir: str):

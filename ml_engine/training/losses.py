@@ -562,9 +562,9 @@ class SegmentationLoss(nn.Module):
         """
         super().__init__()
 
-        # Default loss weights
+        # Default loss weights (iou_quality: MSE regression for quality-head calibration)
         if loss_weights is None:
-            loss_weights = {"focal": 20.0, "dice": 1.0, "iou": 1.0}
+            loss_weights = {"focal": 20.0, "dice": 1.0, "iou": 1.0, "iou_quality": 1.0}
         self.loss_weights = loss_weights
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
@@ -576,7 +576,14 @@ class SegmentationLoss(nn.Module):
         Compute segmentation loss with padding mask support.
 
         Args:
-            predictions: Dict with key 'pred_masks': [B, N, H, W]
+            predictions: Dict with keys:
+                - 'pred_masks': [B, N, H, W]
+                - 'iou_predictions': [B, N] optional quality scores from
+                  iou_prediction_head. When present, an MSE regression loss
+                  trains the quality head against the actual mask IoU against GT.
+                  This matters because iou_predictions is used as `scores` by
+                  the evaluator for mAP ranking — uncalibrated scores degrade
+                  reported mAP even when mask pixels are correct.
             targets: Dict with keys:
                 - 'masks': [B, N, H, W]
                 - 'valid_mask': [B, N] boolean mask (True = valid, False = padding)
@@ -585,6 +592,11 @@ class SegmentationLoss(nn.Module):
             Dict with loss components and total loss
         """
         pred_masks = predictions["pred_masks"]
+        if pred_masks.ndim != 4:
+            raise ValueError(
+                f"pred_masks must be 4D [B,N,H,W], got {pred_masks.ndim}D. "
+                "Multimask [B,N,K,H,W] must be reduced before passing to SegmentationLoss."
+            )
         target_masks = targets["masks"]
         valid_mask = targets.get(
             "valid_mask",
@@ -610,22 +622,47 @@ class SegmentationLoss(nn.Module):
                 # Dice loss
                 loss_dice = self.dice_loss(valid_pred, valid_target)
 
-                # IoU loss
+                # Soft-IoU loss (mask-level, not quality-head)
                 loss_iou = self.iou_loss(valid_pred, valid_target)
+
+                # Quality-head regression: train iou_prediction_head to predict
+                # the actual IoU between the predicted binary mask and GT.
+                # The regression target is computed with no_grad — gradients flow
+                # only through valid_iou_pred back into iou_prediction_head weights.
+                if "iou_predictions" in predictions:
+                    _iou_pred = predictions["iou_predictions"]
+                    if _iou_pred.shape != (b, n):
+                        raise ValueError(
+                            f"iou_predictions must be shape [B, N]=[{b}, {n}], "
+                            f"got {tuple(_iou_pred.shape)}. "
+                            "Multimask [B, N, K] must be reduced to [B, N] before SegmentationLoss."
+                        )
+                    valid_iou_pred = _iou_pred.reshape(b * n)[valid_indices]
+                    with torch.no_grad():
+                        pred_binary = (valid_pred.sigmoid() > 0.5).float()
+                        intersection = (pred_binary * valid_target).sum(dim=1)
+                        union = pred_binary.sum(dim=1) + valid_target.sum(dim=1) - intersection
+                        actual_iou = intersection / (union + 1e-6)
+                    loss_iou_quality = F.mse_loss(valid_iou_pred, actual_iou)
+                else:
+                    loss_iou_quality = torch.tensor(0.0, device=pred_masks.device)
             else:
                 loss_focal = torch.tensor(0.0, device=pred_masks.device, requires_grad=True)
                 loss_dice = torch.tensor(0.0, device=pred_masks.device, requires_grad=True)
                 loss_iou = torch.tensor(0.0, device=pred_masks.device, requires_grad=True)
+                loss_iou_quality = torch.tensor(0.0, device=pred_masks.device)
         else:
             loss_focal = torch.tensor(0.0, device=pred_masks.device, requires_grad=True)
             loss_dice = torch.tensor(0.0, device=pred_masks.device, requires_grad=True)
             loss_iou = torch.tensor(0.0, device=pred_masks.device, requires_grad=True)
+            loss_iou_quality = torch.tensor(0.0, device=pred_masks.device)
 
         # Total loss
         total_loss = (
             self.loss_weights["focal"] * loss_focal
             + self.loss_weights["dice"] * loss_dice
             + self.loss_weights["iou"] * loss_iou
+            + self.loss_weights.get("iou_quality", 0.0) * loss_iou_quality
         )
 
         return {
@@ -633,6 +670,7 @@ class SegmentationLoss(nn.Module):
             "loss_focal": loss_focal.detach(),
             "loss_dice": loss_dice.detach(),
             "loss_iou": loss_iou.detach(),
+            "loss_iou_quality": loss_iou_quality.detach(),
         }
 
     def sigmoid_focal_loss(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
