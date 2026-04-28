@@ -79,37 +79,6 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 ---
 
-### 14. `tests/test_sam_lora.py` — 13 pre-existing failures + a CI scope gap
-
-**What:** Investigate and resolve 13 pre-existing test failures in `tests/test_sam_lora.py`. Discovered 2026-04-25 while running the full `pytest tests` (vs the narrower `pytest tests/unit tests/integration tests/contract` that CI runs). Verified pre-existing via `git stash` against `agentic`'s baseline — NOT introduced by any PR in this work stream.
-
-**Sample failures (concrete signal for the investigator):**
-- `TestSAMHQLoRAConfig::test_lora_target_modules_format` — asserts `'q_proj' in target_modules` but actual `target_modules` is `['qkv', 'proj']`. Either the target-module naming changed (and the test wasn't updated), OR there's a real regression in `ml_engine/models/teacher/sam_lora.py`.
-- `TestSAMHQLoRAForwardPass::test_forward_returns_expected_keys` — expected output shape `(2, 3, 256, 256)`, got `(2, 3, 1024, 1024)`. Indicates either the SAM forward pass was rewritten to return native 1024-resolution masks (without updating the test) OR the test was wrong from the start.
-
-**Why this needs attention:**
-1. **Real bug vs stale test** — both interpretations have evidence. Either way, the truth needs to be established. If real bug: `sam_lora.py` is silently broken in production. If stale test: confusing signal whenever someone runs the test file directly.
-2. **CI scope gap** — `tests/test_sam_lora.py` is a root-level test file (`tests/*.py`) that CI's `pytest tests/unit tests/integration tests/contract` never picks up. So these failures have been invisible to CI for as long as they've existed. CI was designed to skip root-level tests intentionally (item 11 of the ci-and-tests design doc lists root-level files as "audit for staleness — `test_data_manager.py`, `test_sam_lora.py`, `test_auto_labeler.py`"), but the audit never finished. This is the unfinished half of that audit.
-
-**Pros:**
-- Resolves a real signal/noise problem (right now nobody knows if these are bugs)
-- Closes the CI scope gap — either delete dead tests or move them under `tests/unit/` so CI runs them
-- May reveal an actual production bug in SAM-HQ LoRA wrapper
-
-**Cons:**
-- Investigation requires understanding SAM-HQ LoRA internals (target_modules, forward pass shape contract)
-- If the tests turn out to be stale, deletion + reasoning needs to be documented
-- If a real bug is found, the fix may be deeper than expected (LoRA adapter shape contract changes are usually invasive)
-
-**Context:** The 3 root-level tests in `tests/` are: `test_sam_lora.py`, `test_data_manager.py`, `test_auto_labeler.py`. The ci-and-tests design doc explicitly flagged these as "audit for staleness" but didn't follow through. Same investigation should cover all three. Suggested minimal path:
-
-1. Run each root-level test file with verbose pytest (`-v --tb=long`). Cluster failures.
-2. For each cluster, decide: real bug → file separately + fix; stale test → delete with one-line PR commit explaining why; outdated assumption → update the test.
-3. After per-file decisions: either move the file under `tests/unit/` (so CI catches future regressions) or delete it.
-
-**Depends on / blocked by:** None. Independent of in-flight work.
-
----
 
 ### 15. WebSocket route `/ws/jobs/{job_id}` — restore live event tailing
 
@@ -421,3 +390,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#13** Type-annotate `ml_engine/export/merger.py` ✅ → [docs/decisions/13-merger-py-mypy-fix.md](docs/decisions/13-merger-py-mypy-fix.md) — established the `Any`-at-the-boundary precedent for PEFT's `__getattr__` delegation. Shipped 2026-04-25 (`chore/mypy-merger-hygiene`).
 - **#17** Restore `text_threshold` token-level filtering in `GroundingDINODetector` ✅ → [docs/decisions/17-text-threshold-filtering.md](docs/decisions/17-text-threshold-filtering.md) — `logits_to_class_scores` now zeros sub-threshold tokens before per-class mean; `detect()` passes the param through instead of discarding it; 32 adversarial tests (boundary, mutation, class-flip, dilution, NMS, monotone sweep). Shipped 2026-04-28.
 - **#16** Plumb `job_id` through training pipeline so artifact manifests carry real lineage ✅ → [docs/decisions/16-job-id-lineage-plumbing.md](docs/decisions/16-job-id-lineage-plumbing.md) — first follow-up surfaced by #6. Trial subprocesses use composed `f"{job_id}/{trial_id}"` form. Shipped 2026-04-27 (PR #41).
+- **#14** `tests/test_sam_lora.py` audit — 13 stale failures + CI scope gap ✅ — All 13 failures were stale tests. Moved to `tests/unit/ml_engine/test_sam_lora.py` so CI picks them up. Fixed 3 real bugs: `upscale_masks()` crashes on 5D multimask tensors (5D reshape path added); `SegmentationLoss` ignored `iou_predictions` (IoU quality MSE regression added); `box_prompts=[N=0]` now raises clear `ValueError` at call site. Pre-landing: added explicit `[B,N]` shape guard + clear error on `iou_predictions`, `iou_quality` key in default weights dict, rank guard on `upscale_masks`. 24 tests. Shipped 2026-04-28.

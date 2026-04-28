@@ -418,8 +418,8 @@ class TestSAMHQLoRAEdgeCases:
                         lora_config={"r": 8, "lora_alpha": 16, "target_modules": ["q_proj"]},
                     )
 
-        # N=0 prompts per image
-        with pytest.raises((RuntimeError, ValueError)):
+        # N=0 prompts per image: must raise ValueError at the call site, not deep in torch.cat
+        with pytest.raises(ValueError, match="at least 1 object"):
             model.forward(
                 torch.randn(2, 3, 1024, 1024),
                 box_prompts=torch.zeros(2, 0, 4),
@@ -503,6 +503,7 @@ class TestSegmentationLossEdgeCases:
         """
         from ml_engine.training.losses import SegmentationLoss
 
+        torch.manual_seed(13)
         B, N, H, W = 2, 3, 256, 256
         pred_masks = torch.randn(B, N, H, W, requires_grad=True)
         iou_preds = torch.rand(B, N, requires_grad=True)

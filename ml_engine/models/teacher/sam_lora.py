@@ -355,6 +355,11 @@ class SAMHQLoRA(nn.Module):
         # Validate prompts
         if box_prompts is None and point_prompts is None:
             raise ValueError("Either box_prompts or point_prompts must be provided")
+        if box_prompts is not None and box_prompts.shape[1] == 0:
+            raise ValueError(
+                f"box_prompts must contain at least 1 object per image (shape[1] > 0), "
+                f"got shape {tuple(box_prompts.shape)}"
+            )
 
         # Allocate output tensors
         all_masks = []
@@ -477,6 +482,10 @@ class SAMHQLoRA(nn.Module):
             >>> # multimask case: [B, N, 3, 256, 256] -> [B, N, 3, 1024, 1024]
             >>> pred_multi_full = SAMHQLoRA.upscale_masks(multi_masks, (1024, 1024))
         """
+        if masks.dim() not in (4, 5):
+            raise ValueError(
+                f"upscale_masks expects 4D [B,N,H,W] or 5D [B,N,K,H,W] input, got {masks.dim()}D"
+            )
         if masks.dim() == 5:
             # [B, N, K, H, W]: flatten batch+prompts so F.interpolate (bilinear = 4D)
             # sees [B*N, K, H, W], then restore the original leading shape.

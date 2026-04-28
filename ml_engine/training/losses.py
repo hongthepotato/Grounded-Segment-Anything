@@ -562,9 +562,9 @@ class SegmentationLoss(nn.Module):
         """
         super().__init__()
 
-        # Default loss weights
+        # Default loss weights (iou_quality: MSE regression for quality-head calibration)
         if loss_weights is None:
-            loss_weights = {"focal": 20.0, "dice": 1.0, "iou": 1.0}
+            loss_weights = {"focal": 20.0, "dice": 1.0, "iou": 1.0, "iou_quality": 1.0}
         self.loss_weights = loss_weights
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
@@ -625,7 +625,14 @@ class SegmentationLoss(nn.Module):
                 # The regression target is computed with no_grad — gradients flow
                 # only through valid_iou_pred back into iou_prediction_head weights.
                 if "iou_predictions" in predictions:
-                    valid_iou_pred = predictions["iou_predictions"].view(b * n)[valid_indices]
+                    _iou_pred = predictions["iou_predictions"]
+                    if _iou_pred.shape != (b, n):
+                        raise ValueError(
+                            f"iou_predictions must be shape [B, N]=[{b}, {n}], "
+                            f"got {tuple(_iou_pred.shape)}. "
+                            "Multimask [B, N, K] must be reduced to [B, N] before SegmentationLoss."
+                        )
+                    valid_iou_pred = _iou_pred.reshape(b * n)[valid_indices]
                     with torch.no_grad():
                         pred_binary = (valid_pred.sigmoid() > 0.5).float()
                         intersection = (pred_binary * valid_target).sum(dim=1)
