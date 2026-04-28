@@ -10,6 +10,7 @@ averaging over each class's token positions.
 """
 
 import logging
+import math
 from typing import Any, Dict, List
 
 import cv2
@@ -77,16 +78,25 @@ def logits_to_class_scores(
         num_classes: Total number of classes.
         text_threshold: Tokens whose sigmoided score is <= this value are
             zeroed before the per-class mean is computed. 0.0 (default)
-            keeps all tokens (preserves original behaviour).
+            keeps all tokens (backward-compatible when called directly;
+            ``detect()`` passes its own default of 0.5).
 
     Returns:
         Per-class scores, shape ``(nq, num_classes)``.
+
+    Raises:
+        ValueError: If ``text_threshold`` is NaN (would silently disable
+            filtering since NaN > x is always False).
     """
+    if math.isnan(text_threshold):
+        raise ValueError(f"text_threshold must not be NaN, got {text_threshold!r}")
     scores = torch.zeros(logits.shape[0], num_classes, device=logits.device)
     for cls_idx, tok_indices in positive_map.items():
         tok_logits = logits[:, tok_indices]
         if text_threshold > 0.0:
             tok_logits = tok_logits * (tok_logits > text_threshold).float()
+            # NaN * 0.0 = NaN per IEEE 754; nan_to_num enforces the mask intent.
+            tok_logits = torch.nan_to_num(tok_logits, nan=0.0)
         scores[:, cls_idx] = tok_logits.mean(dim=-1)
     return scores
 
@@ -164,6 +174,12 @@ class GroundingDINODetector:
                 sigmoided score is <= this value are zeroed before the
                 per-class mean is computed. Queries where all tokens for
                 every class are zeroed will not pass box_threshold.
+
+                .. note:: **Breaking change (v0.1.1):** Prior to v0.1.1
+                   this parameter was silently discarded. Callers using the
+                   default (0.5) will now see fewer detections compared to
+                   v0.1.0. Set ``text_threshold=0.0`` to restore the old
+                   (unfiltered) behaviour.
             nms_threshold: IoU threshold for NMS.
 
         Returns:
