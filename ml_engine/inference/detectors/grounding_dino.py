@@ -65,6 +65,7 @@ def logits_to_class_scores(
     logits: torch.Tensor,
     positive_map: Dict[int, List[int]],
     num_classes: int,
+    text_threshold: float = 0.0,
 ) -> torch.Tensor:
     """Convert per-token logits to per-class scores via mean aggregation.
 
@@ -74,13 +75,19 @@ def logits_to_class_scores(
         logits: Sigmoided token-level logits, shape ``(nq, max_text_len)``.
         positive_map: ``{class_idx: [token_positions]}``.
         num_classes: Total number of classes.
+        text_threshold: Tokens whose sigmoided score is <= this value are
+            zeroed before the per-class mean is computed. 0.0 (default)
+            keeps all tokens (preserves original behaviour).
 
     Returns:
         Per-class scores, shape ``(nq, num_classes)``.
     """
     scores = torch.zeros(logits.shape[0], num_classes, device=logits.device)
     for cls_idx, tok_indices in positive_map.items():
-        scores[:, cls_idx] = logits[:, tok_indices].mean(dim=-1)
+        tok_logits = logits[:, tok_indices]
+        if text_threshold > 0.0:
+            tok_logits = tok_logits * (tok_logits > text_threshold).float()
+        scores[:, cls_idx] = tok_logits.mean(dim=-1)
     return scores
 
 
@@ -153,19 +160,15 @@ class GroundingDINODetector:
             image: BGR image (OpenCV format).
             prompts: Class names to detect.
             box_threshold: Minimum per-class score to keep a detection.
-            text_threshold: Token-level matching threshold. CURRENTLY
-                IGNORED — see TODO #17. The value flows from the API down
-                to here but is dropped by this implementation; the original
-                token-level filter (inside `logits_to_class_scores`) was
-                removed during refactor and never restored.
+            text_threshold: Token-level confidence gate. Tokens whose
+                sigmoided score is <= this value are zeroed before the
+                per-class mean is computed. Queries where all tokens for
+                every class are zeroed will not pass box_threshold.
             nms_threshold: IoU threshold for NMS.
 
         Returns:
             DetectionResult with boxes, confidences, and class_ids.
         """
-        # text_threshold is accepted for Protocol/API contract compliance
-        # but currently unused (see TODO #17). Marked _ to silence linters.
-        _ = text_threshold
         self._load_model()
 
         caption = preprocess_caption(".".join(prompts))
@@ -188,7 +191,9 @@ class GroundingDINODetector:
         pred_boxes = outputs["pred_boxes"][0]  # (nq, 4) cxcywh 0-1
 
         # cls_scores is of shape (nq, num_classes)
-        cls_scores = logits_to_class_scores(pred_logits, positive_map, len(prompts))  # (nq, num_classes)
+        cls_scores = logits_to_class_scores(  # (nq, num_classes)
+            pred_logits, positive_map, len(prompts), text_threshold
+        )
 
         # pick the class with the highest score for each query
         # if 'dim' is specified, max will return (values, indices)
