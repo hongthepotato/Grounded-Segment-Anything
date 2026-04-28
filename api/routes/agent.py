@@ -108,6 +108,10 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
     )
 
     def _on_done(t: asyncio.Task) -> None:
+        _coordinator_tasks.pop(run_id, None)
+        if t.cancelled():
+            logger.info("Coordinator task for run %s was cancelled", run_id)
+            return
         exc = t.exception()
         if exc:
             logger.error("Coordinator task for run %s failed: %s", run_id, exc)
@@ -127,11 +131,47 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
             asyncio.create_task(_mark_failed(), name=f"coordinator-crash-{run_id[:8]}")
         else:
             logger.info("Coordinator task for run %s completed", run_id)
-        _coordinator_tasks.pop(run_id, None)
 
     task.add_done_callback(_on_done)
     _coordinator_tasks[run_id] = task
     logger.info("Coordinator task started for run %s", run_id)
+
+
+# ---------------------------------------------------------------------------
+# Orphan recovery: re-launch Coordinator tasks for non-terminal runs on startup
+# ---------------------------------------------------------------------------
+
+
+async def resume_orphaned_coordinators() -> None:
+    """
+    Scan Redis for runs in a non-terminal state with no active Coordinator task
+    and re-launch each one.
+
+    Called once from the FastAPI lifespan startup hook. Safe to call again
+    at any point -- _start_coordinator is idempotent (no-ops if task running).
+    """
+    from ml_engine.agent.state_machine import StateMachine
+
+    r = _get_async_redis()
+    run_ids = await StateMachine.scan_non_terminal_run_ids(r)
+
+    resumed = 0
+    for run_id in run_ids:
+        if run_id in _coordinator_tasks and not _coordinator_tasks[run_id].done():
+            continue  # already running (e.g. called twice at startup)
+
+        sm = StateMachine(run_id=run_id, redis_async=r)
+        contract_dict = await sm.get_approved_contract()
+        if contract_dict is None:
+            # Run was created and planned but never approved -- no Coordinator needed yet.
+            logger.info("Skipping orphaned run %s: no approved contract (pre-approve state)", run_id)
+            continue
+
+        logger.info("Auto-resuming Coordinator for orphaned run %s", run_id)
+        _start_coordinator(run_id, contract_dict)
+        resumed += 1
+
+    logger.info("Startup orphan recovery: resumed %d Coordinator(s)", resumed)
 
 
 # ---------------------------------------------------------------------------
@@ -215,47 +255,74 @@ async def propose_plan(body: PlanRequest):
     )
 
 
+# TODO: /approve and /gate have no authentication — any caller can approve a
+# contract or make a gate decision for any run_id. Add an API-key guard or
+# integrate with the project's auth layer before exposing this service publicly.
 @router.post("/approve")
 async def approve_plan(body: ApproveRequest):
     """
-    Approve a proposed contract and start the Coordinator pipeline.
+    Approve a proposed contract and start the Coordinator pipeline. Idempotent.
 
-    Transitions state created -> planning, publishes contract_approved event,
-    and starts the Coordinator as an asyncio background task. The Coordinator
-    reads the event from the Redis Stream and begins orchestrating stages.
+    First call (state=created): transitions created -> planning, publishes
+    contract_approved event, persists the approved contract, starts Coordinator.
 
-    The contract in the request body may differ from the proposed contract --
-    the user can modify budget, acceptance_criteria, or stage_configs before
-    approving.
+    Subsequent calls (state already past created, not terminal): skips the
+    transition and event publish (Coordinator resumes from stream PEL/cursor),
+    updates the persisted contract, and re-launches the Coordinator task if it
+    is not already running. Returns 409 if the run is in a terminal state.
     """
     from ml_engine.agent.loop import apublish_event
-    from ml_engine.agent.state_machine import StateMachine
+    from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
 
     r = _get_async_redis()
     sm = StateMachine(run_id=body.run_id, redis_async=r)
 
     try:
-        await sm.transition("planning")
-    except (KeyError, ValueError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        current = await sm.current_state()
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Run {body.run_id} not found")
 
-    await apublish_event(
-        r,
-        body.run_id,
-        {
-            "type": "contract_approved",
-            "run_id": body.run_id,
-            "contract": body.contract,
-        },
-    )
+    if current in TERMINAL_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Run {body.run_id!r} is in terminal state {current!r} and cannot be re-approved",
+        )
 
-    # Start the Coordinator task (idempotent -- no-op if already running)
+    # Persist the approved contract BEFORE any state transition so that orphan
+    # recovery can always reconstruct the Coordinator — even if the process dies
+    # between the transition write and the end of this handler.
+    await sm.store_approved_contract(body.contract)
+
+    if current == "created":
+        # First approval: transition, publish the trigger event, record contract.
+        try:
+            await sm.transition("planning")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        await apublish_event(
+            r,
+            body.run_id,
+            {
+                "type": "contract_approved",
+                "run_id": body.run_id,
+                "contract": body.contract,
+            },
+        )
+    else:
+        # Idempotent re-approve: Coordinator resumes from stream PEL/cursor —
+        # no need to re-publish contract_approved (already ACKed or in PEL).
+        logger.info("Idempotent re-approve for run %s (current state: %s)", body.run_id, current)
+
+    # Start or re-launch the Coordinator task (no-op if already running).
     _start_coordinator(body.run_id, body.contract)
 
     logger.info("Plan approved and Coordinator started: run_id=%s", body.run_id)
     return JSONResponse(
         status_code=200,
-        content=success_response(data={"run_id": body.run_id, "status": "planning"}),
+        content=success_response(
+            data={"run_id": body.run_id, "status": current if current != "created" else "planning"}
+        ),
     )
 
 

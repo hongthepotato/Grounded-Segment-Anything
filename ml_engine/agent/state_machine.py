@@ -181,7 +181,12 @@ class StateMachine:
         logger.info("Run %s initialized (state=created)", self.run_id)
 
     async def get_proposed_contract(self) -> Optional[Dict[str, Any]]:
-        """Return the contract proposed at plan time, or None if not stored."""
+        """Return the contract proposed at plan time, or None if not stored.
+
+        Note: ``{}`` (empty dict) is stored by initialize() when no contract is
+        provided, and is treated as "not set" (returns None). Real contracts are
+        always non-empty PipelineContract dicts.
+        """
         raw = await self._r.hget(self._key, "proposed_contract")
         if not raw:
             return None
@@ -189,6 +194,7 @@ class StateMachine:
             result = json.loads(_decode(raw))
             return result if result else None
         except json.JSONDecodeError:
+            logger.warning("Run %s: malformed JSON in proposed_contract field", self.run_id)
             return None
 
     async def load(self) -> Dict[str, Any]:
@@ -235,6 +241,54 @@ class StateMachine:
         """Return the list of stage summaries, or empty list if none."""
         raw = await self._r.hget(self._key, "stage_summaries") or b"[]"
         return json.loads(_decode(raw))
+
+    async def store_approved_contract(self, contract: Dict[str, Any]) -> None:
+        """Persist the approved contract so auto-resume can reconstruct the Coordinator after restart."""
+        await self._r.hset(self._key, "approved_contract", json.dumps(contract))
+
+    async def get_approved_contract(self) -> Optional[Dict[str, Any]]:
+        """Return the approved contract stored at approve time, or None if not yet approved."""
+        raw = await self._r.hget(self._key, "approved_contract")
+        if not raw:
+            return None
+        try:
+            result = json.loads(_decode(raw))
+            return result if result is not None else None
+        except json.JSONDecodeError:
+            logger.warning("Run %s: malformed JSON in approved_contract field", self.run_id)
+            return None
+
+    @classmethod
+    async def scan_non_terminal_run_ids(cls, redis_async: _aredis.Redis) -> List[str]:
+        """
+        Return run_ids for all runs not in a terminal state.
+
+        Scans Redis with the run state key pattern. O(N) over active run count;
+        safe for expected scale (<100 active runs at once).
+        """
+        r: Any = redis_async
+        prefix = cls._PREFIX  # "run:"
+        suffix = ":state"
+        run_ids: List[str] = []
+        cursor = 0
+        while True:
+            cursor, keys = await r.scan(cursor, match=f"{prefix}*{suffix}", count=100)
+            for key in keys:
+                key_str = _decode(key)
+                run_ids.append(key_str[len(prefix) : -len(suffix)])
+            if cursor == 0:
+                break
+
+        non_terminal: List[str] = []
+        for run_id in run_ids:
+            instance = cls(run_id=run_id, redis_async=redis_async)
+            try:
+                state = await instance.current_state()
+            except KeyError:
+                continue
+            if state not in TERMINAL_STATES:
+                non_terminal.append(run_id)
+        return non_terminal
 
     @classmethod
     async def exists(cls, redis_async: _aredis.Redis, run_id: str) -> bool:

@@ -25,6 +25,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api.routes.agent import resume_orphaned_coordinators
 from api.routes.agent import router as agent_router
 from api.routes.agent import ws_router as agent_ws_router
 from api.routes.autolabel import router as autolabel_router
@@ -35,6 +36,7 @@ from api.routes.jobs import router as jobs_router
 from api.routes.websocket import router as websocket_router
 from api.schemas import error_response, success_response
 from core.logging_config import configure_logging, get_logger
+from ml_engine.agent.redis_clients import close_async_redis_client
 from ml_engine.jobs import close_async_job_managers, get_async_job_manager
 
 # Configure logging at module load time (before FastAPI starts)
@@ -67,6 +69,10 @@ async def lifespan(app: FastAPI):
         if removed > 0:
             logger.info("Removed %d stale workers", removed)
 
+        # Re-launch Coordinator tasks for any runs that were in-progress when
+        # the previous API process died. Safe to call even on a fresh Redis.
+        await resume_orphaned_coordinators()
+
     except Exception as e:
         logger.error("Failed to connect to Redis: %s", e)
         raise
@@ -76,6 +82,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Training Job Manager API...")
     await close_async_job_managers()
+    await close_async_redis_client()
     logger.info("Shutdown complete")
 
 

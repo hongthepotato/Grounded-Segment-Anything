@@ -8,49 +8,6 @@ Deferred work items with enough context to pick up later. Keep entries self-cont
 
 Three related design gaps surfaced during the first `/plan → /approve` integration attempt on branch `agentic`. All three contribute to the same symptom class: a run gets stuck in a non-terminal state with no way for the system to recover on its own. See the RCA for run `5327209d-af51-47bc-8179-37f22786383f` (2026-04-21) for a concrete trace.
 
-### 1. Auto-resume orphaned Coordinator tasks on FastAPI startup
-
-**What:** On FastAPI app startup, scan Redis for runs in a non-terminal state and re-launch their Coordinator `asyncio.Task`. Today, Coordinators are only launched from `POST /api/agent/approve` ([api/routes/agent.py:68-103](api/routes/agent.py#L68-L103)).
-
-**Why:** The Coordinator lives as an in-memory asyncio task in the FastAPI process. Any container restart kills the task silently. Redis state and the event stream are persistent, so the run's data is intact, but nothing is consuming the stream — the state is orphaned. The user has no way to recover short of manual Redis edits.
-
-**Pros:**
-- Restarts (deploys, crashes, `docker compose up` during dev) stop being data-loss events.
-- Prerequisite for any multi-instance deployment.
-- Removes a class of "stuck at `planning`" bug reports.
-
-**Cons:**
-- Need to handle leader election or single-writer guarantee if >1 FastAPI replica runs. For current single-instance dev, trivial; for prod, nontrivial.
-- Startup scan adds latency and Redis load proportional to active-run count. Probably fine (expect <100 active runs).
-- Resumed Coordinator must tolerate re-reading events it already processed — need to verify `stream_consumer` uses a durable `last_id` per run, not `"0-0"` from scratch.
-
-**Context:** `_start_coordinator` at [api/routes/agent.py:68](api/routes/agent.py#L68) is the launch point today. Look at `StateMachine` + `TERMINAL_STATES` in [ml_engine/agent/state_machine.py](ml_engine/agent/state_machine.py#L59) for the "non-terminal" set. FastAPI startup hook goes in the app factory (search for `app = FastAPI(` in `api/`). Keep it idempotent — `_start_coordinator` already no-ops if a task exists.
-
-**Depends on / blocked by:** Verifying `stream_consumer` resume semantics first. If consumer starts from `"0-0"` on every Coordinator launch, re-running past events is a correctness risk and must be fixed before auto-resume ships.
-
----
-
-### 3. Make `POST /api/agent/approve` idempotent
-
-**What:** When `/approve` is called on a run whose state is already past `created` (i.e. already approved), return a non-error response that either re-spawns the Coordinator task (if absent) or returns 409 with a clear "already approved" message. Don't return the current 400 with an internal state-transition error.
-
-**Why:** The current behavior leaks internals: the client gets `"Invalid transition 'planning' -> 'planning'. Allowed: ['pending_contract_approval', 'failed_unrecoverable']"`. That's a state-machine implementation detail with no actionable information for a caller who just wants to retry after a network hiccup or a deploy. Combined with #1 (no auto-resume), this is the worst case: the run IS stuck, and the retry path is blocked too.
-
-**Pros:**
-- Retries after transient failures (timeouts, container restart, network blips) become safe.
-- Pairs well with #1 — a UI that polls `/status` can safely re-issue `/approve` to resume.
-- Consistent with REST idempotency expectations for non-POST-like POSTs.
-
-**Cons:**
-- Need to decide idempotent semantics precisely: (a) silently re-spawn the task if absent, or (b) 409 with `{run_id, state, note}`. Behaviors are different — (a) is friendlier, (b) is stricter. Recommend (a) for dev ergonomics.
-- Slightly complicates the endpoint — need to branch on current state before transitioning.
-
-**Context:** `/approve` at [api/routes/agent.py:178-215](api/routes/agent.py#L178-L215). Current flow: unconditional `sm.transition("planning")` then `_start_coordinator`. Replace with: read current state first; if `created`, transition; if `planning` or beyond and not terminal, skip transition and still call `_start_coordinator` (which is already idempotent); if terminal, return 409.
-
-**Depends on / blocked by:** Best done together with #1, because re-spawning the Coordinator only makes sense once auto-resume infrastructure exists to verify the Task wasn't already running. Ship #2 first for observability, then #1 + #3 together.
-
----
-
 ## CI / Testing — follow-ups from ci-and-tests PR
 
 Six items deferred during the `/plan-eng-review` of the CI/test infrastructure PR. Filed 2026-04-23. All depend on the `ci-and-tests` branch merging first.
@@ -464,6 +421,65 @@ re-launched Coordinator can actually pick up the run.
 
 ---
 
+### 21. `pending_contract_approval` — no endpoint to advance out of it (blocker)
+
+**What:** `TRANSITIONS["pending_contract_approval"]` allows `["auto_labeling", "teacher_training", "cancelled", "failed_unrecoverable"]`, but no API endpoint drives any of those transitions. `/gate/{run_id}/{action}` only handles `pending_approval`. `/approve` only handles `created → planning`. A run that reaches `pending_contract_approval` — whether first time or after a restart — is permanently stuck.
+
+**Why:** `pending_contract_approval` is listed in `HUMAN_GATE_STAGES` in `coordinator.py`, so the Coordinator ignores all stream events in this state. The design assumes an external actor (human or endpoint) drives the transition, but that actor doesn't exist yet.
+
+**Decision needed:** Two options with different UX implications:
+
+- **Option A — Human-gated pause.** Keep `pending_contract_approval` as a deliberate review point. Add `POST /api/agent/contract/{run_id}/accept` (→ `auto_labeling` or `teacher_training`) and `POST /api/agent/contract/{run_id}/reject` (→ `cancelled`). The frontend shows the LLM-refined contract for approval before the pipeline starts. This mirrors the `pending_approval` gate at the end.
+- **Option B — Auto-advance.** Remove `pending_contract_approval` from `HUMAN_GATE_STAGES`. The Coordinator calls `advance_gate` twice in the `contract_approved` handler: first `planning → pending_contract_approval`, then immediately `pending_contract_approval → auto_labeling`. Effectively a no-op pause state; keep the state in the machine for observability but don't block on human input. Simpler, but loses the contract review UX.
+
+**Context:** State machine at [ml_engine/agent/state_machine.py:67-91](ml_engine/agent/state_machine.py#L67-L91). `HUMAN_GATE_STAGES` at [ml_engine/agent/coordinator.py:51](ml_engine/agent/coordinator.py#L51). Gate endpoint at [api/routes/agent.py:362-414](api/routes/agent.py#L362-L414).
+
+**Depends on / blocked by:** None. Self-contained. Should be resolved before any end-to-end integration testing since the happy path goes through this state.
+
+---
+
+### 22. `failed_retrying` — no retry dispatch (stuck state)
+
+**What:** When a job fails and `retry_count < max_retries`, `on_event` transitions the SM to `failed_retrying` and returns ([coordinator.py:462-467](ml_engine/agent/coordinator.py#L462-L467)). Nothing dispatches a retry job. No event is published to trigger a re-dispatch. On restart, the Coordinator resumes and waits — but there is no pending event in the stream. The run is stuck in `failed_retrying` forever.
+
+**Why:** The transition to `failed_retrying` was added to allow retries, but the actual retry dispatch logic was never implemented.
+
+**Fix:** After `sm.transition("failed_retrying")`, publish a `retry_requested` event to the stream (`type`, `stage`, `run_id`, `retry_count`). The Coordinator's `on_event` handler picks it up on the next loop iteration, reads the last dispatched stage from `LoopState` or the SM metadata, and re-dispatches via `dispatch_stage`. Alternatively, the Coordinator can call `dispatch_stage` directly in the `job_failed` handler before returning (simpler, but skips the event log).
+
+**Context:** `on_event` job_failed branch at [ml_engine/agent/coordinator.py:461-468](ml_engine/agent/coordinator.py#L461-L468). `TRANSITIONS["failed_retrying"]` at [ml_engine/agent/state_machine.py:84-89](ml_engine/agent/state_machine.py#L84-L89).
+
+**Depends on / blocked by:** TODO #20 (crash classification) — the distinction between `failed_retrying` and `failed_unrecoverable` only matters once retry dispatch actually works.
+
+---
+
+### 23. Worker tasks never self-terminate after run reaches terminal state
+
+**What:** `StreamConsumer.should_stop()` always returns `False` ([stream_consumer.py:320-322](ml_engine/agent/stream_consumer.py#L320-L322)). After a run reaches `done`, `escalated`, or `cancelled` (e.g., via `/gate/{run_id}/approve`), the Coordinator, ExecutorWorker, and EvaluatorWorker tasks keep polling the stream indefinitely via `asyncio.gather`. `_on_done` (in `_start_coordinator`) fires only when the task completes — which never happens. The tasks are leaked per completed run.
+
+**Why:** `should_stop()` was left as a no-op stub. The state machine check inside `on_event` silently drops events when terminal, but doesn't cause the loop to exit.
+
+**Fix:** Override `should_stop()` in each worker (or in `AgentLoop` / the base class) to call `sm.current_state()` and return `True` when the state is in `TERMINAL_STATES`. The `should_stop()` call is inside the main `while True` loop in `StreamConsumer.run()`, so returning `True` breaks out cleanly.
+
+**Context:** `should_stop()` stub at [ml_engine/agent/stream_consumer.py:320-322](ml_engine/agent/stream_consumer.py#L320-L322). Main loop check at [ml_engine/agent/stream_consumer.py:148-154](ml_engine/agent/stream_consumer.py#L148-L154). `asyncio.gather` in `Coordinator.run()` at [ml_engine/agent/coordinator.py:616-620](ml_engine/agent/coordinator.py#L616-L620).
+
+**Depends on / blocked by:** None. Low urgency — impact is a handful of idle polling tasks per completed run, not a correctness issue.
+
+---
+
+### 24. Multi-instance Coordinator collision — no distributed lock on resume
+
+**What:** `resume_orphaned_coordinators()` has no distributed lock. If two FastAPI replicas start simultaneously (rolling deploy, blue/green, crash-loop restart), both scan Redis and both call `_start_coordinator` for the same non-terminal runs. Two Coordinator tasks share the same consumer group name (`"coordinator"`) with the same `consumer_name="coordinator-0"`. Redis delivers each message to one consumer in the group, but two concurrent consumers with the same name have undefined delivery behavior — messages can be double-processed or starved.
+
+**Why:** `_start_coordinator` is idempotent within a single process (`_coordinator_tasks` dict prevents duplicate tasks in-process), but the guard is in-memory and not shared across replicas.
+
+**Fix:** Before launching a Coordinator, acquire a Redis lock (`SET run:{run_id}:coordinator_lock NX PX 30000`). Release on Coordinator exit (or let it TTL if the process dies). Only one replica holds the lock at a time. The other replica's `_start_coordinator` call silently no-ops if the lock is taken.
+
+**Context:** `resume_orphaned_coordinators` at [api/routes/agent.py:142-171](api/routes/agent.py#L142-L171). `_start_coordinator` idempotency guard at [api/routes/agent.py:77-79](api/routes/agent.py#L77-L79).
+
+**Depends on / blocked by:** Only relevant at >1 replica. Current single-instance dev is unaffected. Defer until multi-instance deployment is planned.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
@@ -471,7 +487,9 @@ patterns established, lessons learned) lives in [docs/decisions/](docs/decisions
 Item numbers are stable so commit messages and PR descriptions referencing
 "item N" / "TODO #N" still resolve.
 
+- **#1** Auto-resume orphaned Coordinator tasks on FastAPI startup ✅ → [docs/decisions/01-03-coordinator-durability.md](docs/decisions/01-03-coordinator-durability.md) — `resume_orphaned_coordinators()` scans Redis on startup, skips pre-approve and terminal runs, relaunches the rest; `store_approved_contract` / `get_approved_contract` persist the contract in the Redis HASH so startup recovery can reconstruct the Coordinator; ~20 unit tests. Shipped 2026-04-27.
 - **#2** Coordinator crash → `failed_unrecoverable` ✅ → [docs/decisions/02-coordinator-crash-failed-unrecoverable.md](docs/decisions/02-coordinator-crash-failed-unrecoverable.md) — `_on_done` now schedules state transition on task exception; TRANSITIONS expanded to allow `failed_unrecoverable` from all 5 previously-missing non-terminal states; 5 unit tests. Shipped 2026-04-27.
+- **#3** Make `POST /api/agent/approve` idempotent ✅ → [docs/decisions/01-03-coordinator-durability.md](docs/decisions/01-03-coordinator-durability.md) — reads current state first; on first call transitions `created → planning` and publishes `contract_approved`; on re-approve skips both (Coordinator resumes from stream PEL); always persists approved contract and calls `_start_coordinator`; 409 on terminal state. Shipped 2026-04-27.
 - **#4** Pre-commit hooks ✅ → [docs/decisions/04-pre-commit-hooks.md](docs/decisions/04-pre-commit-hooks.md) — local + CI lint parity via `uv run --no-sync`. Shipped 2026-04-24 (PR #26).
 - **#6** mypy baseline cleanup — drive 416 errors to zero, then flip the gate ✅ → [docs/decisions/06-mypy-baseline-cleanup.md](docs/decisions/06-mypy-baseline-cleanup.md) — 9 PRs total. Mypy now gates merges across `core ml_engine api augmentation` (119 source files, 0 errors). Surfaced 3 real production bugs + filed TODOs #16 and #17 for follow-ups. Establishes the boundary-`Any`, redis-overload, `MpEvent`, path-shadow, and lazy-init-`Any` patterns most subsequent type work follows. Shipped 2026-04-26.
 - **#9** Clean up ruff baseline (3593 findings at ci-and-tests merge time) ✅ → [docs/decisions/09-ruff-baseline-cleanup.md](docs/decisions/09-ruff-baseline-cleanup.md) — 5 PRs total (#29-32 per-directory cleanup + #33 gate flip). Ruff now gates merges. Set the per-directory-cleanup-then-flip-the-gate precedent that #6 later followed for mypy. Shipped 2026-04-25.

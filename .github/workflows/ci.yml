@@ -154,6 +154,21 @@ jobs:
   contract:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Integration tests boot the FastAPI app via TestClient. The lifespan
+    # startup calls cleanup_stale_workers + resume_orphaned_coordinators,
+    # both of which connect to Redis. Provide a real Redis so the lifespan
+    # succeeds — the test logic itself uses fakeredis for isolation, but the
+    # lifespan path cannot be faked via dependency_overrides.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v6
 
