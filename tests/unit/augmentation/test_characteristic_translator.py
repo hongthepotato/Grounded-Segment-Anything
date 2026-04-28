@@ -358,14 +358,6 @@ class TestKeepHigherPMissingProbabilityKey:
     Documenting + flagging as a gap so adding new rules without `p`
     fails loudly here, not deep in dedup."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="characteristic_translator.py:1109-1110 — _keep_higher_p "
-        "does `existing['p']` and `new['p']` directly. Missing `p` raises "
-        "KeyError instead of a clear message. Either guard with `.get('p', "
-        "0.0)` (treats missing as lowest priority) or raise a clearer "
-        "AugmentationRule validation error in __post_init__.",
-    )
     def test_missing_p_should_raise_clear_error(self, translator):
         existing = {"alpha": RangeParameter.scalar(0.5)}  # no "p"
         new = {"p": RangeParameter.scalar(0.5)}

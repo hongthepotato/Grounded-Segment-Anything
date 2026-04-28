@@ -251,52 +251,6 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### 19. `_keep_higher_p` crashes with KeyError when a transform's params lack `p`
-
-**What:** `CharacteristicTranslator._keep_higher_p` at
-`augmentation/characteristic_translator.py:1109-1110` does
-`existing["p"]` and `new["p"]` directly. If a future rule defines a
-transform without a `p` parameter, the dedup path crashes with a bare
-`KeyError: 'p'` — confusing if the rule author doesn't know dedup is
-the consumer.
-
-**Test surface:** 1 xfail in `tests/unit/augmentation/test_characteristic_translator.py`
-(`TestKeepHigherPMissingProbabilityKey::test_missing_p_should_raise_clear_error`)
-documents the gap. When the fix lands, flip the `@pytest.mark.xfail`
-decorator off.
-
-**Fix options (1-3 lines):**
-
-- **Lenient:** treat missing `p` as priority 0 — `existing.get("p", 0.0)`
-  / `new.get("p", 0.0)`. Existing rule (with `p`) wins by default.
-- **Strict:** add the `p` check to `AugmentationRule.__post_init__` so
-  malformed rules fail loudly at module-import time, not at translate-
-  call time. The test in
-  `TestCharacteristicSchemaIntegrity::test_every_transform_has_probability`
-  enforces this for the 5 spot-checked characteristics; promoting it
-  to `__post_init__` covers all 21 rules.
-- **Both:** validate at construction (strict) AND fall back to 0.0 in
-  the dedup path (defense-in-depth for future runtime-mutated rules).
-
-**Why deferred:** Cosmetic / defensive. No live rule violates the
-constraint today (the schema-integrity tests pass for all 5 spot-
-checked characteristics; spot-checking the remaining 16 is mechanical).
-Worth filing so a fix lands the next time someone touches the rules.
-
-**Pros:** Clearer error for the rule author; defense-in-depth.
-
-**Cons:** None of consequence. The lenient fallback could mask a
-typo'd `p` key (`prob` instead of `p`) by treating it as priority 0.
-
-**Test surface:** No new tests needed — `test_characteristic_translator.py`
-already has the xfail.
-
-**Context:** Surfaced 2026-04-27 during item #12.3 (P2 unit test
-roster — `test_characteristic_translator.py`).
-
-**Depends on / blocked by:** None.
-
----
 
 ### 20. Refine Coordinator crash classification (failed_retrying for transient errors)
 
@@ -391,3 +345,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#17** Restore `text_threshold` token-level filtering in `GroundingDINODetector` ✅ → [docs/decisions/17-text-threshold-filtering.md](docs/decisions/17-text-threshold-filtering.md) — `logits_to_class_scores` now zeros sub-threshold tokens before per-class mean; `detect()` passes the param through instead of discarding it; 32 adversarial tests (boundary, mutation, class-flip, dilution, NMS, monotone sweep). Shipped 2026-04-28.
 - **#16** Plumb `job_id` through training pipeline so artifact manifests carry real lineage ✅ → [docs/decisions/16-job-id-lineage-plumbing.md](docs/decisions/16-job-id-lineage-plumbing.md) — first follow-up surfaced by #6. Trial subprocesses use composed `f"{job_id}/{trial_id}"` form. Shipped 2026-04-27 (PR #41).
 - **#14** `tests/test_sam_lora.py` audit — 13 stale failures + CI scope gap ✅ — All 13 failures were stale tests. Moved to `tests/unit/ml_engine/test_sam_lora.py` so CI picks them up. Fixed 3 real bugs: `upscale_masks()` crashes on 5D multimask tensors (5D reshape path added); `SegmentationLoss` ignored `iou_predictions` (IoU quality MSE regression added); `box_prompts=[N=0]` now raises clear `ValueError` at call site. Pre-landing: added explicit `[B,N]` shape guard + clear error on `iou_predictions`, `iou_quality` key in default weights dict, rank guard on `upscale_masks`. 24 tests. Shipped 2026-04-28.
+- **#19** `_keep_higher_p` KeyError on missing `p` key ✅ — Added guard at `characteristic_translator.py:1109` that raises `ValueError` with a clear message when either params dict is missing `p`. xfail test promoted to passing regression guard (93 pass, 0 xfail). Shipped 2026-04-28.
