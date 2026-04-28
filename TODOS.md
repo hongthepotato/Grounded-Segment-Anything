@@ -8,49 +8,6 @@ Deferred work items with enough context to pick up later. Keep entries self-cont
 
 Three related design gaps surfaced during the first `/plan → /approve` integration attempt on branch `agentic`. All three contribute to the same symptom class: a run gets stuck in a non-terminal state with no way for the system to recover on its own. See the RCA for run `5327209d-af51-47bc-8179-37f22786383f` (2026-04-21) for a concrete trace.
 
-### 1. Auto-resume orphaned Coordinator tasks on FastAPI startup
-
-**What:** On FastAPI app startup, scan Redis for runs in a non-terminal state and re-launch their Coordinator `asyncio.Task`. Today, Coordinators are only launched from `POST /api/agent/approve` ([api/routes/agent.py:68-103](api/routes/agent.py#L68-L103)).
-
-**Why:** The Coordinator lives as an in-memory asyncio task in the FastAPI process. Any container restart kills the task silently. Redis state and the event stream are persistent, so the run's data is intact, but nothing is consuming the stream — the state is orphaned. The user has no way to recover short of manual Redis edits.
-
-**Pros:**
-- Restarts (deploys, crashes, `docker compose up` during dev) stop being data-loss events.
-- Prerequisite for any multi-instance deployment.
-- Removes a class of "stuck at `planning`" bug reports.
-
-**Cons:**
-- Need to handle leader election or single-writer guarantee if >1 FastAPI replica runs. For current single-instance dev, trivial; for prod, nontrivial.
-- Startup scan adds latency and Redis load proportional to active-run count. Probably fine (expect <100 active runs).
-- Resumed Coordinator must tolerate re-reading events it already processed — need to verify `stream_consumer` uses a durable `last_id` per run, not `"0-0"` from scratch.
-
-**Context:** `_start_coordinator` at [api/routes/agent.py:68](api/routes/agent.py#L68) is the launch point today. Look at `StateMachine` + `TERMINAL_STATES` in [ml_engine/agent/state_machine.py](ml_engine/agent/state_machine.py#L59) for the "non-terminal" set. FastAPI startup hook goes in the app factory (search for `app = FastAPI(` in `api/`). Keep it idempotent — `_start_coordinator` already no-ops if a task exists.
-
-**Depends on / blocked by:** Verifying `stream_consumer` resume semantics first. If consumer starts from `"0-0"` on every Coordinator launch, re-running past events is a correctness risk and must be fixed before auto-resume ships.
-
----
-
-### 3. Make `POST /api/agent/approve` idempotent
-
-**What:** When `/approve` is called on a run whose state is already past `created` (i.e. already approved), return a non-error response that either re-spawns the Coordinator task (if absent) or returns 409 with a clear "already approved" message. Don't return the current 400 with an internal state-transition error.
-
-**Why:** The current behavior leaks internals: the client gets `"Invalid transition 'planning' -> 'planning'. Allowed: ['pending_contract_approval', 'failed_unrecoverable']"`. That's a state-machine implementation detail with no actionable information for a caller who just wants to retry after a network hiccup or a deploy. Combined with #1 (no auto-resume), this is the worst case: the run IS stuck, and the retry path is blocked too.
-
-**Pros:**
-- Retries after transient failures (timeouts, container restart, network blips) become safe.
-- Pairs well with #1 — a UI that polls `/status` can safely re-issue `/approve` to resume.
-- Consistent with REST idempotency expectations for non-POST-like POSTs.
-
-**Cons:**
-- Need to decide idempotent semantics precisely: (a) silently re-spawn the task if absent, or (b) 409 with `{run_id, state, note}`. Behaviors are different — (a) is friendlier, (b) is stricter. Recommend (a) for dev ergonomics.
-- Slightly complicates the endpoint — need to branch on current state before transitioning.
-
-**Context:** `/approve` at [api/routes/agent.py:178-215](api/routes/agent.py#L178-L215). Current flow: unconditional `sm.transition("planning")` then `_start_coordinator`. Replace with: read current state first; if `created`, transition; if `planning` or beyond and not terminal, skip transition and still call `_start_coordinator` (which is already idempotent); if terminal, return 409.
-
-**Depends on / blocked by:** Best done together with #1, because re-spawning the Coordinator only makes sense once auto-resume infrastructure exists to verify the Task wasn't already running. Ship #2 first for observability, then #1 + #3 together.
-
----
-
 ## CI / Testing — follow-ups from ci-and-tests PR
 
 Six items deferred during the `/plan-eng-review` of the CI/test infrastructure PR. Filed 2026-04-23. All depend on the `ci-and-tests` branch merging first.
@@ -471,7 +428,9 @@ patterns established, lessons learned) lives in [docs/decisions/](docs/decisions
 Item numbers are stable so commit messages and PR descriptions referencing
 "item N" / "TODO #N" still resolve.
 
+- **#1** Auto-resume orphaned Coordinator tasks on FastAPI startup ✅ → [docs/decisions/01-03-coordinator-durability.md](docs/decisions/01-03-coordinator-durability.md) — `resume_orphaned_coordinators()` scans Redis on startup, skips pre-approve and terminal runs, relaunches the rest; `store_approved_contract` / `get_approved_contract` persist the contract in the Redis HASH so startup recovery can reconstruct the Coordinator; ~20 unit tests. Shipped 2026-04-27.
 - **#2** Coordinator crash → `failed_unrecoverable` ✅ → [docs/decisions/02-coordinator-crash-failed-unrecoverable.md](docs/decisions/02-coordinator-crash-failed-unrecoverable.md) — `_on_done` now schedules state transition on task exception; TRANSITIONS expanded to allow `failed_unrecoverable` from all 5 previously-missing non-terminal states; 5 unit tests. Shipped 2026-04-27.
+- **#3** Make `POST /api/agent/approve` idempotent ✅ → [docs/decisions/01-03-coordinator-durability.md](docs/decisions/01-03-coordinator-durability.md) — reads current state first; on first call transitions `created → planning` and publishes `contract_approved`; on re-approve skips both (Coordinator resumes from stream PEL); always persists approved contract and calls `_start_coordinator`; 409 on terminal state. Shipped 2026-04-27.
 - **#4** Pre-commit hooks ✅ → [docs/decisions/04-pre-commit-hooks.md](docs/decisions/04-pre-commit-hooks.md) — local + CI lint parity via `uv run --no-sync`. Shipped 2026-04-24 (PR #26).
 - **#6** mypy baseline cleanup — drive 416 errors to zero, then flip the gate ✅ → [docs/decisions/06-mypy-baseline-cleanup.md](docs/decisions/06-mypy-baseline-cleanup.md) — 9 PRs total. Mypy now gates merges across `core ml_engine api augmentation` (119 source files, 0 errors). Surfaced 3 real production bugs + filed TODOs #16 and #17 for follow-ups. Establishes the boundary-`Any`, redis-overload, `MpEvent`, path-shadow, and lazy-init-`Any` patterns most subsequent type work follows. Shipped 2026-04-26.
 - **#9** Clean up ruff baseline (3593 findings at ci-and-tests merge time) ✅ → [docs/decisions/09-ruff-baseline-cleanup.md](docs/decisions/09-ruff-baseline-cleanup.md) — 5 PRs total (#29-32 per-directory cleanup + #33 gate flip). Ruff now gates merges. Set the per-directory-cleanup-then-flip-the-gate precedent that #6 later followed for mypy. Shipped 2026-04-25.
