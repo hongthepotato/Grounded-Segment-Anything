@@ -358,9 +358,21 @@ class TestKeepHigherPMissingProbabilityKey:
     Documenting + flagging as a gap so adding new rules without `p`
     fails loudly here, not deep in dedup."""
 
-    def test_missing_p_should_raise_clear_error(self, translator):
+    def test_missing_p_existing_raises_clear_error(self, translator):
         existing = {"alpha": RangeParameter.scalar(0.5)}  # no "p"
         new = {"p": RangeParameter.scalar(0.5)}
+        with pytest.raises(ValueError, match="probability"):
+            translator._keep_higher_p(existing, new)
+
+    def test_missing_p_new_raises_clear_error(self, translator):
+        existing = {"p": RangeParameter.scalar(0.5)}
+        new = {"alpha": RangeParameter.scalar(0.5)}  # no "p"
+        with pytest.raises(ValueError, match="probability"):
+            translator._keep_higher_p(existing, new)
+
+    def test_missing_p_both_raises_clear_error(self, translator):
+        existing = {"alpha": RangeParameter.scalar(0.5)}  # no "p"
+        new = {"alpha": RangeParameter.scalar(0.3)}  # no "p"
         with pytest.raises(ValueError, match="probability"):
             translator._keep_higher_p(existing, new)
 

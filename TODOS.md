@@ -326,6 +326,38 @@ re-launched Coordinator can actually pick up the run.
 
 ---
 
+### 25. `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics
+
+**What:** `TestCharacteristicSchemaIntegrity::test_every_transform_has_probability` spot-checks `changes_shape`, `low_contrast`, `reflective_surface`, `partially_hidden`, `moves_or_vibrates`. Four characteristics are unchecked: `changes_size`, `semi_transparent`, `similar_to_background`, `multiple_objects`. A missing `p` key in any of their transforms would evade the test and crash `_keep_higher_p` at runtime.
+
+**Also:** `semi_transparent` low-intensity `RandomFog` uses key `alpha_corf` — likely a typo for `alpha_coef` (used consistently elsewhere at lines 314 and 330). The schema test doesn't catch data typos, only missing `p`.
+
+**Fix (2 parts):**
+- Extend the parametrize list in `test_every_transform_has_probability` to include all 9 characteristics.
+- Verify `semi_transparent`'s `alpha_corf` key is intentional or correct it.
+
+**Why deferred:** Same pattern as TODO #19. No live overlap collision today, but adding a new rule for any of the 4 unchecked characteristics without `p` would crash silently.
+
+**Context:** Surfaced 2026-04-28 during `/ship` adversarial review of PR #50.
+
+**Depends on / blocked by:** None. Mechanical extension.
+
+---
+
+### 26. Environment rules have no schema integrity tests
+
+**What:** `CHARACTERISTIC_RULES` has schema tests in `TestCharacteristicSchemaIntegrity`, but `ENVIRONMENT_RULES` (12 environment rules: `variable_lighting`, `fixed_camera`, etc.) has no equivalent. `_keep_higher_p` is called in both the characteristic dedup loop (line 1183) and the environment dedup loop (line 1207). An environment rule missing `p` in any transform would crash `_keep_higher_p` at runtime.
+
+**Fix:** Add `TestEnvironmentSchemaIntegrity` class mirroring `TestCharacteristicSchemaIntegrity` — parametrize over all environment rule keys, assert every transform at every intensity has a `p` key.
+
+**Why deferred:** No live environment rule violates the constraint today. Defensive coverage.
+
+**Context:** Surfaced 2026-04-28 during `/ship` adversarial review of PR #50.
+
+**Depends on / blocked by:** None. ~20 lines of test.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
