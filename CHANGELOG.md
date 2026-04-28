@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] — 2026-04-28
+
+### Fixed
+
+- **`upscale_masks` 5D crash** — `SAMHQLoRA.upscale_masks()` now handles 5D `[B,N,K,H,W]` multimask tensors by reshaping to 4D before interpolation and restoring shape after. Previously raised `RuntimeError: expected 4D input` when called with multimask output.
+- **`SegmentationLoss` ignored `iou_predictions`** — The IoU quality regression head was never trained. Added MSE loss between `iou_predictions [B,N]` and actual mask IoU computed under `torch.no_grad()`. Weight controlled by `loss_weights["iou_quality"]` (default `1.0`); callers who pass custom `loss_weights` without this key get weight `0.0` (no change to their training).
+- **`box_prompts` N=0 opaque crash** — `SAMHQLoRA.forward()` now raises `ValueError("at least 1 object")` immediately when `box_prompts.shape[1] == 0`, instead of propagating an opaque `RuntimeError` from `torch.cat` deep in the stack.
+- **`point_prompts` N=0 guard** — Symmetric guard added: raises `ValueError` when `point_prompts[0].shape[1] == 0`.
+- **`pred_masks` dimensionality guard in `SegmentationLoss`** — Now raises `ValueError` on entry if `pred_masks.ndim != 4`, preventing 5D multimask tensors from silently computing wrong loss via `view(b*n, -1)` treating `K*H*W` as the pixel dimension.
+- **`iou_predictions` shape guard in `SegmentationLoss`** — Raises `ValueError` with clear message if `iou_predictions` is not `[B, N]` (e.g. `[B, N, K]` multimask), instead of crashing silently or misaligning indices.
+
+### Tests
+
+- Moved `tests/test_sam_lora.py` → `tests/unit/ml_engine/test_sam_lora.py` to match project layout convention.
+- Expanded from 18 to 24 tests: added `test_5d_non_square_target`, `test_iou_predictions_multimask_shape_raises`, `test_iou_quality_weight_zero_excludes_quality_from_total`, `test_forward_empty_box_list` (narrowed to match new `ValueError`).
+
 ## [0.1.1] — 2026-04-28
 
 ### Fixed
