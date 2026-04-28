@@ -467,6 +467,14 @@ class TestUpscaleMasks:
         assert upscaled.min() >= masks.min() - 1e-4
         assert upscaled.max() <= masks.max() + 1e-4
 
+    def test_5d_non_square_target(self):
+        """[B, N, K, H, W] upscales correctly to non-square targets."""
+        from ml_engine.models.teacher.sam_lora import SAMHQLoRA
+
+        masks_5d = torch.randn(2, 3, 3, 256, 256)
+        upscaled = SAMHQLoRA.upscale_masks(masks_5d, (512, 768))
+        assert upscaled.shape == (2, 3, 3, 512, 768)
+
 
 class TestSegmentationLossEdgeCases:
     """Numerical correctness, gradient flow, and edge inputs."""
@@ -555,6 +563,48 @@ class TestSegmentationLossEdgeCases:
         for key in ("loss", "loss_focal", "loss_dice", "loss_iou"):
             assert d[key].item() >= 0, f"{key} was negative: {d[key].item()}"
             assert not torch.isnan(d[key]), f"{key} was NaN"
+
+    def test_iou_predictions_multimask_shape_raises(self):
+        """iou_predictions must be [B, N], not [B, N, K].
+
+        SegmentationLoss documents iou_predictions as [B, N]. Multimask outputs
+        (multimask_output=True) produce shape [B, N, K=3]. Passing that directly
+        to SegmentationLoss would corrupt the quality regression silently — guard
+        that the .view(b*n) call fails rather than succeeding with wrong indexing.
+        """
+        from ml_engine.training.losses import SegmentationLoss
+
+        B, N, K, H, W = 2, 3, 3, 256, 256
+        predictions = {
+            "pred_masks": torch.randn(B, N, H, W),
+            "iou_predictions": torch.rand(B, N, K),  # wrong shape: [B, N, K] not [B, N]
+        }
+        targets = {
+            "masks": torch.randint(0, 2, (B, N, H, W)).float(),
+            "valid_mask": torch.ones(B, N, dtype=torch.bool),
+        }
+        with pytest.raises((RuntimeError, ValueError)):
+            SegmentationLoss()(predictions, targets)
+
+    def test_iou_quality_weight_zero_excludes_quality_from_total(self):
+        """iou_quality weight=0 removes the quality term from the total loss."""
+        from ml_engine.training.losses import SegmentationLoss
+
+        torch.manual_seed(5)
+        B, N, H, W = 2, 2, 256, 256
+        preds = {
+            "pred_masks": torch.randn(B, N, H, W),
+            "iou_predictions": torch.rand(B, N),
+        }
+        targets = {
+            "masks": torch.randint(0, 2, (B, N, H, W)).float(),
+            "valid_mask": torch.ones(B, N, dtype=torch.bool),
+        }
+        base_weights = {"focal": 20.0, "dice": 1.0, "iou": 1.0}
+        d_w0 = SegmentationLoss(loss_weights={**base_weights, "iou_quality": 0.0})(preds, targets)
+        d_w1 = SegmentationLoss(loss_weights={**base_weights, "iou_quality": 1.0})(preds, targets)
+        diff = d_w1["loss"].item() - d_w0["loss"].item()
+        assert diff == pytest.approx(d_w1["loss_iou_quality"].item(), rel=1e-4)
 
 
 class TestGradientFlow:
