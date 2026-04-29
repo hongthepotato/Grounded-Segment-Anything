@@ -22,11 +22,26 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from api.schemas import success_response
+from core.constants import TRANSIENT_EXCEPTION_TYPES
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 ws_router = APIRouter(tags=["agent-ws"])
+
+
+def _is_transient_exception(exc: BaseException) -> bool:
+    """Return True if exc looks like a transient infrastructure failure."""
+    if isinstance(exc, TRANSIENT_EXCEPTION_TYPES):
+        return True
+    try:
+        import redis.exceptions as _rex
+
+        if isinstance(exc, (_rex.ConnectionError, _rex.TimeoutError)):
+            return True
+    except ImportError:
+        pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +81,66 @@ class GateActionRequest(BaseModel):
 _coordinator_tasks: Dict[str, asyncio.Task] = {}
 
 
+async def _handle_coordinator_crash(
+    run_id: str,
+    exc: BaseException,
+    r: Any,
+    contract: Any,
+    contract_dict: Dict[str, Any],
+    transient: bool,
+) -> None:
+    """
+    Async crash handler scheduled by the _on_done task callback.
+
+    Routes the failure to failed_retrying (and re-launches the Coordinator)
+    when the exception is transient, the current state allows retrying, and
+    the retry budget is not exhausted. Falls back to failed_unrecoverable for
+    permanent errors, non-retryable states, and budget-exhausted runs.
+    """
+    from ml_engine.agent.state_machine import TRANSITIONS, StateMachine
+
+    sm = StateMachine(run_id=run_id, redis_async=r)
+    try:
+        current = await sm.current_state()
+    except KeyError:
+        logger.error("Coordinator crash handler: run %s state not found", run_id)
+        return
+
+    can_retry = (
+        transient
+        and "failed_retrying" in TRANSITIONS.get(current, [])
+        and await sm.retry_count() < contract.budget.max_retries
+    )
+
+    if can_retry:
+        try:
+            await sm.transition("failed_retrying", error_message=str(exc))
+            logger.info("Run %s: transient crash, will retry (%s)", run_id, exc)
+        except Exception as mark_err:
+            logger.error("Failed to mark run %s as failed_retrying: %s", run_id, mark_err)
+            # Fall through to failed_unrecoverable — leaving the run in a non-terminal
+            # state with no coordinator task would stall it indefinitely.
+            try:
+                await sm.transition("failed_unrecoverable", error_message=str(exc))
+            except Exception as final_err:
+                logger.error(
+                    "Failed to mark run %s as failed_unrecoverable after retry failure: %s",
+                    run_id,
+                    final_err,
+                )
+            return
+        _start_coordinator(run_id, contract_dict)
+    else:
+        try:
+            await sm.transition("failed_unrecoverable", error_message=str(exc))
+        except Exception as mark_err:
+            logger.error(
+                "Failed to mark run %s as failed_unrecoverable: %s",
+                run_id,
+                mark_err,
+            )
+
+
 def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
     """
     Start Coordinator.run() as an asyncio background task.
@@ -82,7 +157,6 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
     from ml_engine.agent.contracts import PipelineContract
     from ml_engine.agent.coordinator import Coordinator
     from ml_engine.agent.llm_client import LLMClient
-    from ml_engine.agent.state_machine import StateMachine
 
     r = _get_async_redis()
     contract = PipelineContract.from_dict(contract_dict)
@@ -115,20 +189,12 @@ def _start_coordinator(run_id: str, contract_dict: Dict[str, Any]) -> None:
         exc = t.exception()
         if exc:
             logger.error("Coordinator task for run %s failed: %s", run_id, exc)
-
-            async def _mark_failed() -> None:
-                try:
-                    await StateMachine(run_id=run_id, redis_async=r).transition(
-                        "failed_unrecoverable", error_message=str(exc)
-                    )
-                except Exception as mark_err:
-                    logger.error(
-                        "Failed to mark run %s as failed_unrecoverable: %s",
-                        run_id,
-                        mark_err,
-                    )
-
-            asyncio.create_task(_mark_failed(), name=f"coordinator-crash-{run_id[:8]}")
+            asyncio.create_task(
+                _handle_coordinator_crash(
+                    run_id, exc, r, contract, contract_dict, _is_transient_exception(exc)
+                ),
+                name=f"coordinator-crash-{run_id[:8]}",
+            )
         else:
             logger.info("Coordinator task for run %s completed", run_id)
 
