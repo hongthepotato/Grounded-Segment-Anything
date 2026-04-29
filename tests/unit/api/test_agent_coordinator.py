@@ -569,3 +569,242 @@ class TestScanNonTerminalRunIds:
 
         result = await StateMachine.scan_non_terminal_run_ids(fake_redis)
         assert run_id not in result
+
+
+# ---------------------------------------------------------------------------
+# Human gate endpoint (#52)
+# ---------------------------------------------------------------------------
+
+
+def _gate_patches(fake_redis):
+    """Minimal patches for human_gate: Redis + suppress apublish_event side-effects."""
+    return (
+        patch("api.routes.agent._get_async_redis", return_value=fake_redis),
+        patch("ml_engine.agent.loop.apublish_event", return_value=None),
+    )
+
+
+class TestHumanGate:
+    # --- input validation ---
+
+    @pytest.mark.asyncio
+    async def test_invalid_action_returns_400(self, fake_redis):
+        run_id = "gate-bad-action-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await fake_redis.hset(sm._key, "state", "pending_approval")
+
+        with _gate_patches(fake_redis)[0], _gate_patches(fake_redis)[1]:
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                resp = client.post(f"/api/agent/gate/{run_id}/kick", json={"reason": ""})
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_unknown_run_returns_404(self, fake_redis):
+        with _gate_patches(fake_redis)[0], _gate_patches(fake_redis)[1]:
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                resp = client.post("/api/agent/gate/no-such-run/approve", json={"reason": ""})
+        assert resp.status_code == 404
+
+    @pytest.mark.parametrize("non_gate_state", ["planning", "auto_labeling", "teacher_training", "done"])
+    @pytest.mark.asyncio
+    async def test_non_gate_state_returns_409(self, fake_redis, non_gate_state):
+        run_id = f"gate-wrong-state-{non_gate_state}"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await fake_redis.hset(sm._key, "state", non_gate_state)
+
+        with _gate_patches(fake_redis)[0], _gate_patches(fake_redis)[1]:
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                resp = client.post(f"/api/agent/gate/{run_id}/approve", json={"reason": ""})
+        assert resp.status_code == 409
+
+    # --- pending_approval gate ---
+
+    @pytest.mark.asyncio
+    async def test_pending_approval_approve_transitions_to_done(self, fake_redis):
+        run_id = "gate-pa-approve-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await fake_redis.hset(sm._key, "state", "pending_approval")
+
+        with _gate_patches(fake_redis)[0], _gate_patches(fake_redis)[1]:
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                resp = client.post(f"/api/agent/gate/{run_id}/approve", json={"reason": "LGTM"})
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["new_state"] == "done"
+        assert await sm.current_state() == "done"
+
+    @pytest.mark.asyncio
+    async def test_pending_approval_reject_transitions_to_cancelled(self, fake_redis):
+        run_id = "gate-pa-reject-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await fake_redis.hset(sm._key, "state", "pending_approval")
+
+        with _gate_patches(fake_redis)[0], _gate_patches(fake_redis)[1]:
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                resp = client.post(f"/api/agent/gate/{run_id}/reject", json={"reason": "results look off"})
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["new_state"] == "cancelled"
+        assert await sm.current_state() == "cancelled"
+
+    # --- pending_contract_approval gate ---
+
+    @pytest.mark.asyncio
+    async def test_pending_contract_approval_approve_transitions_to_auto_labeling(self, fake_redis):
+        run_id = "gate-pca-approve-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await fake_redis.hset(sm._key, "state", "pending_contract_approval")
+
+        with _gate_patches(fake_redis)[0], _gate_patches(fake_redis)[1]:
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                resp = client.post(
+                    f"/api/agent/gate/{run_id}/approve", json={"reason": "contract looks good"}
+                )
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["new_state"] == "auto_labeling"
+        assert await sm.current_state() == "auto_labeling"
+
+    @pytest.mark.asyncio
+    async def test_pending_contract_approval_reject_transitions_to_cancelled(self, fake_redis):
+        run_id = "gate-pca-reject-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await fake_redis.hset(sm._key, "state", "pending_contract_approval")
+
+        with _gate_patches(fake_redis)[0], _gate_patches(fake_redis)[1]:
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                resp = client.post(f"/api/agent/gate/{run_id}/reject", json={"reason": "budget too high"})
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["new_state"] == "cancelled"
+        assert await sm.current_state() == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_contract_approval_publishes_contract_approved_event(self, fake_redis):
+        """Approve on pending_contract_approval must publish 'contract_approved' (not 'contract_accepted')."""
+        run_id = "gate-pca-event-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await fake_redis.hset(sm._key, "state", "pending_contract_approval")
+
+        published: list = []
+
+        async def _capture_event(r, rid, event):
+            published.append(event)
+
+        with (
+            _gate_patches(fake_redis)[0],
+            patch("ml_engine.agent.loop.apublish_event", side_effect=_capture_event),
+        ):
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                client.post(f"/api/agent/gate/{run_id}/approve", json={"reason": ""})
+
+        assert len(published) == 1
+        assert published[0]["type"] == "contract_approved"
+
+    @pytest.mark.asyncio
+    async def test_contract_rejection_publishes_contract_rejected_event(self, fake_redis):
+        """Reject on pending_contract_approval must publish 'contract_rejected'."""
+        run_id = "gate-pca-reject-event-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await fake_redis.hset(sm._key, "state", "pending_contract_approval")
+
+        published: list = []
+
+        async def _capture_event(r, rid, event):
+            published.append(event)
+
+        with (
+            _gate_patches(fake_redis)[0],
+            patch("ml_engine.agent.loop.apublish_event", side_effect=_capture_event),
+        ):
+            from fastapi.testclient import TestClient
+
+            from api.app import app
+
+            with TestClient(app) as client:
+                client.post(f"/api/agent/gate/{run_id}/reject", json={"reason": "too expensive"})
+
+        assert len(published) == 1
+        assert published[0]["type"] == "contract_rejected"
+
+    @pytest.mark.asyncio
+    async def test_invalid_transition_returns_400(self, fake_redis):
+        """If sm.transition() raises ValueError, gate must return 400 (not 500).
+
+        Uses fakeredis with a direct HSET to force an invalid state (not in TRANSITIONS)
+        so that the state machine's own transition() raises ValueError without any mocking.
+        """
+        run_id = "gate-bad-transition-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        # Force state machine into 'planning' (valid gate check via 409 would catch it)
+        # Instead, set current state to 'pending_approval' and transition target to
+        # a state that IS in pending_approval's allowed list — but use a non-existent
+        # action to get past the gate and hit the transition guard.
+        #
+        # The simplest path: set the state directly to something the SM won't allow
+        # transitioning from via 'pending_approval → done'. Actually that IS valid.
+        # So the only way to trigger ValueError is to have pending_approval try to
+        # transition to a state NOT in its allowed list. We do that by patching
+        # the TRANSITIONS dict for this one test.
+        await fake_redis.hset(sm._key, "state", "pending_approval")
+
+        from ml_engine.agent.state_machine import TRANSITIONS
+
+        # Temporarily remove 'done' from pending_approval's transitions so any
+        # approve attempt fails with ValueError.
+        original_transitions = list(TRANSITIONS["pending_approval"])
+        TRANSITIONS["pending_approval"] = [t for t in original_transitions if t != "done"]
+
+        try:
+            with _gate_patches(fake_redis)[0], _gate_patches(fake_redis)[1]:
+                from fastapi.testclient import TestClient
+
+                from api.app import app
+
+                with TestClient(app) as client:
+                    resp = client.post(f"/api/agent/gate/{run_id}/approve", json={"reason": ""})
+        finally:
+            TRANSITIONS["pending_approval"] = original_transitions
+
+        assert resp.status_code == 400
