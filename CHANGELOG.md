@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] — 2026-04-29
+
+### Fixed
+
+- **Coordinator crash classification** — Coordinator task crashes are now classified as transient or permanent before deciding whether to retry. Transient infrastructure failures (`ConnectionError`, `TimeoutError`, `InterruptedError`, `redis.exceptions.ConnectionError/TimeoutError`) in states that allow it (`auto_labeling`, `teacher_training`, `student_distillation`) are routed to `failed_retrying` and the Coordinator is re-launched automatically. Permanent errors (logic bugs, bad input, etc.) and transient errors in non-retryable states go straight to `failed_unrecoverable`. Respects `budget.max_retries` (default 2).
+- **`TRANSIENT_EXCEPTION_TYPES` scope narrowed** — The constant previously included bare `OSError`, which would have misclassified `FileNotFoundError`, `PermissionError`, and `ChildProcessError` as retryable infrastructure failures. Now uses specific `OSError` subclasses only: `ConnectionError`, `TimeoutError`, `InterruptedError`.
+- **Coordinator stuck on `failed_retrying` transition failure** — If `sm.transition("failed_retrying")` itself fails (e.g., concurrent state change), the crash handler now falls through to `failed_unrecoverable` rather than returning silently and leaving the run stranded in a non-terminal state with no active Coordinator task.
+
+### Added
+
+- `_handle_coordinator_crash()` — module-level async function in `api/routes/agent.py` that encapsulates the crash-routing logic. Replaces the nested `_mark_failed()` inner function, eliminating a three-layer nesting and making the retry logic independently testable.
+- `_is_transient_exception()` — module-level helper that checks an exception against `core.constants.TRANSIENT_EXCEPTION_TYPES` and, via lazy import, `redis.exceptions.ConnectionError` / `TimeoutError`.
+- `TRANSIENT_EXCEPTION_TYPES` tuple in `core/constants.py` — single source of truth for which exception families count as transient infrastructure failures, importable by workers and the Coordinator in addition to the API layer.
+
+### Tests
+
+- `TestCrashClassification` added to `tests/unit/api/test_agent_coordinator.py` (13 tests): transient-in-retryable-state → `failed_retrying` + coordinator re-launch (3 states covered); transient-in-non-retryable-state → `failed_unrecoverable`; permanent error → `failed_unrecoverable`; retries-exhausted → `failed_unrecoverable`; error-message persisted on `failed_retrying`; `retry_count` incremented; `_is_transient_exception` for builtin types (Connection, Timeout, Interrupted, BrokenPipe, ConnectionReset); non-transient types including `OSError`, `FileNotFoundError`, `PermissionError`; second-crash-from-`failed_retrying` terminates at `failed_unrecoverable`; missing Redis key returns silently.
+
 ## [0.1.4] — 2026-04-28
 
 ### Fixed

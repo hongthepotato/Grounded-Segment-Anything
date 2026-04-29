@@ -1,10 +1,11 @@
 """
 Unit tests for Coordinator lifecycle in api/routes/agent.py.
 
-Covers three behaviours:
+Covers four behaviours:
   1. _on_done crash → failed_unrecoverable (TODO #2)
   2. approve_plan idempotency (TODO #3)
   3. resume_orphaned_coordinators startup scan (TODO #1)
+  4. Crash classification: transient → failed_retrying, permanent → failed_unrecoverable
 """
 
 from __future__ import annotations
@@ -808,3 +809,272 @@ class TestHumanGate:
             TRANSITIONS["pending_approval"] = original_transitions
 
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Crash classification: transient vs permanent (#4)
+# ---------------------------------------------------------------------------
+
+
+class TestCrashClassification:
+    """Tests for _handle_coordinator_crash: transient vs permanent routing.
+
+    Calls _handle_coordinator_crash directly to avoid asyncio task scheduling
+    complexity and focus on the routing logic under each condition.
+    """
+
+    def _make_contract(self, max_retries: int = 2) -> MagicMock:
+        contract = MagicMock()
+        contract.budget.max_retries = max_retries
+        return contract
+
+    @pytest.mark.asyncio
+    async def test_transient_in_retryable_state_routes_to_failed_retrying(self, fake_redis):
+        """ConnectionError from auto_labeling → failed_retrying and coordinator re-launched."""
+        run_id = "crash-class-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("auto_labeling")
+
+        with patch("api.routes.agent._start_coordinator") as mock_restart:
+            from api.routes.agent import _handle_coordinator_crash
+
+            await _handle_coordinator_crash(
+                run_id,
+                ConnectionError("redis gone"),
+                fake_redis,
+                self._make_contract(),
+                {},
+                transient=True,
+            )
+
+        assert await sm.current_state() == "failed_retrying"
+        mock_restart.assert_called_once_with(run_id, {})
+
+    @pytest.mark.asyncio
+    async def test_transient_in_non_retryable_state_routes_to_failed_unrecoverable(self, fake_redis):
+        """TimeoutError from planning → failed_unrecoverable (planning has no failed_retrying arc)."""
+        run_id = "crash-class-0002"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+
+        with patch("api.routes.agent._start_coordinator") as mock_restart:
+            from api.routes.agent import _handle_coordinator_crash
+
+            await _handle_coordinator_crash(
+                run_id,
+                TimeoutError("llm timeout"),
+                fake_redis,
+                self._make_contract(),
+                {},
+                transient=True,
+            )
+
+        assert await sm.current_state() == "failed_unrecoverable"
+        mock_restart.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_permanent_exception_routes_to_failed_unrecoverable(self, fake_redis):
+        """RuntimeError from teacher_training → failed_unrecoverable (not retried)."""
+        run_id = "crash-class-0003"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("teacher_training")
+
+        with patch("api.routes.agent._start_coordinator") as mock_restart:
+            from api.routes.agent import _handle_coordinator_crash
+
+            await _handle_coordinator_crash(
+                run_id,
+                RuntimeError("logic bug"),
+                fake_redis,
+                self._make_contract(),
+                {},
+                transient=False,
+            )
+
+        assert await sm.current_state() == "failed_unrecoverable"
+        mock_restart.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_retries_exhausted_routes_to_failed_unrecoverable(self, fake_redis):
+        """Transient error from auto_labeling with retry_count at max → failed_unrecoverable."""
+        run_id = "crash-class-0004"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("auto_labeling")
+        await fake_redis.hset(sm._key, "retry_count", "2")  # budget exhausted
+
+        with patch("api.routes.agent._start_coordinator") as mock_restart:
+            from api.routes.agent import _handle_coordinator_crash
+
+            await _handle_coordinator_crash(
+                run_id,
+                ConnectionError("redis gone"),
+                fake_redis,
+                self._make_contract(max_retries=2),
+                {},
+                transient=True,
+            )
+
+        assert await sm.current_state() == "failed_unrecoverable"
+        mock_restart.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_transient_sets_error_message_on_failed_retrying(self, fake_redis):
+        """The error message is persisted even when routing to failed_retrying."""
+        run_id = "crash-class-0005"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("teacher_training")
+
+        with patch("api.routes.agent._start_coordinator"):
+            from api.routes.agent import _handle_coordinator_crash
+
+            await _handle_coordinator_crash(
+                run_id,
+                ConnectionError("lost connection to worker"),
+                fake_redis,
+                self._make_contract(),
+                {},
+                transient=True,
+            )
+
+        data = await sm.load()
+        assert "lost connection to worker" in data["error_message"]
+
+    @pytest.mark.asyncio
+    async def test_retry_increments_retry_count(self, fake_redis):
+        """Each failed_retrying transition increments retry_count in Redis."""
+        run_id = "crash-class-0006"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("auto_labeling")
+
+        with patch("api.routes.agent._start_coordinator"):
+            from api.routes.agent import _handle_coordinator_crash
+
+            await _handle_coordinator_crash(
+                run_id,
+                TimeoutError("worker timeout"),
+                fake_redis,
+                self._make_contract(),
+                {},
+                transient=True,
+            )
+
+        assert await sm.retry_count() == 1
+
+    def test_is_transient_exception_builtin_types(self):
+        from api.routes.agent import _is_transient_exception
+
+        assert _is_transient_exception(ConnectionError("gone"))
+        assert _is_transient_exception(TimeoutError("timed out"))
+        assert _is_transient_exception(InterruptedError("EINTR"))
+        # ConnectionError subtypes are also transient
+        assert _is_transient_exception(BrokenPipeError("pipe gone"))
+        assert _is_transient_exception(ConnectionResetError("reset"))
+
+    def test_is_transient_exception_non_transient_types(self):
+        from api.routes.agent import _is_transient_exception
+
+        assert not _is_transient_exception(RuntimeError("logic bug"))
+        assert not _is_transient_exception(ValueError("bad input"))
+        assert not _is_transient_exception(KeyError("missing key"))
+        # OSError itself is too broad — only specific subclasses are transient
+        assert not _is_transient_exception(OSError("generic os error"))
+        assert not _is_transient_exception(FileNotFoundError("model not found"))
+        assert not _is_transient_exception(PermissionError("cannot write checkpoint"))
+
+    @pytest.mark.asyncio
+    async def test_second_crash_from_failed_retrying_routes_to_failed_unrecoverable(self, fake_redis):
+        """If the re-launched coordinator crashes while the SM is in failed_retrying
+        (i.e. before it can advance to a work state), the handler must not loop —
+        failed_retrying has no self-arc, so can_retry is False and it transitions
+        to failed_unrecoverable."""
+        run_id = "crash-class-0008"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        # Simulate: first crash already put the run in failed_retrying
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("auto_labeling")
+        await sm.transition("failed_retrying", error_message="first crash")
+
+        with patch("api.routes.agent._start_coordinator") as mock_restart:
+            from api.routes.agent import _handle_coordinator_crash
+
+            await _handle_coordinator_crash(
+                run_id,
+                ConnectionError("second crash"),
+                fake_redis,
+                self._make_contract(),
+                {},
+                transient=True,
+            )
+
+        # failed_retrying has no self-arc, so the second crash must not retry again
+        assert await sm.current_state() == "failed_unrecoverable"
+        mock_restart.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_state_key_returns_silently(self, fake_redis):
+        """If the Redis key for the run doesn't exist, KeyError is caught and the
+        handler returns without raising."""
+        run_id = "crash-class-missing-key"
+        contract_mock = MagicMock()
+        contract_mock.budget.max_retries = 2
+
+        with patch("api.routes.agent._start_coordinator") as mock_restart:
+            from api.routes.agent import _handle_coordinator_crash
+
+            # No sm.initialize() — the key doesn't exist in Redis
+            await _handle_coordinator_crash(
+                run_id,
+                ConnectionError("redis gone"),
+                fake_redis,
+                contract_mock,
+                {},
+                transient=True,
+            )
+
+        mock_restart.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_student_distillation_transient_routes_to_failed_retrying(self, fake_redis):
+        """student_distillation is a retryable state too — symmetry check."""
+        run_id = "crash-class-0007"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("teacher_training")
+        await sm.transition("training_eval_gate")
+        await sm.transition("student_distillation")
+
+        contract_dict = {"id": "test-contract"}
+        with patch("api.routes.agent._start_coordinator") as mock_restart:
+            from api.routes.agent import _handle_coordinator_crash
+
+            await _handle_coordinator_crash(
+                run_id,
+                OSError("worker killed"),
+                fake_redis,
+                self._make_contract(),
+                contract_dict,
+                transient=True,
+            )
+
+        assert await sm.current_state() == "failed_retrying"
+        mock_restart.assert_called_once_with(run_id, contract_dict)

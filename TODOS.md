@@ -252,18 +252,9 @@ and the audit, but each wants a callsite enumeration before shipping.
 ---
 
 
-### 20. Refine Coordinator crash classification (failed_retrying for transient errors)
+### ~~20. Refine Coordinator crash classification (failed_retrying for transient errors)~~
 
-All Coordinator crashes currently → `failed_unrecoverable` (shipped in #2). Transient
-failures (import errors, Redis connection reset, network timeout) should route to
-`failed_retrying` instead to allow automatic recovery. Needs: (a) classify the exception
-type at the `_on_done` site in `api/routes/agent.py`; (b) verify `failed_retrying` has a
-re-launch path back to an active state (current TRANSITIONS do; `_start_coordinator` is
-already idempotent). Full context in
-[docs/decisions/02-coordinator-crash-failed-unrecoverable.md](docs/decisions/02-coordinator-crash-failed-unrecoverable.md).
-
-**Depends on / blocked by:** TODO #1 (auto-resume infra) — retrying is only useful once a
-re-launched Coordinator can actually pick up the run.
+**Completed:** v0.1.5 (2026-04-29) — `_handle_coordinator_crash()` classifies exceptions as transient (`ConnectionError`, `TimeoutError`, `InterruptedError`, `redis.exceptions.ConnectionError/TimeoutError`) or permanent. Transient crashes in retryable states (`auto_labeling`, `teacher_training`, `student_distillation`) with retries remaining route to `failed_retrying` + Coordinator re-launch. Permanent errors and retries-exhausted go to `failed_unrecoverable`. `TRANSIENT_EXCEPTION_TYPES` in `core/constants.py` is the single source of truth. Also fixed: silent-return bug on `failed_retrying` transition failure now falls through to `failed_unrecoverable`. 13 new tests in `TestCrashClassification`. GitHub issue #53.
 
 ---
 
