@@ -369,12 +369,17 @@ async def get_status(run_id: str):
 @router.post("/gate/{run_id}/{action}")
 async def human_gate(run_id: str, action: str, body: GateActionRequest):
     """
-    Human gate decision for pending_approval state.
+    Human gate decision for any gate state.
 
     action: "approve" | "reject"
 
-    approve -> transitions to "done"
-    reject  -> transitions to "escalated" with reason
+    pending_approval (end-of-pipeline gate):
+        approve -> "done"       (event: gate_approved)
+        reject  -> "cancelled"  (event: gate_rejected)
+
+    pending_contract_approval (start-of-pipeline gate):
+        approve -> "auto_labeling"  (event: contract_approved)
+        reject  -> "cancelled"      (event: contract_rejected)
     """
     from ml_engine.agent.loop import apublish_event
     from ml_engine.agent.state_machine import StateMachine
@@ -390,13 +395,21 @@ async def human_gate(run_id: str, action: str, body: GateActionRequest):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
-    if current != "pending_approval":
+    if current == "pending_approval":
+        target_state = "done" if action == "approve" else "cancelled"
+        event_type = "gate_approved" if action == "approve" else "gate_rejected"
+    elif current == "pending_contract_approval":
+        target_state = "auto_labeling" if action == "approve" else "cancelled"
+        event_type = "contract_approved" if action == "approve" else "contract_rejected"
+    else:
         raise HTTPException(
             status_code=409,
-            detail=f"Run is in state {current!r}, not pending_approval",
+            detail=(
+                f"Run is in state {current!r}, not a gate state "
+                "(pending_approval or pending_contract_approval)"
+            ),
         )
 
-    target_state = "done" if action == "approve" else "escalated"
     try:
         await sm.transition(target_state)
     except ValueError as e:
@@ -406,7 +419,7 @@ async def human_gate(run_id: str, action: str, body: GateActionRequest):
         r,
         run_id,
         {
-            "type": "gate_approved" if action == "approve" else "gate_rejected",
+            "type": event_type,
             "run_id": run_id,
             "action": action,
             "reason": body.reason,
