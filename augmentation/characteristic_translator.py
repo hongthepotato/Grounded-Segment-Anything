@@ -1106,9 +1106,11 @@ class CharacteristicTranslator:
         Returns:
             Parameter dict with higher probability
         """
-        if "p" not in existing or "p" not in new:
-            missing = "existing" if "p" not in existing else "new"
-            raise ValueError(f"_keep_higher_p: {missing} params dict is missing the 'p' probability key")
+        missing = [name for name, d in (("existing", existing), ("new", new)) if "p" not in d]
+        if missing:
+            raise ValueError(
+                f"_keep_higher_p: {' and '.join(missing)} params dict(s) missing the 'p' probability key"
+            )
         existing_p = existing["p"]
         new_p = new["p"]
 

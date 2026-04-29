@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] — 2026-04-28
+
+### Fixed
+
+- **`_keep_higher_p` error message when both dicts missing `p`** — previously only reported one of the two missing dicts; now reports all missing dicts in a single `ValueError`. Symmetric test cases added for `new`-missing and both-missing paths.
+
 ## [0.1.2] — 2026-04-28
 
 ### Fixed
