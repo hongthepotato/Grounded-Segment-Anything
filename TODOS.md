@@ -267,18 +267,9 @@ re-launched Coordinator can actually pick up the run.
 
 ---
 
-### 21. `pending_contract_approval` — no endpoint to advance out of it (blocker)
+### ~~21. `pending_contract_approval` — no endpoint to advance out of it (blocker)~~
 
-**What:** `TRANSITIONS["pending_contract_approval"]` allows `["auto_labeling", "teacher_training", "cancelled", "failed_unrecoverable"]`, but no API endpoint drives any of those transitions. `/gate/{run_id}/{action}` only handles `pending_approval`. `/approve` only handles `created → planning`. A run that reaches `pending_contract_approval` — whether first time or after a restart — is permanently stuck.
-
-**Why:** `pending_contract_approval` is listed in `HUMAN_GATE_STAGES` in `coordinator.py`, so the Coordinator ignores all stream events in this state. The design assumes an external actor (human or endpoint) drives the transition, but that actor doesn't exist yet.
-
-**Decision needed:** Two options with different UX implications:
-
-- **Option A — Human-gated pause.** Keep `pending_contract_approval` as a deliberate review point. Add `POST /api/agent/contract/{run_id}/accept` (→ `auto_labeling` or `teacher_training`) and `POST /api/agent/contract/{run_id}/reject` (→ `cancelled`). The frontend shows the LLM-refined contract for approval before the pipeline starts. This mirrors the `pending_approval` gate at the end.
-- **Option B — Auto-advance.** Remove `pending_contract_approval` from `HUMAN_GATE_STAGES`. The Coordinator calls `advance_gate` twice in the `contract_approved` handler: first `planning → pending_contract_approval`, then immediately `pending_contract_approval → auto_labeling`. Effectively a no-op pause state; keep the state in the machine for observability but don't block on human input. Simpler, but loses the contract review UX.
-
-**Context:** State machine at [ml_engine/agent/state_machine.py:67-91](ml_engine/agent/state_machine.py#L67-L91). `HUMAN_GATE_STAGES` at [ml_engine/agent/coordinator.py:51](ml_engine/agent/coordinator.py#L51). Gate endpoint at [api/routes/agent.py:362-414](api/routes/agent.py#L362-L414).
+**Completed:** v0.1.4 (2026-04-28) — Extended `POST /api/agent/gate/{run_id}/{action}` to handle `pending_contract_approval`. Chose Option A (human-gated pause): approve → `auto_labeling` (event: `contract_approved`), reject → `cancelled`. Also fixed pre-existing bug where `pending_approval` reject incorrectly targeted `escalated` (not a valid SM transition). 13 unit tests in `TestHumanGate`. GitHub issue #52.
 
 **Depends on / blocked by:** None. Self-contained. Should be resolved before any end-to-end integration testing since the happy path goes through this state.
 

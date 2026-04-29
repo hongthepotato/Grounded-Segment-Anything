@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] — 2026-04-28
+
+### Fixed
+
+- **`pending_contract_approval` gate endpoint** — `POST /api/agent/gate/{run_id}/approve` now handles both human gate states. Previously the endpoint only accepted runs in `pending_approval`; runs paused at `pending_contract_approval` (the start-of-pipeline contract review) had no way to advance and would stall permanently. Approve transitions to `auto_labeling` (event: `contract_approved`); reject transitions to `cancelled` (event: `contract_rejected`).
+- **`pending_approval` reject state bug** — rejecting at the end-of-pipeline gate previously attempted to transition to `escalated`, which is not a valid target from `pending_approval` per the state machine. Fixed to `cancelled` (consistent with human-initiated cancellation). Discovered and caught by the new gate tests.
+
+### Tests
+
+- `TestHumanGate` added to `tests/unit/api/test_agent_coordinator.py` (13 tests): covers both gate states (approve/reject), invalid action (400), unknown run (404), non-gate states (409), event type assertions for `contract_approved` / `contract_rejected`, and `ValueError` propagation from `sm.transition()` → 400.
+
 ## [0.1.3] — 2026-04-28
 
 ### Fixed
