@@ -1078,3 +1078,374 @@ class TestCrashClassification:
 
         assert await sm.current_state() == "failed_retrying"
         mock_restart.assert_called_once_with(run_id, contract_dict)
+
+
+# ---------------------------------------------------------------------------
+# Retry dispatch (issue #54)
+# ---------------------------------------------------------------------------
+
+
+class TestRetryDispatch:
+    """Tests for Coordinator.on_event job_failed branch re-dispatch logic.
+
+    Core invariants under test:
+    - failed_stage is captured BEFORE transitioning away (not after)
+    - SM ends in the original work stage after successful dispatch
+    - dispatch_stage.execute() is called exactly once with the correct stage name
+    - stage_dispatch_overrides from LoopState are forwarded verbatim (empty dict, not None)
+    - retry_count is incremented by exactly 1 per retry
+    - retries-exhausted path never calls dispatch and ends in failed_unrecoverable
+    - dispatch failure path ends in failed_unrecoverable
+    - error_message is stored in SM data (persisted at failed_retrying transition)
+    - no LLM call is made (job_failed is deterministic)
+    """
+
+    def _make_contract(self, max_retries: int = 2) -> MagicMock:
+        contract = MagicMock()
+        contract.budget.max_retries = max_retries
+        contract.to_dict.return_value = {"max_retries": max_retries}
+        return contract
+
+    async def _reach_stage(self, run_id: str, fake_redis, stage: str) -> "StateMachine":
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition(stage)
+        return sm
+
+    async def _reach_student_distillation(self, run_id: str, fake_redis) -> "StateMachine":
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("teacher_training")
+        await sm.transition("training_eval_gate")
+        await sm.transition("student_distillation")
+        return sm
+
+    # ------------------------------------------------------------------
+    # State sequence correctness
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_teacher_training_failure_final_state_is_teacher_training(self, fake_redis):
+        """After a successful retry dispatch, the SM must be back in teacher_training —
+        NOT stuck in failed_retrying. This catches the original bug (no re-dispatch)."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-seq-0001"
+        sm = await self._reach_stage(run_id, fake_redis, "teacher_training")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)):
+            await coordinator.on_event({"type": "job_failed", "error": "OOM"}, LoopState(run_id=run_id))
+
+        final = await sm.current_state()
+        assert final == "teacher_training", (
+            f"SM ended in {final!r} — re-dispatch did not return run to work stage"
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_labeling_failure_final_state_is_auto_labeling(self, fake_redis):
+        """Same invariant as above for auto_labeling."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-seq-0002"
+        sm = await self._reach_stage(run_id, fake_redis, "auto_labeling")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)):
+            await coordinator.on_event({"type": "job_failed", "error": "timeout"}, LoopState(run_id=run_id))
+
+        assert await sm.current_state() == "auto_labeling"
+
+    @pytest.mark.asyncio
+    async def test_student_distillation_failure_final_state_is_student_distillation(self, fake_redis):
+        """Same invariant for student_distillation."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-seq-0003"
+        sm = await self._reach_student_distillation(run_id, fake_redis)
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)):
+            await coordinator.on_event({"type": "job_failed", "error": "CUDA OOM"}, LoopState(run_id=run_id))
+
+        assert await sm.current_state() == "student_distillation"
+
+    # ------------------------------------------------------------------
+    # Dispatch called with the right stage — catches wrong-stage bugs
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_dispatch_receives_exact_failed_stage_name(self, fake_redis):
+        """dispatch_stage.execute() must receive the stage that was active at failure time,
+        not the transient failed_retrying state or any other value."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-stage-0001"
+        await self._reach_stage(run_id, fake_redis, "auto_labeling")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        captured_args = []
+        with patch.object(
+            dispatch_tool,
+            "execute",
+            side_effect=lambda args, ctx: captured_args.append(args) or ToolResult(success=True),
+        ):
+            await coordinator.on_event({"type": "job_failed", "error": "crash"}, LoopState(run_id=run_id))
+
+        assert len(captured_args) == 1, "dispatch must be called exactly once"
+        assert captured_args[0].stage == "auto_labeling", (
+            f"dispatched stage was {captured_args[0].stage!r}, expected 'auto_labeling'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_called_exactly_once(self, fake_redis):
+        """dispatch_stage.execute() is called exactly once per job_failed event."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-count-0001"
+        await self._reach_stage(run_id, fake_redis, "teacher_training")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)) as mock_dispatch:
+            await coordinator.on_event({"type": "job_failed", "error": "crash"}, LoopState(run_id=run_id))
+
+        assert mock_dispatch.call_count == 1
+
+    # ------------------------------------------------------------------
+    # Overrides forwarding — catches None vs {} bug
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_overrides_forwarded_verbatim(self, fake_redis):
+        """LoopState.stage_dispatch_overrides must reach dispatch args unchanged."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-override-0001"
+        await self._reach_stage(run_id, fake_redis, "teacher_training")
+
+        overrides = {"lr": 0.001, "epochs": 5, "batch_size": 16}
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        captured = []
+        with patch.object(
+            dispatch_tool,
+            "execute",
+            side_effect=lambda args, ctx: captured.append(args) or ToolResult(success=True),
+        ):
+            await coordinator.on_event(
+                {"type": "job_failed", "error": "crash"},
+                LoopState(run_id=run_id, stage_dispatch_overrides=overrides),
+            )
+
+        assert captured[0].overrides == overrides
+
+    @pytest.mark.asyncio
+    async def test_empty_overrides_forwarded_as_empty_dict_not_none(self, fake_redis):
+        """When LoopState has no overrides, dispatch args.overrides must be {} not None.
+        This catches the `overrides=state.stage_dispatch_overrides or {}` guard."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-override-0002"
+        await self._reach_stage(run_id, fake_redis, "teacher_training")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        captured = []
+        with patch.object(
+            dispatch_tool,
+            "execute",
+            side_effect=lambda args, ctx: captured.append(args) or ToolResult(success=True),
+        ):
+            await coordinator.on_event({"type": "job_failed", "error": "crash"}, LoopState(run_id=run_id))
+
+        assert captured[0].overrides is not None, "overrides must not be None"
+        assert captured[0].overrides == {}
+
+    # ------------------------------------------------------------------
+    # retry_count bookkeeping
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_retry_count_increments_by_one(self, fake_redis):
+        """retry_count must go from 0 → 1 on first retry."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-count-0002"
+        sm = await self._reach_stage(run_id, fake_redis, "teacher_training")
+        assert await sm.retry_count() == 0
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)):
+            await coordinator.on_event({"type": "job_failed", "error": "crash"}, LoopState(run_id=run_id))
+
+        assert await sm.retry_count() == 1
+
+    @pytest.mark.asyncio
+    async def test_second_retry_increments_to_two(self, fake_redis):
+        """Second retry: retry_count goes from 1 → 2 (not reset, not double-incremented)."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-count-0003"
+        sm = await self._reach_stage(run_id, fake_redis, "teacher_training")
+        # Simulate first retry already happened
+        await sm.transition("failed_retrying", error_message="first failure")
+        await sm.transition("teacher_training")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract(max_retries=3))
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)):
+            await coordinator.on_event(
+                {"type": "job_failed", "error": "second crash"}, LoopState(run_id=run_id)
+            )
+
+        assert await sm.retry_count() == 2
+
+    # ------------------------------------------------------------------
+    # Retries exhausted — must not dispatch
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_retries_exhausted_no_dispatch_ends_in_failed_unrecoverable(self, fake_redis):
+        """When retry_count >= max_retries, dispatch must NOT be called and SM
+        must end in failed_unrecoverable."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-exhaust-0001"
+        sm = await self._reach_stage(run_id, fake_redis, "teacher_training")
+        await fake_redis.hset(sm._key, "retry_count", "2")  # at budget limit
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract(max_retries=2))
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)) as mock_dispatch:
+            await coordinator.on_event({"type": "job_failed", "error": "crash"}, LoopState(run_id=run_id))
+
+        assert await sm.current_state() == "failed_unrecoverable"
+        mock_dispatch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_retry_count_one_below_max_still_dispatches(self, fake_redis):
+        """retry_count == max_retries - 1 must still dispatch (boundary: last allowed retry)."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-exhaust-0002"
+        sm = await self._reach_stage(run_id, fake_redis, "teacher_training")
+        await fake_redis.hset(sm._key, "retry_count", "1")  # one retry used, max is 2
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract(max_retries=2))
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)) as mock_dispatch:
+            await coordinator.on_event({"type": "job_failed", "error": "crash"}, LoopState(run_id=run_id))
+
+        assert await sm.current_state() == "teacher_training"
+        mock_dispatch.assert_called_once()
+
+    # ------------------------------------------------------------------
+    # Dispatch failure path
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_dispatch_failure_ends_in_failed_unrecoverable(self, fake_redis):
+        """If dispatch_stage.execute() returns success=False, SM must end in
+        failed_unrecoverable (not stuck in a work stage or failed_retrying)."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-fail-0001"
+        sm = await self._reach_stage(run_id, fake_redis, "auto_labeling")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(
+            dispatch_tool, "execute", return_value=ToolResult(success=False, error="executor queue full")
+        ):
+            await coordinator.on_event(
+                {"type": "job_failed", "error": "worker died"}, LoopState(run_id=run_id)
+            )
+
+        assert await sm.current_state() == "failed_unrecoverable"
+
+    # ------------------------------------------------------------------
+    # Error message persistence
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_job_error_message_stored_in_sm(self, fake_redis):
+        """The error field from the job_failed event must be written to SM
+        (it is set during the failed_retrying transition)."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-err-0001"
+        sm = await self._reach_stage(run_id, fake_redis, "teacher_training")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)):
+            await coordinator.on_event(
+                {"type": "job_failed", "error": "GPU out of memory: 24 GiB"},
+                LoopState(run_id=run_id),
+            )
+
+        data = await sm.load()
+        assert "GPU out of memory" in data.get("error_message", ""), (
+            "error_message not persisted in SM — failed_retrying transition must store it"
+        )
+
+    # ------------------------------------------------------------------
+    # No LLM call on job_failed (deterministic path)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_no_llm_call_on_job_failed(self, fake_redis):
+        """job_failed handling is fully deterministic — the LLM must never be invoked."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-llm-0001"
+        await self._reach_stage(run_id, fake_redis, "teacher_training")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with (
+            patch.object(dispatch_tool, "execute", return_value=ToolResult(success=True)),
+            patch.object(
+                coordinator._llm, "call", side_effect=AssertionError("LLM must not be called on job_failed")
+            ),
+        ):
+            # Would raise if LLM is invoked
+            await coordinator.on_event({"type": "job_failed", "error": "crash"}, LoopState(run_id=run_id))
