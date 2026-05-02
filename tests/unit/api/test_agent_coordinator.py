@@ -1425,6 +1425,27 @@ class TestRetryDispatch:
             "error_message not persisted in SM — failed_retrying transition must store it"
         )
 
+    @pytest.mark.asyncio
+    async def test_dispatch_execute_raises_ends_in_failed_unrecoverable(self, fake_redis):
+        """If dispatch_stage.execute() raises an exception (not just returns success=False),
+        the run must end in failed_unrecoverable — not stuck in the work stage."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+
+        run_id = "rd-raise-0001"
+        sm = await self._reach_stage(run_id, fake_redis, "auto_labeling")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        with patch.object(dispatch_tool, "execute", side_effect=RuntimeError("redis timeout")):
+            await coordinator.on_event(
+                {"type": "job_failed", "error": "worker died"}, LoopState(run_id=run_id)
+            )
+
+        assert await sm.current_state() == "failed_unrecoverable", (
+            "dispatch_stage.execute() raised but run was not marked failed_unrecoverable"
+        )
+
     # ------------------------------------------------------------------
     # No LLM call on job_failed (deterministic path)
     # ------------------------------------------------------------------

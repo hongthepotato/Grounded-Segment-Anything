@@ -332,6 +332,20 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
+### 27. PEL replay on SIGKILL after `sm.transition("failed_retrying")` — wastes a retry slot
+
+**What:** In `on_event` `job_failed` handling, `sm.transition("failed_retrying")` is called before `sm.transition(failed_stage)`. If the coordinator process is SIGKILL'd (OOM-kill, host crash) between those two calls, the SM state is durably written as `"failed_retrying"` in Redis but the stream message was not yet ACKed. On restart, `StreamConsumer` PEL recovery replays the `job_failed` event with `current_state() == "failed_retrying"`. The handler then sets `failed_stage = "failed_retrying"` (wrong) and attempts `sm.transition("failed_retrying")` from `"failed_retrying"` — an invalid self-arc. The inner `except` catches it and routes to `failed_unrecoverable`, wasting the remaining retry budget.
+
+**Why:** Only triggered by hard kills (SIGKILL, OOM-kill, host crash), not graceful shutdown. Narrow window between two async calls.
+
+**Fix:** During `sm.transition("failed_retrying")`, store the captured `failed_stage` in the SM hash (e.g., `retry_work_stage` field). On `job_failed` replay, detect `current == "failed_retrying"` and recover `failed_stage` from that field rather than from `current`.
+
+**Context:** `on_event` job_failed handler at [ml_engine/agent/coordinator.py:460-512](ml_engine/agent/coordinator.py#L460-L512). PEL recovery in `StreamConsumer`.
+
+**Depends on / blocked by:** TODO #22 (now complete). Low urgency — only SIGKILL/OOM scenarios; graceful restarts are unaffected.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,

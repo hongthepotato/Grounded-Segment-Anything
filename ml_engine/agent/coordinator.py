@@ -480,8 +480,12 @@ class Coordinator:
                             "failed_unrecoverable",
                             error_message=f"retry dispatch setup failed: {exc}",
                         )
-                    except Exception:
-                        pass
+                    except Exception as mark_err:
+                        logger.error(
+                            "Run %s: could not mark failed_unrecoverable after re-entry failure: %s",
+                            self.run_id,
+                            mark_err,
+                        )
                     return
                 retry_context = RunContext(
                     run_id=self.run_id,
@@ -489,10 +493,26 @@ class Coordinator:
                     contract=self._contract.to_dict() if self._contract else None,
                 )
                 dispatch_tool = self._tools.get("dispatch_stage")
-                result = await dispatch_tool.execute(
-                    DispatchStageArgs(stage=failed_stage, overrides=state.stage_dispatch_overrides or {}),
-                    retry_context,
-                )
+                try:
+                    result = await dispatch_tool.execute(
+                        DispatchStageArgs(stage=failed_stage, overrides=state.stage_dispatch_overrides or {}),
+                        retry_context,
+                    )
+                except Exception as dispatch_exc:
+                    logger.error(
+                        "Run %s: dispatch_stage.execute() raised for stage %s: %s",
+                        self.run_id,
+                        failed_stage,
+                        dispatch_exc,
+                    )
+                    try:
+                        await sm.transition(
+                            "failed_unrecoverable",
+                            error_message=f"retry dispatch raised: {dispatch_exc}",
+                        )
+                    except Exception as mark_err:
+                        logger.error("Run %s: could not mark failed_unrecoverable: %s", self.run_id, mark_err)
+                    return
                 if not result.success:
                     logger.error(
                         "Run %s: retry dispatch failed for stage %s: %s",
