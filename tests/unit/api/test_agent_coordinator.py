@@ -1890,3 +1890,221 @@ class TestRetryDispatch:
         assert final_state == "failed_unrecoverable", (
             f"gate-state job_failed ended in {final_state!r}; expected 'failed_unrecoverable'"
         )
+
+    @pytest.mark.asyncio
+    async def test_fresh_job_failed_from_label_review_gate_routes_to_failed_unrecoverable(self, fake_redis):
+        """label_review_gate has no 'failed_retrying' arc — must not propagate ValueError."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+
+        run_id = "rd-gate-0002"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("auto_labeling")
+        await sm.transition("label_review_gate")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        await coordinator.on_event(
+            {"type": "job_failed", "error": "labeler crashed"}, LoopState(run_id=run_id)
+        )
+
+        final_state = await sm.current_state()
+        assert final_state == "failed_unrecoverable", (
+            f"label_review_gate job_failed ended in {final_state!r}; expected 'failed_unrecoverable'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fresh_job_failed_from_distill_eval_gate_routes_to_failed_unrecoverable(self, fake_redis):
+        """distill_eval_gate has no 'failed_retrying' arc — must not propagate ValueError."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+
+        run_id = "rd-gate-0003"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("teacher_training")
+        await sm.transition("training_eval_gate")
+        await sm.transition("student_distillation")
+        await sm.transition("distill_eval_gate")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        await coordinator.on_event(
+            {"type": "job_failed", "error": "distill evaluator crashed"}, LoopState(run_id=run_id)
+        )
+
+        final_state = await sm.current_state()
+        assert final_state == "failed_unrecoverable", (
+            f"distill_eval_gate job_failed ended in {final_state!r}; expected 'failed_unrecoverable'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fresh_job_failed_from_gate_state_does_not_call_dispatch(self, fake_redis):
+        """Gate-state job_failed must never call dispatch_stage — there is no work to retry.
+        Naive implementation that reaches the shared dispatch block after a failed
+        failed_retrying transition would call dispatch with 'training_eval_gate'."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-gate-0004"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("teacher_training")
+        await sm.transition("training_eval_gate")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        dispatch_called = []
+        with patch.object(
+            dispatch_tool,
+            "execute",
+            side_effect=lambda args, ctx: dispatch_called.append(args) or ToolResult(success=True),
+        ):
+            await coordinator.on_event(
+                {"type": "job_failed", "error": "evaluator crashed"}, LoopState(run_id=run_id)
+            )
+
+        assert len(dispatch_called) == 0, (
+            f"dispatch_stage was called with {[a.stage for a in dispatch_called]!r}; "
+            "must not dispatch when job_failed arrives in a gate state"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fresh_job_failed_from_gate_state_does_not_increment_retry_count(self, fake_redis):
+        """Gate-state job_failed must not charge the retry budget.
+        The failure is in the Coordinator infrastructure (invalid state for retrying),
+        not in the worker — the retry slot must be preserved for real work failures."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+
+        run_id = "rd-gate-0005"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("teacher_training")
+        await sm.transition("training_eval_gate")
+
+        retry_count_before = await sm.retry_count()
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        await coordinator.on_event(
+            {"type": "job_failed", "error": "evaluator crashed"}, LoopState(run_id=run_id)
+        )
+        retry_count_after = await sm.retry_count()
+
+        assert retry_count_before == 0, "precondition: retry_count must be 0 before event"
+        assert retry_count_after == retry_count_before, (
+            f"retry_count went from {retry_count_before} to {retry_count_after}; "
+            "gate-state job_failed must not charge the retry budget"
+        )
+
+    # ------------------------------------------------------------------
+    # Bug 2: allowlist validation for retry_work_stage from Redis metadata
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_pel_replay_stage_not_in_allowlist_ends_in_failed_unrecoverable(self, fake_redis):
+        """retry_work_stage = 'training_eval_gate' stored in metadata must be rejected.
+        Old code only checked 'if not failed_stage' (truthy/falsy) — 'training_eval_gate'
+        is truthy so it would reach sm.transition(failed_stage) in the shared re-dispatch
+        block, which raises ValueError (no arc from failed_retrying to training_eval_gate).
+        The allowlist check catches it before any SM transition attempt."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+
+        run_id = "rd-allowlist-0001"
+        await self._reach_failed_retrying(
+            run_id,
+            fake_redis,
+            "teacher_training",
+            metadata={"retry_work_stage": "training_eval_gate"},
+        )
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        await coordinator.on_event({"type": "job_failed", "error": "replayed"}, LoopState(run_id=run_id))
+
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        assert await sm.current_state() == "failed_unrecoverable", (
+            "non-allowlist stage in metadata must end in 'failed_unrecoverable'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_pel_replay_failed_unrecoverable_in_metadata_does_not_dispatch(self, fake_redis):
+        """The critical allowlist case: retry_work_stage = 'failed_unrecoverable'.
+
+        'failed_unrecoverable' IS a valid arc in TRANSITIONS['failed_retrying'], so
+        the old code (only 'if not failed_stage') would:
+          1. accept it as truthy
+          2. sm.transition('failed_unrecoverable') — succeeds, valid arc in the SM graph
+          3. dispatch_stage('failed_unrecoverable') — dispatches a job to a terminal state
+
+        The allowlist rejects it before any SM write. Dispatch must never be called."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-allowlist-0002"
+        await self._reach_failed_retrying(
+            run_id,
+            fake_redis,
+            "auto_labeling",
+            metadata={"retry_work_stage": "failed_unrecoverable"},
+        )
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        dispatch_called = []
+        with patch.object(
+            dispatch_tool,
+            "execute",
+            side_effect=lambda args, ctx: dispatch_called.append(args) or ToolResult(success=True),
+        ):
+            await coordinator.on_event({"type": "job_failed", "error": "replayed"}, LoopState(run_id=run_id))
+
+        assert len(dispatch_called) == 0, (
+            f"dispatch_stage called with stage={dispatch_called[0].stage!r}; "
+            "old code would have dispatched a job to a terminal state via the valid arc"
+        )
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        assert await sm.current_state() == "failed_unrecoverable"
+
+    @pytest.mark.asyncio
+    async def test_pel_replay_failed_retrying_in_metadata_does_not_dispatch(self, fake_redis):
+        """retry_work_stage = 'failed_retrying' — the exact self-arc value the original
+        PEL bug (before this fix) would have written to Redis metadata, because the old
+        handler used 'failed_stage = current' where current == 'failed_retrying'.
+        Must be rejected by the allowlist and never reach dispatch."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+        from ml_engine.agent.tools import ToolResult
+
+        run_id = "rd-allowlist-0003"
+        await self._reach_failed_retrying(
+            run_id,
+            fake_redis,
+            "auto_labeling",
+            metadata={"retry_work_stage": "failed_retrying"},
+        )
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        dispatch_tool = coordinator._tools.get("dispatch_stage")
+        dispatch_called = []
+        with patch.object(
+            dispatch_tool,
+            "execute",
+            side_effect=lambda args, ctx: dispatch_called.append(args) or ToolResult(success=True),
+        ):
+            await coordinator.on_event({"type": "job_failed", "error": "replayed"}, LoopState(run_id=run_id))
+
+        assert len(dispatch_called) == 0, (
+            f"dispatch_stage called with stage={dispatch_called[0].stage!r}; "
+            "retry_work_stage='failed_retrying' is a self-arc and must be rejected by allowlist"
+        )
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        assert await sm.current_state() == "failed_unrecoverable"
