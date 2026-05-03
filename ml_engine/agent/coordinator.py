@@ -50,6 +50,14 @@ logger = logging.getLogger(__name__)
 # Stages that need a human gate before proceeding
 HUMAN_GATE_STAGES = {"pending_contract_approval", "pending_approval"}
 
+# Work stages that can fail and retry (have a "failed_retrying" arc in the SM graph).
+_RETRYABLE_WORK_STAGES: frozenset[str] = frozenset(
+    {"auto_labeling", "teacher_training", "student_distillation"}
+)
+
+# SM metadata key written atomically with failed_retrying so PEL replay can recover the stage.
+_RETRY_WORK_STAGE_KEY: str = "retry_work_stage"
+
 # Map pipeline state -> skill file name for per-stage LLM prompts.
 # SkillLoader reads configs/agent/skills/{name}.md.
 _STATE_TO_SKILL = {
@@ -583,8 +591,8 @@ class Coordinator:
                 meta = json.loads(data.get("metadata") or "{}")
             except (json.JSONDecodeError, TypeError):
                 meta = {}
-            failed_stage = meta.get("retry_work_stage")
-            if not failed_stage:
+            failed_stage = meta.get(_RETRY_WORK_STAGE_KEY)
+            if not failed_stage or failed_stage not in _RETRYABLE_WORK_STAGES:
                 logger.error(
                     "Run %s: PEL replay in failed_retrying but retry_work_stage missing from metadata",
                     self.run_id,
@@ -592,11 +600,11 @@ class Coordinator:
                 try:
                     await sm.transition(
                         "failed_unrecoverable",
-                        error_message="PEL replay: retry_work_stage missing from SM metadata",
+                        error_message="PEL replay: retry_work_stage missing or invalid in SM metadata",
                     )
                 except Exception as mark_err:
                     logger.error(
-                        "Run %s: could not mark failed_unrecoverable after missing metadata: %s",
+                        "Run %s: could not mark failed_unrecoverable after missing/invalid metadata: %s",
                         self.run_id,
                         mark_err,
                     )
@@ -609,17 +617,33 @@ class Coordinator:
         else:
             # Fresh job_failed from a retryable work stage.
             retry_count = await sm.retry_count()
-            max_retries = self._contract.budget.max_retries if self._contract else 2
+            max_retries = self._contract.budget.max_retries if self._contract else BudgetSpec().max_retries
             failed_stage = current
             if retry_count >= max_retries:
                 await sm.transition("failed_unrecoverable", error_message="max retries exhausted")
                 return
             # Store failed_stage atomically so this handler can recover the stage on PEL replay.
-            await sm.transition(
-                "failed_retrying",
-                error_message=event.get("error"),
-                metadata={"retry_work_stage": failed_stage},
-            )
+            try:
+                await sm.transition(
+                    "failed_retrying",
+                    error_message=event.get("error"),
+                    metadata={_RETRY_WORK_STAGE_KEY: failed_stage},
+                )
+            except Exception as exc:
+                logger.error(
+                    "Run %s: could not transition to failed_retrying from %s: %s",
+                    self.run_id,
+                    failed_stage,
+                    exc,
+                )
+                try:
+                    await sm.transition(
+                        "failed_unrecoverable",
+                        error_message=f"failed_retrying transition failed: {exc}",
+                    )
+                except Exception as mark_err:
+                    logger.error("Run %s: could not mark failed_unrecoverable: %s", self.run_id, mark_err)
+                return
             logger.info(
                 "Run %s: job failed on %s (attempt %d/%d), re-dispatching",
                 self.run_id,

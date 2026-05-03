@@ -1493,7 +1493,9 @@ class TestRetryDispatch:
             await sm.transition("training_eval_gate")
         await sm.transition(work_stage)
         if metadata is ...:
-            metadata = {"retry_work_stage": work_stage}
+            from ml_engine.agent.coordinator import _RETRY_WORK_STAGE_KEY
+
+            metadata = {_RETRY_WORK_STAGE_KEY: work_stage}
         await sm.transition("failed_retrying", error_message="worker died", metadata=metadata)
         return sm
 
@@ -1524,11 +1526,8 @@ class TestRetryDispatch:
 
         assert len(captured_args) == 1, "dispatch must be called exactly once"
         assert captured_args[0].stage == "teacher_training", (
-            f"PEL replay dispatched to {captured_args[0].stage!r} — "
-            "must be 'teacher_training', not 'failed_retrying'"
-        )
-        assert captured_args[0].stage != "failed_retrying", (
-            "dispatched to 'failed_retrying' — implementation used `current` instead of metadata"
+            f"PEL replay dispatched to {captured_args[0].stage!r}; "
+            "must be 'teacher_training' — naive implementation would use 'failed_retrying'"
         )
 
     @pytest.mark.asyncio
@@ -1863,3 +1862,31 @@ class TestRetryDispatch:
             await coordinator.on_event(
                 {"type": "job_failed", "error": "worker died"}, LoopState(run_id=run_id)
             )
+
+    @pytest.mark.asyncio
+    async def test_fresh_job_failed_from_gate_state_routes_to_failed_unrecoverable(self, fake_redis):
+        """job_failed arriving when SM is in a gate/eval state (e.g. training_eval_gate)
+        must not propagate an unhandled ValueError. The gate states have no
+        'failed_retrying' arc in the SM — the handler must catch the transition
+        failure and route to failed_unrecoverable instead."""
+        from ml_engine.agent.coordinator import Coordinator
+        from ml_engine.agent.loop import LoopState
+
+        run_id = "rd-gate-0001"
+        sm = StateMachine(run_id=run_id, redis_async=fake_redis)
+        await sm.initialize()
+        await sm.transition("planning")
+        await sm.transition("pending_contract_approval")
+        await sm.transition("teacher_training")
+        await sm.transition("training_eval_gate")
+
+        coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
+        # Must not raise — ValueError from sm.transition("failed_retrying") must be caught.
+        await coordinator.on_event(
+            {"type": "job_failed", "error": "evaluator crashed"}, LoopState(run_id=run_id)
+        )
+
+        final_state = await sm.current_state()
+        assert final_state == "failed_unrecoverable", (
+            f"gate-state job_failed ended in {final_state!r}; expected 'failed_unrecoverable'"
+        )
