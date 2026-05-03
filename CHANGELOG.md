@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] — 2026-05-02
+
+### Fixed
+
+- **`failed_retrying` stuck state** — When a job fails with retries remaining, `on_event` previously transitioned to `failed_retrying` and returned, leaving the run stranded with no active job and no event to wake the Coordinator. The handler now captures `failed_stage = current` before transitioning away, then executes the sequence `failed_stage → failed_retrying → failed_stage` and calls `DispatchStageTool.execute()` directly to re-enqueue the job. Dispatch failure or SM-transition failure both route to `failed_unrecoverable`. Original LLM-chosen `stage_dispatch_overrides` from `LoopState` are forwarded verbatim on retry.
+
+### Tests
+
+- **14 new tests in `TestRetryDispatch`** — cover all three retryable stages, exact stage-name forwarding, override propagation (including empty-dict-not-None boundary), retry_count bookkeeping across two consecutive retries, exhausted-budget boundary (last allowed retry still dispatches), dispatch failure → `failed_unrecoverable`, error_message persistence, and no-LLM-call invariant. GitHub issue #54.
+
 ## [0.1.5] — 2026-04-29
 
 ### Fixed

@@ -266,17 +266,9 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### 22. `failed_retrying` — no retry dispatch (stuck state)
+### ~~22. `failed_retrying` — no retry dispatch (stuck state)~~
 
-**What:** When a job fails and `retry_count < max_retries`, `on_event` transitions the SM to `failed_retrying` and returns ([coordinator.py:462-467](ml_engine/agent/coordinator.py#L462-L467)). Nothing dispatches a retry job. No event is published to trigger a re-dispatch. On restart, the Coordinator resumes and waits — but there is no pending event in the stream. The run is stuck in `failed_retrying` forever.
-
-**Why:** The transition to `failed_retrying` was added to allow retries, but the actual retry dispatch logic was never implemented.
-
-**Fix:** After `sm.transition("failed_retrying")`, publish a `retry_requested` event to the stream (`type`, `stage`, `run_id`, `retry_count`). The Coordinator's `on_event` handler picks it up on the next loop iteration, reads the last dispatched stage from `LoopState` or the SM metadata, and re-dispatches via `dispatch_stage`. Alternatively, the Coordinator can call `dispatch_stage` directly in the `job_failed` handler before returning (simpler, but skips the event log).
-
-**Context:** `on_event` job_failed branch at [ml_engine/agent/coordinator.py:461-468](ml_engine/agent/coordinator.py#L461-L468). `TRANSITIONS["failed_retrying"]` at [ml_engine/agent/state_machine.py:84-89](ml_engine/agent/state_machine.py#L84-L89).
-
-**Depends on / blocked by:** TODO #20 (crash classification) — the distinction between `failed_retrying` and `failed_unrecoverable` only matters once retry dispatch actually works.
+**Completed:** v0.1.6 (2026-05-02) — `on_event` now captures `failed_stage = current` before transitioning away, then executes `failed_stage → failed_retrying → failed_stage` and calls `DispatchStageTool.execute()` directly to re-enqueue the job. Dispatch failure or SM-transition failure both route to `failed_unrecoverable`. `LoopState.stage_dispatch_overrides` forwarded verbatim. 14 new tests in `TestRetryDispatch`. GitHub issue #54.
 
 ---
 
@@ -337,6 +329,20 @@ and the audit, but each wants a callsite enumeration before shipping.
 **Context:** Surfaced 2026-04-28 during `/ship` adversarial review of PR #50.
 
 **Depends on / blocked by:** None. ~20 lines of test.
+
+---
+
+### 27. PEL replay on SIGKILL after `sm.transition("failed_retrying")` — wastes a retry slot
+
+**What:** In `on_event` `job_failed` handling, `sm.transition("failed_retrying")` is called before `sm.transition(failed_stage)`. If the coordinator process is SIGKILL'd (OOM-kill, host crash) between those two calls, the SM state is durably written as `"failed_retrying"` in Redis but the stream message was not yet ACKed. On restart, `StreamConsumer` PEL recovery replays the `job_failed` event with `current_state() == "failed_retrying"`. The handler then sets `failed_stage = "failed_retrying"` (wrong) and attempts `sm.transition("failed_retrying")` from `"failed_retrying"` — an invalid self-arc. The inner `except` catches it and routes to `failed_unrecoverable`, wasting the remaining retry budget.
+
+**Why:** Only triggered by hard kills (SIGKILL, OOM-kill, host crash), not graceful shutdown. Narrow window between two async calls.
+
+**Fix:** During `sm.transition("failed_retrying")`, store the captured `failed_stage` in the SM hash (e.g., `retry_work_stage` field). On `job_failed` replay, detect `current == "failed_retrying"` and recover `failed_stage` from that field rather than from `current`.
+
+**Context:** `on_event` job_failed handler at [ml_engine/agent/coordinator.py:460-512](ml_engine/agent/coordinator.py#L460-L512). PEL recovery in `StreamConsumer`.
+
+**Depends on / blocked by:** TODO #22 (now complete). Low urgency — only SIGKILL/OOM scenarios; graceful restarts are unaffected.
 
 ---
 
