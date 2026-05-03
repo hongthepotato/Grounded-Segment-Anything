@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7] — 2026-05-03
+
+### Fixed
+
+- **PEL replay wastes a retry slot after SIGKILL** — If the coordinator process was killed (OOM-kill, host crash) between `sm.transition("failed_retrying")` and the subsequent re-dispatch call, the Redis Stream PEL replay would present the event again with `current_state() == "failed_retrying"`. The old handler treated `"failed_retrying"` as the failed stage name and attempted an invalid self-arc transition, routing to `failed_unrecoverable` and burning a retry slot. The fix: `retry_work_stage` is now stored atomically in SM metadata alongside the `failed_retrying` transition; on replay the handler detects `current == "failed_retrying"`, reads the stage back from metadata, skips the budget charge, and converges at the shared re-dispatch path. Missing or corrupt metadata routes to `failed_unrecoverable` with an error log instead of silently swallowing the exception.
+
+### Refactored
+
+- **`_handle_job_failed` extracted from `on_event`** — The `job_failed` branch of `on_event` is now a dedicated `_handle_job_failed(event, sm, state, current)` method, keeping `on_event` readable and making the two-path logic (fresh retry vs. PEL replay) explicit.
+
+### Tests
+
+- **14 new tests in `TestRetryDispatch`** — cover the PEL replay path: correct stage recovery (not `"failed_retrying"`), retry-count not double-charged, budget double-charge regression guard (max_retries=2 boundary), missing/empty/corrupt/wrong-key metadata → `failed_unrecoverable`, dispatch raises → `failed_unrecoverable`, SM re-entry transition raises → `failed_unrecoverable`, all three retryable stages (`auto_labeling`, `teacher_training`, `student_distillation`), override forwarding, and no-LLM-call invariant. TODO #27.
+
 ## [0.1.6] — 2026-05-02
 
 ### Fixed
