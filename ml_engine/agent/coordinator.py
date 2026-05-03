@@ -457,78 +457,8 @@ class Coordinator:
             logger.info("Run %s waiting for human input (%s), ignoring event", self.run_id, current)
             return
 
-        # Handle job_failed deterministically — classify, increment retry_count, re-dispatch
         if event_type == "job_failed":
-            retry_count = await sm.retry_count()
-            max_retries = self._contract.budget.max_retries if self._contract else 2
-            failed_stage = current  # capture the work stage before transitioning away
-            if retry_count < max_retries:
-                await sm.transition("failed_retrying", error_message=event.get("error"))
-                logger.info(
-                    "Run %s: job failed on %s (attempt %d/%d), re-dispatching",
-                    self.run_id,
-                    failed_stage,
-                    retry_count + 1,
-                    max_retries,
-                )
-                try:
-                    await sm.transition(failed_stage)
-                except Exception as exc:
-                    logger.error("Run %s: failed to re-enter stage %s: %s", self.run_id, failed_stage, exc)
-                    try:
-                        await sm.transition(
-                            "failed_unrecoverable",
-                            error_message=f"retry dispatch setup failed: {exc}",
-                        )
-                    except Exception as mark_err:
-                        logger.error(
-                            "Run %s: could not mark failed_unrecoverable after re-entry failure: %s",
-                            self.run_id,
-                            mark_err,
-                        )
-                    return
-                retry_context = RunContext(
-                    run_id=self.run_id,
-                    redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
-                    contract=self._contract.to_dict() if self._contract else None,
-                )
-                dispatch_tool = self._tools.get("dispatch_stage")
-                try:
-                    result = await dispatch_tool.execute(
-                        DispatchStageArgs(stage=failed_stage, overrides=state.stage_dispatch_overrides or {}),
-                        retry_context,
-                    )
-                except Exception as dispatch_exc:
-                    logger.error(
-                        "Run %s: dispatch_stage.execute() raised for stage %s: %s",
-                        self.run_id,
-                        failed_stage,
-                        dispatch_exc,
-                    )
-                    try:
-                        await sm.transition(
-                            "failed_unrecoverable",
-                            error_message=f"retry dispatch raised: {dispatch_exc}",
-                        )
-                    except Exception as mark_err:
-                        logger.error("Run %s: could not mark failed_unrecoverable: %s", self.run_id, mark_err)
-                    return
-                if not result.success:
-                    logger.error(
-                        "Run %s: retry dispatch failed for stage %s: %s",
-                        self.run_id,
-                        failed_stage,
-                        result.error,
-                    )
-                    try:
-                        await sm.transition(
-                            "failed_unrecoverable",
-                            error_message=f"retry dispatch failed: {result.error}",
-                        )
-                    except Exception as mark_err:
-                        logger.error("Run %s: could not mark failed_unrecoverable: %s", self.run_id, mark_err)
-            else:
-                await sm.transition("failed_unrecoverable", error_message="max retries exhausted")
+            await self._handle_job_failed(event, sm, state, current)
             return
 
         context = RunContext(
@@ -637,6 +567,122 @@ class Coordinator:
             logger.warning("No response from LLM for run %s on event %s", self.run_id, event_type)
         elif response.get("stop_reason") == "end_turn":
             logger.info("Coordinator done for event %s (run %s)", event_type, self.run_id)
+
+    async def _handle_job_failed(
+        self,
+        event: Dict[str, Any],
+        sm: StateMachine,
+        state: LoopState,
+        current: str,
+    ) -> None:
+        if current == "failed_retrying":
+            # PEL replay: coordinator crashed after persisting failed_retrying but before
+            # completing re-dispatch. Recover the original work stage from SM metadata.
+            data = await sm.load()
+            try:
+                meta = json.loads(data.get("metadata") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            failed_stage = meta.get("retry_work_stage")
+            if not failed_stage:
+                logger.error(
+                    "Run %s: PEL replay in failed_retrying but retry_work_stage missing from metadata",
+                    self.run_id,
+                )
+                try:
+                    await sm.transition(
+                        "failed_unrecoverable",
+                        error_message="PEL replay: retry_work_stage missing from SM metadata",
+                    )
+                except Exception:
+                    pass
+                return
+            logger.info(
+                "Run %s: PEL replay — resuming re-dispatch of %s from failed_retrying",
+                self.run_id,
+                failed_stage,
+            )
+        else:
+            # Fresh job_failed from a retryable work stage.
+            retry_count = await sm.retry_count()
+            max_retries = self._contract.budget.max_retries if self._contract else 2
+            failed_stage = current
+            if retry_count >= max_retries:
+                await sm.transition("failed_unrecoverable", error_message="max retries exhausted")
+                return
+            # Store failed_stage atomically so this handler can recover the stage on PEL replay.
+            await sm.transition(
+                "failed_retrying",
+                error_message=event.get("error"),
+                metadata={"retry_work_stage": failed_stage},
+            )
+            logger.info(
+                "Run %s: job failed on %s (attempt %d/%d), re-dispatching",
+                self.run_id,
+                failed_stage,
+                retry_count + 1,
+                max_retries,
+            )
+
+        # Shared re-dispatch path — reached by both fresh retries and PEL replays.
+        try:
+            await sm.transition(failed_stage)
+        except Exception as exc:
+            logger.error("Run %s: failed to re-enter stage %s: %s", self.run_id, failed_stage, exc)
+            try:
+                await sm.transition(
+                    "failed_unrecoverable",
+                    error_message=f"retry dispatch setup failed: {exc}",
+                )
+            except Exception as mark_err:
+                logger.error(
+                    "Run %s: could not mark failed_unrecoverable after re-entry failure: %s",
+                    self.run_id,
+                    mark_err,
+                )
+            return
+
+        retry_context = RunContext(
+            run_id=self.run_id,
+            redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
+            contract=self._contract.to_dict() if self._contract else None,
+        )
+        dispatch_tool = self._tools.get("dispatch_stage")
+        try:
+            result = await dispatch_tool.execute(
+                DispatchStageArgs(stage=failed_stage, overrides=state.stage_dispatch_overrides or {}),
+                retry_context,
+            )
+        except Exception as dispatch_exc:
+            logger.error(
+                "Run %s: dispatch_stage.execute() raised for stage %s: %s",
+                self.run_id,
+                failed_stage,
+                dispatch_exc,
+            )
+            try:
+                await sm.transition(
+                    "failed_unrecoverable",
+                    error_message=f"retry dispatch raised: {dispatch_exc}",
+                )
+            except Exception as mark_err:
+                logger.error("Run %s: could not mark failed_unrecoverable: %s", self.run_id, mark_err)
+            return
+
+        if not result.success:
+            logger.error(
+                "Run %s: retry dispatch failed for stage %s: %s",
+                self.run_id,
+                failed_stage,
+                result.error,
+            )
+            try:
+                await sm.transition(
+                    "failed_unrecoverable",
+                    error_message=f"retry dispatch failed: {result.error}",
+                )
+            except Exception as mark_err:
+                logger.error("Run %s: could not mark failed_unrecoverable: %s", self.run_id, mark_err)
 
     async def run(
         self,
