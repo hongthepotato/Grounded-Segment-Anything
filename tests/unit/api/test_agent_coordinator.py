@@ -1566,7 +1566,8 @@ class TestRetryDispatch:
 
         run_id = "rd-pel-0003"
         sm = await self._reach_failed_retrying(run_id, fake_redis, "teacher_training")
-        retry_count_before = await sm.retry_count()  # should be 1 after failed_retrying transition
+        retry_count_before = await sm.retry_count()
+        assert retry_count_before == 1, "precondition: retry_count must be 1 after failed_retrying"
 
         coordinator = Coordinator(fake_redis, run_id, contract=self._make_contract())
         dispatch_tool = coordinator._tools.get("dispatch_stage")
@@ -1768,11 +1769,7 @@ class TestRetryDispatch:
 
         original_transition = StateMachine.transition
 
-        call_count = 0
-
         async def patched_transition(self_sm, new_state, **kwargs):
-            nonlocal call_count
-            call_count += 1
             # Let load/other ops through; raise only on re-entry to work stage.
             if new_state == "auto_labeling":
                 raise ValueError("concurrent state mutation")
@@ -1811,6 +1808,7 @@ class TestRetryDispatch:
                 {"type": "job_failed", "error": "worker died"}, LoopState(run_id=run_id)
             )
 
+        assert len(captured_args) == 1, "dispatch must be called exactly once on PEL replay"
         assert captured_args[0].stage == "student_distillation"
         assert await sm.current_state() == "student_distillation"
 
@@ -1839,6 +1837,7 @@ class TestRetryDispatch:
                 LoopState(run_id=run_id, stage_dispatch_overrides=overrides),
             )
 
+        assert len(captured) == 1, "dispatch must be called exactly once on PEL replay"
         assert captured[0].overrides == overrides
 
     @pytest.mark.asyncio

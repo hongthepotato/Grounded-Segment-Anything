@@ -594,8 +594,12 @@ class Coordinator:
                         "failed_unrecoverable",
                         error_message="PEL replay: retry_work_stage missing from SM metadata",
                     )
-                except Exception:
-                    pass
+                except Exception as mark_err:
+                    logger.error(
+                        "Run %s: could not mark failed_unrecoverable after missing metadata: %s",
+                        self.run_id,
+                        mark_err,
+                    )
                 return
             logger.info(
                 "Run %s: PEL replay — resuming re-dispatch of %s from failed_retrying",

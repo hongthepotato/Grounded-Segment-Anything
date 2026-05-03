@@ -332,17 +332,9 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### 27. PEL replay on SIGKILL after `sm.transition("failed_retrying")` — wastes a retry slot
+### ~~27. PEL replay on SIGKILL after `sm.transition("failed_retrying")` — wastes a retry slot~~
 
-**What:** In `on_event` `job_failed` handling, `sm.transition("failed_retrying")` is called before `sm.transition(failed_stage)`. If the coordinator process is SIGKILL'd (OOM-kill, host crash) between those two calls, the SM state is durably written as `"failed_retrying"` in Redis but the stream message was not yet ACKed. On restart, `StreamConsumer` PEL recovery replays the `job_failed` event with `current_state() == "failed_retrying"`. The handler then sets `failed_stage = "failed_retrying"` (wrong) and attempts `sm.transition("failed_retrying")` from `"failed_retrying"` — an invalid self-arc. The inner `except` catches it and routes to `failed_unrecoverable`, wasting the remaining retry budget.
-
-**Why:** Only triggered by hard kills (SIGKILL, OOM-kill, host crash), not graceful shutdown. Narrow window between two async calls.
-
-**Fix:** During `sm.transition("failed_retrying")`, store the captured `failed_stage` in the SM hash (e.g., `retry_work_stage` field). On `job_failed` replay, detect `current == "failed_retrying"` and recover `failed_stage` from that field rather than from `current`.
-
-**Context:** `on_event` job_failed handler at [ml_engine/agent/coordinator.py:460-512](ml_engine/agent/coordinator.py#L460-L512). PEL recovery in `StreamConsumer`.
-
-**Depends on / blocked by:** TODO #22 (now complete). Low urgency — only SIGKILL/OOM scenarios; graceful restarts are unaffected.
+**Completed:** v0.1.7 (2026-05-03) — Extracted `_handle_job_failed()` from `on_event`. Fresh path stores `retry_work_stage` atomically in SM metadata alongside the `failed_retrying` transition. PEL replay path detects `current == "failed_retrying"`, reads `retry_work_stage` back from `sm.load()`, skips budget charge, and converges at shared re-dispatch block. Missing or corrupt metadata routes to `failed_unrecoverable` with an error log. 14 new tests in `TestRetryDispatch` covering corrupt/missing/wrong metadata, dispatch raises, SM re-entry raises, all three stages, and budget double-charge regression.
 
 ---
 
