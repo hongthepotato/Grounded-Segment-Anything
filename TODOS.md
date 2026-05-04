@@ -332,6 +332,79 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
+### 28. Adopt typed config dataclasses across teacher training pipeline
+
+**What:** `origin/ros2-integration` commit `c11a123` ("clear typed config in fine-tuning pipeline") introduced typed config dataclasses (`TeacherTrainingConfig`, `LoopConfig`, `LoraConfig`, `GroundingDINOConfig`, `SAMConfig`, `ConfigurationError`) in `ml_engine/training/config_types.py` and rewrote `teacher.py`, `trainer.py`, and the three `model_trainers/*` files to use typed attribute access (`self.config.foo`) instead of dict-based access (`self.config.get("foo", default)`). The agentic ← ros2-integration merge took agentic's dict-based versions wholesale for those 5 files. `config_types.py` itself landed in the tree as an orphan (no consumers post-merge).
+
+**Why deferred:** The typed-config refactor touched the same lines as ~10 unrelated agentic-side changes (`job_id` lineage, BN re-freeze in `TrainingManager`, epoch-level scheduler step, NaN-batch skip, differential SAM LR, `JobOutcome`/`outcome.json` write, ruff/mypy cleanup). Combining both inside the merge would have required a coordinated multi-file rewrite that's a refactor in its own right, not a merge resolution. Land the merge clean; ship typed configs as a focused follow-up.
+
+**Files to touch when this is picked up:**
+- `ml_engine/training/config_types.py` — already in tree (orphan). If deleted before this work begins, recover via `git show origin/ros2-integration:ml_engine/training/config_types.py`.
+- `ml_engine/training/config.py::build_teacher_training_config()` — currently returns `dict`; change return type to `TeacherTrainingConfig`.
+- `ml_engine/training/trainer.py` — `Trainer.__init__` config param + ~6 internal `self.config.get(...)` sites become typed attribute access. Keep agentic-only changes (epoch-level `step_scheduler()`, `train()` returns `Dict[str, float]`, `stop_training` early-stop fix, `BundleManifest.lineage={"job_id": self.job_id}`).
+- `ml_engine/training/model_trainers/base.py` — `__init__` adds `loop: LoopConfig` kwarg; rewrite `_create_optimizer`, `_create_scheduler`, `save_checkpoint`, `save_adapters` for typed access. Keep agentic-only changes (`self.model: Any` PEFT-boundary annotation, `step_scheduler()` method, `TrainingManager(... config_overrides=...)`).
+- `ml_engine/training/model_trainers/grounding_dino.py` — `_load_model` typed access. Keep agentic-only `_get_positive_map` cache, NaN-batch skip in `compute_loss`, PEFT unwrap in `_create_criterion`.
+- `ml_engine/training/model_trainers/sam.py` — `_load_model` + the new agentic `_create_optimizer` override (differential LR for mask_decoder vs LoRA) rewritten for typed access. Keep agentic-only `max_valid` trim in `compute_loss`.
+- `ml_engine/jobs/handlers/teacher.py` — `build_teacher_training_config` returns `TeacherTrainingConfig`; ros2's inline `_build_config` method can be inlined here or kept in `config.py` — pick one location, not both.
+
+**Schema gap that must be closed before adoption:** `TeacherTrainingConfig` has no `training_dynamics` field. Agentic uses `cfg.get("training_dynamics")` (commit `ceb3124`) to forward HPO overrides into `TrainingManager`. Without adding `training_dynamics: Optional[Dict[str, Any]] = None` to `TeacherTrainingConfig` (or per-model configs), the HPO path silently breaks under typed configs.
+
+**Pros:**
+- Mypy catches typo'd config field names at static-analysis time instead of producing silent `None` defaults at runtime.
+- Self-documenting: the dataclass IS the schema; no chasing docstrings or grepping for `cfg.get(`.
+- Eliminates the scattered hardcoded defaults pattern (`cfg.get("foo", DEFAULT_FOO)` repeated across files).
+
+**Cons:**
+- Coordinated edit across 6 files. Each `cfg.get(...)` site needs individual rewriting. Many sites were ruff-touched on agentic so diffs look larger than the semantic change.
+- Schema rigidity: adding a new HPO knob requires touching both YAML and the dataclass (also arguably a feature — explicit schema evolution).
+- ros2's `_build_config` uses `dataclasses.fields` filtering to silently drop unknown YAML keys. Decide whether to keep that behavior (forgiving) or raise on unknown keys (strict).
+
+**Recommended sequencing:**
+1. Add `training_dynamics: Optional[Dict[str, Any]] = None` to `TeacherTrainingConfig` in `config_types.py`. Without this step, HPO breaks the moment typed configs land.
+2. Rewrite `build_teacher_training_config()` to return `TeacherTrainingConfig`.
+3. Update `Trainer.__init__` signature and internal accesses.
+4. Update `BaseModelTrainer.__init__` and the 4 affected method bodies.
+5. Update `grounding_dino.py` and `sam.py` `_load_model` (and SAM's new `_create_optimizer` override).
+6. Drop the inline `_build_config` from `teacher.py` if duplicated by `config.py`.
+7. Run `mypy --strict ml_engine/training/` — typed config should clear most remaining `Any`-boundary noise here.
+
+**Context:** Surfaced 2026-05-03 during the ros2-integration → agentic merge resolution. The full pre-merge analysis (per-file diff classification + load-bearing-vs-deferrable verdict) is in the merge commit message and accompanying merge worklog. The 4-line sketch of why combined resolution would force a multi-file rewrite is documented inline in the merge commit.
+
+**Depends on / blocked by:** ros2-integration → agentic merge must land first (the post-merge tree is the working baseline). No external dependencies.
+
+---
+
+### 29. Rewrite ros2-integration's 3 new test files (incomplete + sync-API mismatch)
+
+**What:** ros2-integration added several test files under `tests/unit/ml_engine/` and `tests/unit/composer/` that need rework before they actually exercise their targets. They are accepted into the merge as-is to keep the merge focused on conflict resolution; their cleanup is tracked here.
+
+**Files affected:**
+- `tests/unit/ml_engine/test_distillation_ros2_integration.py` — half-written. `TestDistillationStep5::test_ros2_build_triggered_when_flag_set` sets up `progress_queue`, `cancel_event`, `mock_run` fixtures but the body is `with patch.object(handler, "run") as mock_run: pass` — placeholder, never wired up. The test never actually invokes the real `StudentDistillationHandler.run()` and never asserts that `build_ros2_container` was called. **Result: this test currently passes vacuously.** F841 unused-local is suppressed via `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` until the test logic is finished.
+- `tests/unit/composer/test_registry.py` — same pattern. A `mock_schema` dict is constructed at line 155 but never used by the surrounding test (the test mocks `always_fail` instead). F841 also suppressed via per-file-ignores. Likely the test was written, the author switched the mocking strategy, and the now-orphaned fixture got left behind.
+- `tests/unit/ml_engine/test_deploy_api.py` — written against the **sync** `JobManager` API. After agentic's async refactor (`AsyncJobManager`, `async def`), these tests fail at import or at first call. Needs to be rewritten with `pytest.mark.asyncio` + `AsyncMock` / `AsyncJobManager` fixtures.
+- `tests/unit/ml_engine/test_yolo_node.py` — had unused imports (`patch`, `PropertyMock`, `torch`, etc.) — already auto-fixed by `ruff check --fix` during the merge. Needs a manual review pass to confirm the test logic actually exercises `serve/ros2_ws/src/yolo_inference/yolo_inference/node.py` correctly post-cleanup; the unused imports may signal scaffolded-but-not-wired code paths.
+
+**Why deferred:** Test rewrites would have multiplied the merge resolution scope. Better to land the merge clean (with the test files in their as-merged state and the lint gate green via per-file-ignores) and rewrite tests as a focused follow-up where each file gets the attention it needs.
+
+**Pros:**
+- Restores meaningful test coverage for the ros2 features (container_builder + deploy endpoints + YOLO node).
+- Removes the per-file-ignore in `pyproject.toml` once `test_distillation_ros2_integration.py` is finished.
+- Aligns ros2's tests with agentic's async API.
+
+**Cons:**
+- Each file is its own design exercise — can't be done in a single sed pass. The distillation_ros2_integration test in particular needs a decision on whether to integration-test (subprocess invocation + real handler.run) or unit-test (mock everything around `build_ros2_container`).
+
+**Recommended sequencing:**
+1. **`test_deploy_api.py` first** — straightforward async port using `pytest.mark.asyncio` + `AsyncMock`. Mirror the agentic pattern in any existing `tests/unit/api/test_*_async.py` test as a reference.
+2. **`test_distillation_ros2_integration.py` next** — finish the test logic. The author's intent (per the inline comment) is to `patch build_ros2_container and verify it's called with correct args when flag is set` — that's a clean unit test. Drop the `with patch.object(handler, "run") as mock_run: pass` scaffolding; the real test is patching `build_ros2_container` and calling `handler.run(...)` directly with `build_ros2_container=true` in the job_config. Then remove the per-file-ignore from `pyproject.toml`.
+3. **`test_yolo_node.py` last** — review whether the auto-fixed unused imports leave the test exercising real code paths. Add missing assertions if needed.
+
+**Context:** Surfaced 2026-05-03 during the ros2-integration → agentic merge resolution (Step 13c — ruff lint pass). The 3 files were added by ros2 commits `34b35f6` ("test: add unit tests for platform and block nodes (written, not run)") and `8655e13`. The "(written, not run)" parenthetical in the commit message is candid: these tests were authored but the author never executed them, so test-time bugs were not caught pre-merge.
+
+**Depends on / blocked by:** ros2-integration → agentic merge must land first. No external dependencies. `test_deploy_api.py` needs the rewriter to be familiar with `AsyncJobManager` patterns from agentic's existing async tests.
+
+---
+
 ### ~~27. PEL replay on SIGKILL after `sm.transition("failed_retrying")` — wastes a retry slot~~
 
 **Completed:** v0.1.7 (2026-05-03) — Extracted `_handle_job_failed()` from `on_event`. Fresh path stores `retry_work_stage` atomically in SM metadata alongside the `failed_retrying` transition. PEL replay path detects `current == "failed_retrying"`, reads `retry_work_stage` back from `sm.load()`, skips budget charge, and converges at shared re-dispatch block. Missing or corrupt metadata routes to `failed_unrecoverable` with an error log. 14 new tests in `TestRetryDispatch` covering corrupt/missing/wrong metadata, dispatch raises, SM re-entry raises, all three stages, and budget double-charge regression.

@@ -1,0 +1,61 @@
+{
+  "id": "zed2",
+  "version": "1.0.0",
+  "display_name": "Zed 2",
+  "category": "sensor",
+  "hardware_family": "camera",
+  "icon": "camera",
+  "hardware_detection_hint": "zed",
+  "ports": {
+    "output": [
+      {
+        "id": "color_out",
+        "alias": "image_frame",
+        "ros2_type": "sensor_msgs/Image",
+        "label": "Color Camera"
+      },
+      {
+        "id": "depth_out",
+        "alias": "depth_frame",
+        "ros2_type": "sensor_msgs/Image",
+        "label": "Depth",
+        "optional": true
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "camera_index",
+      "type": "int",
+      "label": "Camera index",
+      "default": 0,
+      "min": 0,
+      "max": 3
+    },
+    {
+      "id": "resolution",
+      "type": "enum",
+      "label": "Resolution",
+      "default": "HD720",
+      "options": ["VGA", "HD720", "HD1080", "HD2K"]
+    },
+    {
+      "id": "fps",
+      "type": "int",
+      "label": "Frame rate",
+      "default": 30,
+      "min": 15,
+      "max": 100,
+      "units": "fps"
+    }
+  ],
+  "engineer_params": [
+    {
+      "id": "depth_mode",
+      "type": "enum",
+      "label": "Depth quality mode",
+      "default": "PERFORMANCE",
+      "options": ["NONE", "PERFORMANCE", "QUALITY", "ULTRA"]
+    }
+  ]
+}

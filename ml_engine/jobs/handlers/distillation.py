@@ -11,6 +11,7 @@ Orchestrates the full offline distillation pipeline:
 import json
 import logging
 import multiprocessing as mp
+import os
 import queue
 import shutil
 from multiprocessing.synchronize import Event as MpEvent
@@ -184,3 +185,38 @@ class StudentDistillationHandler(JobHandler):
         logger.info("Outcome written: %s", outcome)
 
         _report("Student distillation complete!", best_pt=str(final_weights))
+
+        # --- Step 5 (optional): Build + push ROS2 inference container ---
+        if job_config.get("build_ros2_container", False):
+            registry_url = job_config.get(
+                "registry_url",
+                os.environ.get("REGISTRY_PUSH_URL", "host-gateway:5000"),
+            )
+
+            _report(
+                "Building ROS2 container (this takes 5-90 min on first ARM64 build)...",
+                current_step="ros2_build",
+                total_steps=1,
+            )
+            try:
+                from ml_engine.export.container_builder import build_ros2_container
+
+                image_tag = build_ros2_container(
+                    model_weights=final_weights,
+                    job_id=job_id,
+                    registry_url=registry_url,
+                    cancel_event=cancel_event,
+                    report_fn=lambda msg: _report(msg),
+                )
+                _report(
+                    f"ROS2 container ready: {image_tag}",
+                    ros2_image_tag=image_tag,
+                )
+            except Exception as ros2_err:
+                # Build failure is WARNING-only: job still completes.
+                # Operator can retry via POST /api/jobs/{job_id}/build-ros2
+                logger.warning("ROS2 container build failed (job still COMPLETED): %s", ros2_err)
+                _report(
+                    "Container build failed — use POST /api/jobs/{job_id}/build-ros2 to retry.",
+                    ros2_build_error=str(ros2_err),
+                )

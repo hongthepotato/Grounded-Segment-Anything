@@ -1,0 +1,35 @@
+{
+  "id": "confidence-filter",
+  "version": "1.0.0",
+  "display_name": "Confidence Filter",
+  "category": "logic",
+  "icon": "filter",
+  "ports": {
+    "input": [
+      {
+        "id": "detections_in",
+        "alias": "detections",
+        "ros2_type": "vision_msgs/Detection2DArray",
+        "label": "Raw Detections"
+      }
+    ],
+    "output": [
+      {
+        "id": "filtered_out",
+        "alias": "filtered_detections",
+        "ros2_type": "vision_msgs/Detection2DArray",
+        "label": "Filtered Detections"
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "min_confidence",
+      "type": "float",
+      "label": "Minimum confidence",
+      "default": 0.7,
+      "min": 0.0,
+      "max": 1.0
+    }
+  ]
+}

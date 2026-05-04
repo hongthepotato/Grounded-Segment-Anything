@@ -1,0 +1,56 @@
+{
+  "id": "conveyor-stop",
+  "version": "1.0.0",
+  "display_name": "Conveyor Stop Signal",
+  "category": "action",
+  "hardware_family": "conveyor",
+  "icon": "stop",
+  "ports": {
+    "input": [
+      {
+        "id": "flag_in",
+        "alias": "flag_event",
+        "ros2_type": "std_msgs/Bool",
+        "label": "Stop Trigger"
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "trigger_on_true",
+      "type": "bool",
+      "label": "Trigger stop when flag is TRUE",
+      "default": true
+    }
+  ],
+  "engineer_params": [
+    {
+      "id": "plc_address",
+      "type": "string",
+      "label": "PLC Modbus TCP address (host:port)",
+      "default": "192.168.1.100:502"
+    },
+    {
+      "id": "register_address",
+      "type": "int",
+      "label": "Coil register address",
+      "default": 0,
+      "min": 0,
+      "max": 65535
+    },
+    {
+      "id": "stop_command",
+      "type": "string",
+      "label": "Stop command byte (hex)",
+      "default": "0x01"
+    },
+    {
+      "id": "cooldown_ms",
+      "type": "int",
+      "label": "Minimum time between stops",
+      "default": 2000,
+      "min": 0,
+      "units": "ms"
+    }
+  ]
+}
