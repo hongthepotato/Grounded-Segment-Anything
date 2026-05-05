@@ -374,7 +374,7 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### 29. Rewrite ros2-integration's 3 new test files (incomplete + sync-API mismatch)
+### ~~29. Rewrite ros2-integration's 3 new test files (incomplete + sync-API mismatch)~~ (ml_engine files complete; composer remainder below)
 
 **What:** ros2-integration added several test files under `tests/unit/ml_engine/` and `tests/unit/composer/` that need rework before they actually exercise their targets. They are accepted into the merge as-is to keep the merge focused on conflict resolution; their cleanup is tracked here.
 
@@ -400,6 +400,8 @@ and the audit, but each wants a callsite enumeration before shipping.
 3. **`test_yolo_node.py` last** — review whether the auto-fixed unused imports leave the test exercising real code paths. Add missing assertions if needed.
 
 **Context:** Surfaced 2026-05-03 during the ros2-integration → agentic merge resolution (Step 13c — ruff lint pass). The 3 files were added by ros2 commits `34b35f6` ("test: add unit tests for platform and block nodes (written, not run)") and `8655e13`. The "(written, not run)" parenthetical in the commit message is candid: these tests were authored but the author never executed them, so test-time bugs were not caught pre-merge.
+
+**Completed (ml_engine portion):** v0.1.7 (2026-05-05) — `test_deploy_api.py` fixed: patched `get_job_manager` (sync, background-thread-only) swapped for `app.dependency_overrides[get_manager]`; `mock_manager.get_job` upgraded from `MagicMock` to `AsyncMock` (it's awaited in `_validate_completed_job`). `test_distillation_ros2_integration.py` fixed: `_complete_job` now receives a real `SubprocessResult(success=True, cancelled=False, output_dir=..., outcome={})` instead of a bare path string. `test_yolo_node.py` fixed: `boxes.__len__ = MagicMock(return_value=1)` so `range(len(boxes))` iterates once; detections now map correctly. All 21 tests in these 3 files pass. F841 per-file-ignore removed for `test_distillation_ros2_integration.py`. **Remaining:** `tests/unit/composer/test_registry.py` still has F841 suppress and `bcrypt`/`jsonschema` missing-package failures — tracked as a separate composer environment issue.
 
 **Depends on / blocked by:** ros2-integration → agentic merge must land first. No external dependencies. `test_deploy_api.py` needs the rewriter to be familiar with `AsyncJobManager` patterns from agentic's existing async tests.
 
