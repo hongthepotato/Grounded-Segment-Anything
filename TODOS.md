@@ -128,7 +128,7 @@ Then the route's main loop becomes `async for event in _subscribe_to_events(...)
 
 ---
 
-### 18. Tighten remaining `api/schemas.py` enum/range validators (7 truly-breaking categories — needs frontend audit)
+### ~~18. Tighten remaining `api/schemas.py` enum/range validators (7 truly-breaking categories — needs frontend audit)~~
 
 **What:** 7 `api/schemas.py` fields still have docstring-vs-validator
 gaps after the safe subset shipped in PR test/p2-api-schemas. Each is
@@ -248,6 +248,8 @@ points at the exact source line + recommended fix.
 **Depends on / blocked by:** Frontend audit for the enum tightenings.
 HTTP code + non-empty list + paired flag are independent of each other
 and the audit, but each wants a callsite enumeration before shipping.
+
+**Completed:** v0.1.8 (2026-05-05) — All 7 categories shipped in PR fix/xfails-and-f841. Enum tightenings: `ApiResponse.status` → `Literal["succeed", "failed"]`, `JobCreate.job_type` → `Literal["teacher_training", "student_distillation"]`, `AutoLabelRequest.output_mode` → `Literal["boxes", "masks", "both"]`, `WorkerResponse.status` → `Literal["idle", "busy", "offline"]`. Range: `ApiResponse.code` → `Field(ge=100, le=599)`. Non-empty lists: `AutoLabelRequest.image_paths` + `classes` → `Field(min_length=1)`. Paired flag: `DistillationRequest._check_paired_fields` model_validator added. All 37 xfails removed and passing as regular tests.
 
 ---
 
@@ -374,7 +376,7 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### ~~29. Rewrite ros2-integration's 3 new test files (incomplete + sync-API mismatch)~~ (ml_engine files complete; composer remainder below)
+### ~~29. Rewrite ros2-integration's 3 new test files (incomplete + sync-API mismatch)~~
 
 **What:** ros2-integration added several test files under `tests/unit/ml_engine/` and `tests/unit/composer/` that need rework before they actually exercise their targets. They are accepted into the merge as-is to keep the merge focused on conflict resolution; their cleanup is tracked here.
 
@@ -401,9 +403,19 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 **Context:** Surfaced 2026-05-03 during the ros2-integration → agentic merge resolution (Step 13c — ruff lint pass). The 3 files were added by ros2 commits `34b35f6` ("test: add unit tests for platform and block nodes (written, not run)") and `8655e13`. The "(written, not run)" parenthetical in the commit message is candid: these tests were authored but the author never executed them, so test-time bugs were not caught pre-merge.
 
-**Completed (ml_engine portion):** v0.1.7 (2026-05-05) — `test_deploy_api.py` fixed: patched `get_job_manager` (sync, background-thread-only) swapped for `app.dependency_overrides[get_manager]`; `mock_manager.get_job` upgraded from `MagicMock` to `AsyncMock` (it's awaited in `_validate_completed_job`). `test_distillation_ros2_integration.py` fixed: `_complete_job` now receives a real `SubprocessResult(success=True, cancelled=False, output_dir=..., outcome={})` instead of a bare path string. `test_yolo_node.py` fixed: `boxes.__len__ = MagicMock(return_value=1)` so `range(len(boxes))` iterates once; detections now map correctly. All 21 tests in these 3 files pass. F841 per-file-ignore retained for `test_distillation_ros2_integration.py` (`progress_queue`, `cancel_event`, `mock_run` in `test_ros2_build_triggered_when_flag_set` are still unused placeholders — the test asserts on config flags but never wires up the `build_ros2_container` call). **Remaining:** `tests/unit/composer/test_registry.py` still has F841 suppress and `bcrypt`/`jsonschema` missing-package failures — tracked as a separate composer environment issue.
+**Completed:** v0.1.8 (2026-05-05) — All remaining items resolved in PR fix/xfails-and-f841. `test_distillation_ros2_integration.py`: removed dead scaffolding (`progress_queue`, `cancel_event`, `called_with`, `fake_build`, inert `patch` context) from `test_ros2_build_triggered_when_flag_set`; test now directly asserts config keys without unused locals; renamed docstring to match actual assertion scope. `test_registry.py`: removed unused `mock_schema` variable; `always_fail` monkeypatching pattern retained. Both F841 per-file-ignores removed from `pyproject.toml`. All composer tests pass (`bcrypt`/`jsonschema` resolved in v0.1.7 via declared-deps fix). **ml_engine portion completed v0.1.7** — see that entry for `test_deploy_api.py`, `_complete_job` SubprocessResult, and `test_yolo_node.py` fixes.
 
 **Depends on / blocked by:** ros2-integration → agentic merge must land first. No external dependencies. `test_deploy_api.py` needs the rewriter to be familiar with `AsyncJobManager` patterns from agentic's existing async tests.
+
+---
+
+### 30. `save_merged_model` metadata layout — cleaner separation of framework vs caller keys
+
+**What:** `ml_engine/export/merger.py:save_merged_model` merges `extra_metadata` into a single `metadata` dict alongside framework integrity fields (`format`, `peft_merged`, `requires_peft`). The current fix (PR fix/xfails-and-f841) applies `extra_metadata` first then overwrites with framework keys — so callers silently lose any reserved keys they pass. A cleaner design would separate the two layers into distinct checkpoint keys (e.g. `checkpoint["metadata"]` for framework fields, `checkpoint["training_info"]` for caller-provided provenance), or raise explicitly when `extra_metadata` contains reserved keys.
+
+**Why deferred:** The silent-overwrite fix is the minimal correct change that makes `load_merged_model`'s format-detection invariant load-bearing. A structural redesign touches the on-disk checkpoint format (breaking change for existing `.pth` files) and all callers of `save_merged_model` and `load_merged_model`. Not worth doing mid-PR.
+
+**Files to touch:** `ml_engine/export/merger.py`, `ml_engine/export/packager.py` (passes `training_info` as `extra_metadata`), any tests that introspect `checkpoint["metadata"]` directly.
 
 ---
 
