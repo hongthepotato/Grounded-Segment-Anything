@@ -1,6 +1,6 @@
 [project]
 name = "grounded-segment-anything"
-version = "0.1.7"
+version = "0.1.8"
 description = "ML platform: Grounding DINO + SAM for auto-labeling, training, and inference"
 requires-python = ">=3.10,<3.11"
 dependencies = [
@@ -208,12 +208,6 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
-
-[tool.ruff.lint.per-file-ignores]
-# These test files have unused locals from scaffolded-but-not-finished test logic.
-# Tracked in TODOS.md #29 for cleanup. F841 suppressed so ruff gates stay green.
-"tests/unit/ml_engine/test_distillation_ros2_integration.py" = ["F841"]
-"tests/unit/composer/test_registry.py" = ["F841"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

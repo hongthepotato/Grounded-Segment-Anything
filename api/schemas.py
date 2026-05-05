@@ -42,8 +42,8 @@ class ApiResponse(BaseModel, Generic[T]):
         }
     """
 
-    code: int = Field(..., description="HTTP status code")
-    status: str = Field(..., description="Business status: 'succeed' or 'failed'")
+    code: int = Field(..., ge=100, le=599, description="HTTP status code")
+    status: Literal["succeed", "failed"] = Field(..., description="Business status")
     data: Optional[T] = Field(default=None, description="Response data (present when succeed)")
     error: Optional[str] = Field(default=None, description="Error message (present when failed)")
 
@@ -140,7 +140,7 @@ class JobCreate(BaseModel):
         }
     """
 
-    job_type: str = Field(..., description="Type of job (teacher_training, student_distillation)")
+    job_type: Literal["teacher_training", "student_distillation"] = Field(..., description="Type of job")
     config: Dict[str, Any] = Field(..., description="Job configuration (data paths, hyperparameters)")
     priority: int = Field(default=0, description="Job priority (higher = more urgent)")
     output_dir: Optional[str] = Field(
@@ -204,7 +204,7 @@ class WorkerResponse(BaseModel):
     id: str = Field(..., description="Worker ID")
     gpu_id: int = Field(..., description="GPU device ID")
     hostname: str = Field(..., description="Machine hostname")
-    status: str = Field(..., description="Worker status (idle, busy, offline)")
+    status: Literal["idle", "busy", "offline"] = Field(..., description="Worker status")
     current_job_id: Optional[str] = Field(default=None, description="Current job ID")
     last_heartbeat: Optional[datetime] = Field(default=None, description="Last heartbeat")
     started_at: Optional[datetime] = Field(default=None, description="Worker start time")
@@ -259,9 +259,9 @@ class AutoLabelRequest(BaseModel):
         }
     """
 
-    image_paths: List[str] = Field(..., description="List of image paths")
-    classes: List[str] = Field(..., description="List of class names to detect")
-    output_mode: str = Field(default="boxes", description="Output mode: 'boxes', 'masks', or 'both'")
+    image_paths: List[str] = Field(..., min_length=1, description="List of image paths")
+    classes: List[str] = Field(..., min_length=1, description="List of class names to detect")
+    output_mode: Literal["boxes", "masks", "both"] = Field(default="boxes", description="Output mode")
     box_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Detection confidence threshold")
     text_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Text matching threshold")
     nms_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Non-Maximum Suppression threshold")
@@ -301,6 +301,17 @@ class DistillationRequest(BaseModel):
         default=None, description="Output directory (auto-generated if not provided)"
     )
     tags: List[str] = Field(default_factory=list, description="Optional tags for filtering")
+
+    @model_validator(mode="after")
+    def _check_paired_fields(self) -> "DistillationRequest":
+        """teacher_dir and unlabeled_image_paths are paired — both or neither."""
+        has_teacher = self.teacher_dir is not None
+        has_unlabeled = self.unlabeled_image_paths is not None
+        if has_teacher != has_unlabeled:
+            raise ValueError(
+                "teacher_dir and unlabeled_image_paths must be set together: provide both or neither."
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_split_config(self) -> "DistillationRequest":

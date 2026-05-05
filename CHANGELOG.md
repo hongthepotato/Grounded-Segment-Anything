@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.8] — 2026-05-05
+
+### Fixed
+
+- **Schema validation gaps closed** — `ApiResponse.code` now enforces HTTP range (`ge=100, le=599`); `ApiResponse.status`, `JobCreate.job_type`, `AutoLabelRequest.output_mode`, and `WorkerResponse.status` are tightened from plain `str` to `Literal` types so invalid values are rejected at the boundary with a clear `ValidationError` instead of a downstream dispatch error. `AutoLabelRequest.image_paths` and `classes` gain `min_length=1` constraints.
+- **`DistillationRequest` paired-field invariant enforced** — A new `_check_paired_fields` model validator ensures `teacher_dir` and `unlabeled_image_paths` are either both provided or both absent; previously only one could be set without raising.
+- **Merger metadata merge order fixed** — `save_merged_model` previously applied `extra_metadata` after the framework integrity keys (`format`, `peft_merged`, `requires_peft`), allowing callers to silently overwrite them. Framework keys now overwrite caller keys so `load_merged_model`'s format-prefix check stays reliable. Deferred architectural redesign tracked in TODO #30.
+- **`load_merged_model` raises clean errors on malformed checkpoints** — Missing `model_state_dict` key and non-dict `metadata` values now raise `RuntimeError` with a descriptive message instead of a bare `KeyError` or `AttributeError`.
+- **`create_export_package` cleanup always runs** — The temp `package_dir` is now deleted in a `try/finally` block so it is cleaned up even when any of the four build steps raises. A secondary guard wraps the `rmtree` call to prevent cleanup failures from masking the original exception.
+- **`_build_autolabeler_config` validates output mode upfront** — Unknown `output_mode` strings raise `ValueError` immediately instead of silently falling through. Boxes-only mode without a fine-tuned detector also raises early, symmetric with the existing segmenter check. Both detector and segmenter resolver-invariant violations now raise `RuntimeError` (replacing bare `assert` which is stripped under `-O`).
+
+### Tests
+
+- **45 xfail markers removed** — All 45 `@pytest.mark.xfail(strict=True)` markers across five test files have been resolved: the production code gaps they tracked are now fixed. Tests in `test_schemas.py`, `test_merger.py`, `test_packager.py`, `test_pseudo_label.py`, and `test_distillation_ros2_integration.py` now pass unconditionally. `strict=True` enforcement means any regression will be caught immediately.
+- **F841 per-file-ignores removed from pyproject.toml** — Two suppression entries for unused-local-variable warnings (`F841`) in `test_distillation_ros2_integration.py` and `test_registry.py` are removed; the actual unused variables have been cleaned up.
+
 ## [0.1.7] — 2026-05-03
 
 ### Fixed

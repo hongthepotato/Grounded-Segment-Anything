@@ -151,8 +151,6 @@ class TestScanBlocks:
 
     def test_scan_marks_validation_errors(self, registry_module, blocks_dir, monkeypatch):
         reg = registry_module
-        # Re-enable schema validation with a mock that always fails
-        mock_schema = {"$schema": "...", "type": "object", "required": ["REQUIRED_FIELD_MISSING"]}
 
         def always_fail(block):
             return ["test validation error"]

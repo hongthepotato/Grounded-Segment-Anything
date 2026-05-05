@@ -146,16 +146,6 @@ class TestBuildAutoLabelerConfigOutputMode:
         )
         assert cfg.output_mode == OUTPUT_BOXES_ONLY
 
-    @pytest.mark.xfail(
-        reason=(
-            "GAP: _build_autolabeler_config validates that segmentation modes "
-            "require a segmenter, but does NOT validate that boxes mode requires "
-            "a detector. A user can request OUTPUT_BOXES_ONLY with no detector "
-            "adapter and get a config with detector=None — failure surfaces only "
-            "later inside the AutoLabeler. Symmetric validation would be cleaner."
-        ),
-        strict=True,
-    )
     def test_boxes_only_without_detector_raises(self):
         """Parallel gap to the segmenter check: boxes-mode without detector should fail upfront."""
         with pytest.raises(ValueError, match="(?i)detect|detector"):
@@ -164,15 +154,6 @@ class TestBuildAutoLabelerConfigOutputMode:
                 distill_cfg={"pseudo_label": {"output_mode": OUTPUT_BOXES_ONLY}},
             )
 
-    @pytest.mark.xfail(
-        reason=(
-            "GAP: an unknown output_mode (e.g. 'garbage') is silently accepted "
-            "because the check `in (OUTPUT_BOTH, OUTPUT_MASKS_ONLY)` is False, "
-            "skipping the segmenter requirement. The bogus mode is then handed "
-            "to AutoLabelerConfig. Should be rejected at the boundary."
-        ),
-        strict=True,
-    )
     def test_unknown_output_mode_raises(self):
         """An unknown output_mode string should be rejected by the builder."""
         with pytest.raises(ValueError, match="(?i)output_mode|invalid|unknown"):
@@ -224,16 +205,6 @@ class TestBuildAutoLabelerConfigAdapters:
         )
         assert cfg.detector.merged_cache_path is None
 
-    @pytest.mark.xfail(
-        reason=(
-            "GAP: when detector_adapter_dir is set but detector_manifest is None "
-            "(invariant violation that resolve_teacher_artifacts SHOULD prevent, "
-            "but isn't enforced by typing), the builder crashes with a bare "
-            "AttributeError on `manifest.base_model.config_path`. A clean "
-            "RuntimeError naming the inconsistency would help debugging."
-        ),
-        strict=True,
-    )
     def test_detector_adapter_dir_without_manifest_raises_clean_error(self):
         """
         Inconsistent ResolvedArtifacts (dir set, manifest missing) should raise
@@ -391,14 +362,6 @@ class TestGeneratePseudoLabelsValidationGaps:
         )
         assert result["annotations"] == []
 
-    @pytest.mark.xfail(
-        reason=(
-            "DOCS BUG: the docstring for generate_pseudo_labels lists every Args "
-            "entry except `distillation_cfg` (the most important parameter). The "
-            "test asserts the docstring mentions it; failing surfaces the gap."
-        ),
-        strict=True,
-    )
     def test_distillation_cfg_appears_in_docstring(self):
         """The docstring should document every parameter — including distillation_cfg."""
         doc = inspect.getdoc(generate_pseudo_labels) or ""
