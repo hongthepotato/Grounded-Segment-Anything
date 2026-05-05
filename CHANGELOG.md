@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.9] — 2026-05-05
+
+### Changed
+
+- **`save_merged_model` checkpoint format redesigned** — Framework integrity fields (`format`, `peft_merged`, `requires_peft`) are now stored exclusively in `checkpoint["metadata"]`. Caller-supplied training provenance (epochs, metrics, git SHA, etc.) is stored in a separate `checkpoint["training_info"]` top-level key, written only when the caller provides a non-empty dict. The two namespaces can no longer interfere — reserved key names in `training_info` are preserved intact rather than silently dropped. Parameter renamed from `extra_metadata` to `training_info` for honesty. Old checkpoints (no `training_info` key) load cleanly — `load_merged_model` reads only `checkpoint["metadata"]`.
+
+### Tests
+
+- **Merger test suite updated for new checkpoint layout** — `test_training_info_stored_at_separate_checkpoint_key` (renamed from `test_extra_metadata_merged_into_metadata_dict`) asserts that caller provenance lives in `checkpoint["training_info"]` and that framework fields are absent from it. `test_training_info_cannot_affect_metadata_even_with_reserved_key_names` (renamed from `test_extra_metadata_cannot_clobber_framework_defaults`) proves physical isolation: the same key name in `training_info` does not affect `metadata`. Added: absence assertion verifying `training_info` is not written when caller provides nothing.
+
 ## [0.1.8] — 2026-05-05
 
 ### Fixed
