@@ -15,6 +15,7 @@ from ml_engine.inference.auto_labeler import AutoLabeler
 from ml_engine.inference.config import (
     DETECTOR_SOURCE_BASE_LORA,
     OUTPUT_BOTH,
+    OUTPUT_BOXES_ONLY,
     OUTPUT_MASKS_ONLY,
     SEGMENTER_SAM_HQ,
     AutoLabelerConfig,
@@ -25,6 +26,8 @@ from ml_engine.inference.config import (
 from ml_engine.inference.exporters.coco import COCOExporter
 
 logger = logging.getLogger(__name__)
+
+_VALID_OUTPUT_MODES = (OUTPUT_BOXES_ONLY, OUTPUT_MASKS_ONLY, OUTPUT_BOTH)
 
 
 def _build_autolabeler_config(
@@ -42,20 +45,31 @@ def _build_autolabeler_config(
     )
     output_mode = pseudo_cfg.get("output_mode", OUTPUT_BOTH)
 
+    if output_mode not in _VALID_OUTPUT_MODES:
+        raise ValueError(
+            f"Unknown output_mode {output_mode!r}. Must be one of: {', '.join(_VALID_OUTPUT_MODES)}"
+        )
+
     if output_mode in (OUTPUT_BOTH, OUTPUT_MASKS_ONLY) and not artifacts.has_segmenter:
         raise ValueError(
             "Segmentation output mode requires a fine-tuned model. Please train a segmentation model first."
+        )
+
+    if output_mode == OUTPUT_BOXES_ONLY and not artifacts.has_detector:
+        raise ValueError(
+            "Boxes-only output mode requires a fine-tuned detector. Please train a detector model first."
         )
 
     detector_spec = None
     segmenter_spec = None
 
     if artifacts.detector_adapter_dir:
-        # Resolver invariant: detector_adapter_dir and detector_manifest are
-        # always set together (see ml_engine/artifacts/resolver.py:73-74).
-        # Assert so mypy can narrow Optional[AdapterManifest] → AdapterManifest.
         manifest = artifacts.detector_manifest
-        assert manifest is not None, "detector_manifest must be set when detector_adapter_dir is"
+        if manifest is None:
+            raise RuntimeError(
+                "Inconsistent ResolvedArtifacts: detector_adapter_dir is set but "
+                "detector_manifest is None — resolver invariant violated."
+            )
         # config_path defaults to GroundingDINO_SwinT_OGC.py at the spec
         # level; fall back to that default if the manifest didn't capture it.
         detector_spec = GroundingDINOModelSpec(
@@ -74,7 +88,11 @@ def _build_autolabeler_config(
     if artifacts.segmenter_adapter_dir:
         # Same resolver invariant for segmenter.
         manifest = artifacts.segmenter_manifest
-        assert manifest is not None, "segmenter_manifest must be set when segmenter_adapter_dir is"
+        if manifest is None:
+            raise RuntimeError(
+                "Inconsistent ResolvedArtifacts: segmenter_adapter_dir is set but "
+                "segmenter_manifest is None — resolver invariant violated."
+            )
         # SegmenterModelSpec.model_type defaults to "vit_h" — fall back if
         # the manifest didn't capture it.
         segmenter_spec = SegmenterModelSpec(
@@ -115,6 +133,8 @@ def generate_pseudo_labels(
         class_names: Class names for detection prompts
         teacher_dir: Path to teacher training output (contains lora_adapters/)
         output_path: Where to save the resulting COCO JSON
+        distillation_cfg: Distillation policy dict; controls output_mode and
+            detection thresholds under the ``pseudo_label`` key.
         progress_callback: Optional callback(current, total, message)
 
     Returns:

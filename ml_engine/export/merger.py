@@ -99,18 +99,22 @@ def save_merged_model(
     # common ancestor of OrderedDict[str, Tensor], list, and dict). With the
     # widened inference, `checkpoint["metadata"].update(extra_metadata)` would
     # fail with `"Collection[Any]" has no attribute "update"`.
-    checkpoint: Dict[str, Any] = {
-        "model_state_dict": model.state_dict(),
-        "class_names": class_names or [],
-        "metadata": {
+    # extra_metadata applied first; framework keys appended after so they
+    # cannot be overwritten. See TODOS.md for a cleaner long-term design.
+    metadata: Dict[str, Any] = dict(extra_metadata) if extra_metadata else {}
+    metadata.update(
+        {
             "format": f"merged_{model_name}",
             "peft_merged": True,
             "requires_peft": False,
-        },
-    }
+        }
+    )
 
-    if extra_metadata:
-        checkpoint["metadata"].update(extra_metadata)
+    checkpoint: Dict[str, Any] = {
+        "model_state_dict": model.state_dict(),
+        "class_names": class_names or [],
+        "metadata": metadata,
+    }
 
     # Save
     torch.save(checkpoint, output_path)
@@ -141,7 +145,18 @@ def load_merged_model(checkpoint_path: Path, model: nn.Module, strict: bool = Tr
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
 
+    if "model_state_dict" not in checkpoint:
+        raise RuntimeError(
+            f"Malformed merged-model checkpoint: missing 'model_state_dict' key in {checkpoint_path}"
+        )
+
     metadata = checkpoint.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise RuntimeError(
+            f"Malformed merged-model checkpoint: 'metadata' is "
+            f"{type(metadata).__name__}, expected dict in {checkpoint_path}"
+        )
+
     fmt = metadata.get("format", "")
     if not fmt.startswith("merged_"):
         logger.warning("Checkpoint may not be a merged model format (got: %s)", fmt)

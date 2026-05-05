@@ -67,56 +67,61 @@ def create_export_package(
         shutil.rmtree(package_dir)
     package_dir.mkdir(parents=True)
 
-    logger.info("Creating %s export package in: %s", model_name, package_dir)
+    try:
+        logger.info("Creating %s export package in: %s", model_name, package_dir)
 
-    logger.info("Step 1/4: Merging LoRA weights...")
-    merged_model = merge_lora_weights(model)
+        logger.info("Step 1/4: Merging LoRA weights...")
+        merged_model = merge_lora_weights(model)
 
-    model_path = package_dir / "merged_model.pth"
-    save_merged_model(
-        model=merged_model,
-        output_path=model_path,
-        class_names=class_names,
-        extra_metadata=training_info,
-        model_name=model_name,
-    )
+        model_path = package_dir / "merged_model.pth"
+        save_merged_model(
+            model=merged_model,
+            output_path=model_path,
+            class_names=class_names,
+            extra_metadata=training_info,
+            model_name=model_name,
+        )
 
-    logger.info("Step 2/4: Adding inference script...")
-    template_name = f"{model_name}_inference_template.py"
-    inference_template = TEMPLATES_DIR / template_name
-    if not inference_template.exists():
-        inference_template = TEMPLATES_DIR / "inference_template.py"
-    if inference_template.exists():
-        shutil.copy(inference_template, package_dir / "inference.py")
-    else:
-        _create_minimal_inference_script(package_dir / "inference.py", model_name)
+        logger.info("Step 2/4: Adding inference script...")
+        template_name = f"{model_name}_inference_template.py"
+        inference_template = TEMPLATES_DIR / template_name
+        if not inference_template.exists():
+            inference_template = TEMPLATES_DIR / "inference_template.py"
+        if inference_template.exists():
+            shutil.copy(inference_template, package_dir / "inference.py")
+        else:
+            _create_minimal_inference_script(package_dir / "inference.py", model_name)
 
-    logger.info("Step 3/4: Generating README...")
-    _create_readme(
-        output_path=package_dir / "README.md",
-        class_names=class_names,
-        training_info=training_info,
-        model_name=model_name,
-    )
+        logger.info("Step 3/4: Generating README...")
+        _create_readme(
+            output_path=package_dir / "README.md",
+            class_names=class_names,
+            training_info=training_info,
+            model_name=model_name,
+        )
 
-    logger.info("Step 4/4: Saving class names...")
-    with open(package_dir / "class_names.txt", "w", encoding="utf-8") as f:
-        f.write("\n".join(class_names))
+        logger.info("Step 4/4: Saving class names...")
+        with open(package_dir / "class_names.txt", "w", encoding="utf-8") as f:
+            f.write("\n".join(class_names))
 
-    zip_path = exports_dir / f"{model_name}_package.zip"
-    logger.info("Creating ZIP archive: %s", zip_path)
+        zip_path = exports_dir / f"{model_name}_package.zip"
+        logger.info("Creating ZIP archive: %s", zip_path)
 
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-        for file_path in package_dir.rglob("*"):
-            if file_path.is_file():
-                arcname = file_path.relative_to(package_dir)
-                zipf.write(file_path, arcname)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for file_path in package_dir.rglob("*"):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(package_dir)
+                    zipf.write(file_path, arcname)
 
-    zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
-    logger.info("Export package created: %s (%.1f MB)", zip_path, zip_size_mb)
+        zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
+        logger.info("Export package created: %s (%.1f MB)", zip_path, zip_size_mb)
 
-    shutil.rmtree(package_dir)
-    return zip_path
+        return zip_path
+    finally:
+        try:
+            shutil.rmtree(package_dir)
+        except Exception:
+            logger.warning("Failed to clean up temp package dir: %s", package_dir)
 
 
 def _create_readme(
