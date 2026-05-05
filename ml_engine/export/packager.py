@@ -78,7 +78,7 @@ def create_export_package(
             model=merged_model,
             output_path=model_path,
             class_names=class_names,
-            extra_metadata=training_info,
+            training_info=training_info,
             model_name=model_name,
         )
 

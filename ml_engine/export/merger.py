@@ -67,7 +67,7 @@ def save_merged_model(
     model: nn.Module,
     output_path: Path,
     class_names: Optional[list] = None,
-    extra_metadata: Optional[Dict[str, Any]] = None,
+    training_info: Optional[Dict[str, Any]] = None,
     model_name: str = "grounding_dino",
 ) -> Path:
     """
@@ -76,13 +76,16 @@ def save_merged_model(
     Saves a checkpoint that can be loaded without PEFT:
     - model_state_dict: Model weights
     - class_names: Classes the model was trained on
-    - metadata: Training info, version, etc.
+    - metadata: Framework integrity fields (format, peft_merged, requires_peft)
+    - training_info: Caller-supplied training provenance (epochs, metrics, etc.)
 
     Args:
         model: Merged model (after merge_lora_weights)
         output_path: Path to save .pth file
         class_names: List of class names used in training
-        extra_metadata: Additional metadata to include
+        training_info: Caller-supplied training provenance; stored under a
+            separate top-level checkpoint key so it cannot interfere with
+            framework integrity fields in ``metadata``.
 
     Returns:
         Path to saved checkpoint
@@ -94,27 +97,24 @@ def save_merged_model(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build checkpoint. Explicit `Dict[str, Any]` annotation prevents mypy
-    # from inferring the dict literal's value type as `Collection[Any]` (the
-    # common ancestor of OrderedDict[str, Tensor], list, and dict). With the
-    # widened inference, `checkpoint["metadata"].update(extra_metadata)` would
-    # fail with `"Collection[Any]" has no attribute "update"`.
-    # extra_metadata applied first; framework keys appended after so they
-    # cannot be overwritten. See TODOS.md for a cleaner long-term design.
-    metadata: Dict[str, Any] = dict(extra_metadata) if extra_metadata else {}
-    metadata.update(
-        {
-            "format": f"merged_{model_name}",
-            "peft_merged": True,
-            "requires_peft": False,
-        }
-    )
+    # `metadata` holds only the three framework integrity fields read by
+    # load_merged_model. Caller provenance lives in the separate
+    # `training_info` key so the two namespaces cannot interfere.
+    # Explicit `Dict[str, Any]` annotation prevents mypy from widening the
+    # literal's value type to `Collection[Any]`.
+    metadata: Dict[str, Any] = {
+        "format": f"merged_{model_name}",
+        "peft_merged": True,
+        "requires_peft": False,
+    }
 
     checkpoint: Dict[str, Any] = {
         "model_state_dict": model.state_dict(),
         "class_names": class_names or [],
         "metadata": metadata,
     }
+    if training_info:
+        checkpoint["training_info"] = dict(training_info)
 
     # Save
     torch.save(checkpoint, output_path)
