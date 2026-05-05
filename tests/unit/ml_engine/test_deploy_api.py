@@ -1,6 +1,6 @@
 """Tests for /build-ros2 and /deploy-info API endpoints."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,21 +23,25 @@ def mock_job_factory(tmp_path):
 
 @pytest.fixture
 def client(mock_job_factory):
-    """TestClient with mocked JobManager."""
+    """TestClient with mocked AsyncJobManager via dependency_overrides."""
     from fastapi import FastAPI
 
-    from api.routes.exports import router
+    from api.routes.exports import get_manager, router
 
     app = FastAPI()
     app.include_router(router)
 
     mock_manager = MagicMock()
-    mock_manager.get_job.return_value = mock_job_factory()
+    # get_job is awaited in _validate_completed_job — must be AsyncMock.
+    mock_manager.get_job = AsyncMock(return_value=mock_job_factory())
 
-    with patch("api.routes.exports.get_job_manager", return_value=mock_manager):
-        with TestClient(app) as c:
-            c._mock_manager = mock_manager
-            yield c
+    # Override the actual FastAPI dependency, not the sync get_job_manager which
+    # is only used inside the background thread (and is separately mocked per-test).
+    app.dependency_overrides[get_manager] = lambda: mock_manager
+
+    with TestClient(app) as c:
+        c._mock_manager = mock_manager
+        yield c
 
 
 class TestBuildRos2Endpoint:

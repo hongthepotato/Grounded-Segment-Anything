@@ -139,6 +139,7 @@ class TestWorkerCompleteJob:
         import uuid
 
         from ml_engine.jobs.models import Job
+        from ml_engine.jobs.subprocess_runner import SubprocessResult
         from ml_engine.jobs.worker import TrainingWorker
 
         (tmp_path / "image_tag.txt").write_text("localhost:5000/yolo-inference-test1:20260406")
@@ -151,7 +152,9 @@ class TestWorkerCompleteJob:
         job.id = str(uuid.uuid4())
         job.output_dir = str(tmp_path)
 
-        worker._complete_job(job, str(tmp_path))
+        # _complete_job expects a SubprocessResult, not a path string.
+        result = SubprocessResult(success=True, cancelled=False, output_dir=str(tmp_path), outcome={})
+        worker._complete_job(job, result)
 
         update_call_kwargs = mock_store.update_job.call_args[1]
         assert update_call_kwargs.get("ros2_image_tag") == "localhost:5000/yolo-inference-test1:20260406"
@@ -159,6 +162,7 @@ class TestWorkerCompleteJob:
     def test_no_image_tag_txt_does_not_fail(self, tmp_path):
         """_complete_job must not fail if image_tag.txt is absent."""
         from ml_engine.jobs.models import Job
+        from ml_engine.jobs.subprocess_runner import SubprocessResult
         from ml_engine.jobs.worker import TrainingWorker
 
         worker = TrainingWorker.__new__(TrainingWorker)
@@ -169,8 +173,9 @@ class TestWorkerCompleteJob:
         job.id = "noimgtag-job"
         job.output_dir = str(tmp_path)
 
-        # Must not raise
-        worker._complete_job(job, str(tmp_path))
+        # _complete_job expects a SubprocessResult, not a path string.
+        result = SubprocessResult(success=True, cancelled=False, output_dir=str(tmp_path), outcome={})
+        worker._complete_job(job, result)
         mock_store.update_job.assert_called_once()
         # ros2_image_tag should not be in kwargs
         assert "ros2_image_tag" not in mock_store.update_job.call_args[1]
