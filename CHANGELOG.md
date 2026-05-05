@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 ### Tests
 
 - **14 new tests in `TestRetryDispatch`** — cover the PEL replay path: correct stage recovery (not `"failed_retrying"`), retry-count not double-charged, budget double-charge regression guard (max_retries=2 boundary), missing/empty/corrupt/wrong-key metadata → `failed_unrecoverable`, dispatch raises → `failed_unrecoverable`, SM re-entry transition raises → `failed_unrecoverable`, all three retryable stages (`auto_labeling`, `teacher_training`, `student_distillation`), override forwarding, and no-LLM-call invariant. TODO #27.
+- **Fix async/dependency mocking in three ros2-integration test files** — `test_deploy_api.py` was patching the sync `get_job_manager` instead of the FastAPI `Depends(get_manager)` dependency, causing `_validate_completed_job` to hit a real Redis and hang in CI. `test_distillation_ros2_integration.py` was calling `_complete_job(job, str(path))` but the method now expects a `SubprocessResult` object. `test_yolo_node.py` had `len(boxes) == 0` by default (MagicMock), so no detections were ever mapped in `test_single_box_mapped_correctly`. All 21 tests in these files now pass cleanly.
 
 ## [0.1.6] — 2026-05-02
 

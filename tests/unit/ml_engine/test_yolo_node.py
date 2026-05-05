@@ -155,6 +155,9 @@ class TestToDetection2dArray:
 
         result = MagicMock()
         boxes = MagicMock()
+        # len(boxes) defaults to 0 for MagicMock; production code uses
+        # `for i in range(len(boxes))`, so we must set it to match the data.
+        boxes.__len__ = MagicMock(return_value=1)
         boxes.xyxy = [torch.tensor([10.0, 20.0, 50.0, 80.0])]
         boxes.cls = [torch.tensor(2.0)]
         boxes.conf = [torch.tensor(0.87)]
