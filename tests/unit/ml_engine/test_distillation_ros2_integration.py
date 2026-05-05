@@ -1,6 +1,5 @@
 """Tests for distillation handler Step 5 (ROS2 container build integration)."""
 
-import multiprocessing as mp
 from unittest.mock import MagicMock, patch
 
 
@@ -16,47 +15,12 @@ def _make_job_config(tmp_path, build_ros2=True, job_id="testjob1"):
 
 class TestDistillationStep5:
     def test_ros2_build_triggered_when_flag_set(self, tmp_path):
-        """build_ros2_container=True must call build_ros2_container after training."""
-        from ml_engine.jobs.handlers.distillation import StudentDistillationHandler
-
-        handler = StudentDistillationHandler()
-        progress_queue = mp.Queue()
-        cancel_event = mp.Event()
+        """build_ros2_container=True flag is present in the job config."""
         job_config = _make_job_config(tmp_path, build_ros2=True)
-
-        # Stub out all the heavy training steps
-        final_weights = tmp_path / "student_model" / "best.pt"
-        final_weights.parent.mkdir(parents=True)
-        final_weights.write_bytes(b"weights")
-
-        with patch.object(handler, "run") as mock_run:
-            # We call the real run() but need to patch deep dependencies.
-            # Instead, test via integration: patch build_ros2_container and
-            # verify it's called with correct args when flag is set.
-            pass
-
-        called_with = {}
-
-        def fake_build(model_weights, job_id, registry_url, cancel_event, report_fn):
-            called_with["model_weights"] = model_weights
-            called_with["job_id"] = job_id
-            called_with["registry_url"] = registry_url
-            return f"{registry_url}/yolo-inference-{job_id[:8]}:20260406"
-
-        with (
-            patch(
-                "ml_engine.export.container_builder.build_ros2_container",
-                side_effect=fake_build,
-            ),
-            patch.multiple(
-                "ml_engine.jobs.handlers.distillation.StudentDistillationHandler",
-                run=lambda self, *a, **kw: None,
-            ),
-        ):
-            # We can't easily run the full handler without all deps.
-            # Assert the flag check logic inline.
-            assert job_config.get("build_ros2_container") is True
-            assert job_config.get("job_id") == "testjob1"
+        # Full handler integration is tested in TestWorkerCompleteJob.
+        # Here we verify the config key that gates the ROS2 build step.
+        assert job_config.get("build_ros2_container") is True
+        assert job_config.get("job_id") == "testjob1"
 
     def test_ros2_build_skipped_when_flag_false(self, tmp_path):
         """build_ros2_container=False must not call build_ros2_container."""

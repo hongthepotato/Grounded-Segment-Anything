@@ -337,16 +337,6 @@ class TestCreateExportPackage:
         # The user file is gone — silent destruction
         assert not important.exists()
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: create_export_package has no try/finally around the cleanup "
-            "rmtree(package_dir). If any of steps 1-4 raises (e.g. save_merged_model "
-            "fails because output_dir isn't writable, or zipfile.write hits an OS "
-            "error), the function exits with package_dir leaked on disk. Fix: wrap "
-            "the body in try/finally so cleanup always runs."
-        ),
-        strict=True,
-    )
     def test_package_dir_cleaned_up_even_when_zip_step_fails(self, tmp_path: Path, monkeypatch):
         """If the ZIP step fails, package_dir should still be cleaned up."""
         monkeypatch.setattr(packager, "merge_lora_weights", lambda m: m)

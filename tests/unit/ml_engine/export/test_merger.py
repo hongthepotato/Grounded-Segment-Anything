@@ -243,16 +243,6 @@ class TestSaveMergedModel:
         assert ckpt["metadata"]["mAP50"] == 0.83
         assert ckpt["metadata"]["git_sha"] == "abc1234"
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: extra_metadata is .update()-merged after the framework defaults, "
-            "so a caller can silently overwrite peft_merged=True or the format string. "
-            "load_merged_model's format-prefix check then misfires. Fix: validate "
-            "extra_metadata keys don't collide with reserved metadata keys, or merge "
-            "extras BEFORE defaults so framework values win."
-        ),
-        strict=True,
-    )
     def test_extra_metadata_cannot_clobber_framework_defaults(self, tmp_path: Path):
         """
         A caller passing extra_metadata={'peft_merged': False, 'format': 'CUSTOM'}
@@ -383,16 +373,6 @@ class TestLoadMergedModel:
         with pytest.raises(RuntimeError, match=r"(?i)size mismatch|shape"):
             load_merged_model(out, target, strict=True)
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: load_merged_model assumes checkpoint['metadata'] is a dict and "
-            "checkpoint['model_state_dict'] exists. Saving a tampered/legacy checkpoint "
-            "where these assumptions don't hold raises raw KeyError / AttributeError "
-            "instead of a clean error like 'malformed merged-model checkpoint'. Fix: "
-            "wrap the metadata-and-state-dict access in explicit checks."
-        ),
-        strict=True,
-    )
     def test_malformed_checkpoint_raises_clean_error(self, tmp_path: Path):
         """A checkpoint missing the model_state_dict key should fail loudly, not via KeyError."""
         out = tmp_path / "bad.pth"
@@ -403,15 +383,6 @@ class TestLoadMergedModel:
         with pytest.raises(RuntimeError, match=r"(?i)malformed|missing"):
             load_merged_model(out, target)
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: when checkpoint['metadata'] is a non-dict (e.g. a string from a "
-            "legacy save), `metadata.get('format', '')` raises AttributeError. The "
-            "code should treat unexpected metadata types as 'unknown format' and "
-            "warn rather than crash."
-        ),
-        strict=True,
-    )
     def test_non_dict_metadata_raises_clean_error(self, tmp_path: Path):
         """metadata: not_a_dict should not crash with AttributeError."""
         out = tmp_path / "weird.pth"
