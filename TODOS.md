@@ -409,13 +409,9 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### 30. `save_merged_model` metadata layout — cleaner separation of framework vs caller keys
+### ~~30. `save_merged_model` metadata layout — cleaner separation of framework vs caller keys~~
 
-**What:** `ml_engine/export/merger.py:save_merged_model` merges `extra_metadata` into a single `metadata` dict alongside framework integrity fields (`format`, `peft_merged`, `requires_peft`). The current fix (PR fix/xfails-and-f841) applies `extra_metadata` first then overwrites with framework keys — so callers silently lose any reserved keys they pass. A cleaner design would separate the two layers into distinct checkpoint keys (e.g. `checkpoint["metadata"]` for framework fields, `checkpoint["training_info"]` for caller-provided provenance), or raise explicitly when `extra_metadata` contains reserved keys.
-
-**Why deferred:** The silent-overwrite fix is the minimal correct change that makes `load_merged_model`'s format-detection invariant load-bearing. A structural redesign touches the on-disk checkpoint format (breaking change for existing `.pth` files) and all callers of `save_merged_model` and `load_merged_model`. Not worth doing mid-PR.
-
-**Files to touch:** `ml_engine/export/merger.py`, `ml_engine/export/packager.py` (passes `training_info` as `extra_metadata`), any tests that introspect `checkpoint["metadata"]` directly.
+**Completed:** v0.1.9 (2026-05-05) — `checkpoint["metadata"]` now holds only the three framework integrity fields (`format`, `peft_merged`, `requires_peft`). Caller provenance lives in the separate `checkpoint["training_info"]` key, written only when non-empty. Parameter renamed `extra_metadata` → `training_info`. `packager.py` updated to match. Tests updated: `test_extra_metadata_merged_into_metadata_dict` → `test_training_info_stored_at_separate_checkpoint_key` (checks separation); `test_extra_metadata_cannot_clobber_framework_defaults` → `test_training_info_cannot_affect_metadata_even_with_reserved_key_names` (shows physical isolation). `load_merged_model` unchanged — it only reads `checkpoint["metadata"]` so old checkpoints (no `training_info` key) load cleanly.
 
 ---
 
