@@ -85,7 +85,9 @@ def save_merged_model(
         class_names: List of class names used in training
         training_info: Caller-supplied training provenance; stored under a
             separate top-level checkpoint key so it cannot interfere with
-            framework integrity fields in ``metadata``.
+            framework integrity fields in ``metadata``. Falsy values (None,
+            empty dict) are treated identically — the key is omitted from
+            the checkpoint entirely.
 
     Returns:
         Path to saved checkpoint

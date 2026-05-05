@@ -3,9 +3,6 @@ Unit tests for ml_engine.export.merger — written adversarially.
 
 Covers the three branches of `merge_lora_weights`, `save_merged_model`'s
 metadata + class-name handling, and `load_merged_model`'s error paths.
-Specifically tests the edges where the current implementation is sloppy
-or surprising — those tests are marked `xfail` with a clear reason so
-they act as tracked-but-pending design issues, not silent green stamps.
 
 Stubs duck-type the PEFT shape (hasattr-based check) using lightweight
 real classes — no PEFT, no GroundingDINO, no actual LoRA. Keeps the
