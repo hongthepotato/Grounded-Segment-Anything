@@ -415,7 +415,7 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### 31. Invalid albumentations parameter values in CLAHE and ColorJitter rules
+### ~~31. Invalid albumentations parameter values in CLAHE and ColorJitter rules~~
 
 **What:** Two parameter values in `CHARACTERISTIC_RULES` will crash albumentations at transform-construction time, but pass all current tests because the test suite never calls albumentations constructors (only `translate_from_characteristics` dict assembly):
 
@@ -432,9 +432,11 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 **Depends on / blocked by:** None. Mechanical value changes.
 
+**Completed:** v0.1.12 (2026-05-06) — PR #78. `RangeParameter(0.8, 2.0)` → `RangeParameter(1.0, 2.0)` in three CLAHE rules; `RangeParameter(-0.7, 0.7)` → `RangeParameter(-0.5, 0.5)` in ColorJitter hue.
+
 ---
 
-### 32. `translate_from_characteristics` returns direct references into mutable class-level rule dicts
+### ~~32. `translate_from_characteristics` returns direct references into mutable class-level rule dicts~~
 
 **What:** `merged_augmentations[aug_type] = params` assigns the exact dict object from `CHARACTERISTIC_RULES[...].intensity_ranges[intensity][aug_type]`. Any caller that mutates the returned `result["augmentations"]` dict permanently corrupts `CHARACTERISTIC_RULES` for all subsequent calls in the same process — including across request handlers in a web server.
 
@@ -449,9 +451,11 @@ merged_augmentations[aug_type] = dict(params)
 
 **Depends on / blocked by:** None. One-line fix + regression test.
 
+**Completed:** v0.1.12 (2026-05-06) — PR #78. `merged_augmentations[aug_type] = dict(params)` at both merge sites; regression test `test_translate_result_does_not_alias_class_level_rule_dict` now passes.
+
 ---
 
-### 33. `RandomSunFlare` `src_radius` sampled as float — albumentations requires integer
+### ~~33. `RandomSunFlare` `src_radius` sampled as float — albumentations requires integer~~
 
 **What:** `build_random_sun_flare_params` returns `"src_radius": params["src_radius"].sample()`. `RangeParameter(200, 300).sample()` returns a `float` (e.g., 216.96). Albumentations' `RandomSunFlare` validates `src_radius` as an integer and rejects the float with `Input should be a valid integer, got a number with a fractional part`. The transform is silently dropped from the pipeline.
 
@@ -463,9 +467,11 @@ Affected rules: `reflective_surface` at all three intensities.
 
 **Depends on / blocked by:** None. One-character fix in `transform_builders.py`.
 
+**Completed:** v0.1.12 (2026-05-06) — PR #78. `int(params["src_radius"].sample())` in `build_random_sun_flare_params`.
+
 ---
 
-### 34. `SafeRotate` has no specific builder — falls back to generic, passes `p` as tuple
+### ~~34. `SafeRotate` has no specific builder — falls back to generic, passes `p` as tuple~~
 
 **What:** `TransformParameterBuilder.get_builder_method("SafeRotate")` converts to snake_case `"safe_rotate"` and looks for `build_safe_rotate_params`. The actual method is `build_safe_rotation_params` (with `rotation`, not `rotate`). The lookup misses, falls back to `build_generic_params`.
 
@@ -481,9 +487,11 @@ Affected rules: `moves_or_vibrates` and `camera=shaky` at all three intensities.
 
 **Depends on / blocked by:** None. Rename or one-line routing patch in `transform_builders.py`.
 
+**Completed:** v0.1.12 (2026-05-06) — PR #78. Renamed `build_safe_rotation_params` → `build_safe_rotate_params` to match snake_case routing.
+
 ---
 
-### 35. `RandomSizedBBoxSafeCrop` height/width passed as float tuple — albumentations requires integer
+### ~~35. `RandomSizedBBoxSafeCrop` height/width passed as float tuple — albumentations requires integer~~
 
 **What:** `build_random_sized_b_box_safe_crop_params` returns `"height": params["height"].to_albumentations_format()`. For a scalar (`RangeParameter.scalar(1024)`), `to_albumentations_format()` returns `(1024.0, 1024.0)` — a float tuple. Albumentations requires a plain integer for `height` and `width` and raises `Input should be a valid integer`. The transform is silently skipped.
 
@@ -495,6 +503,8 @@ Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all 
 
 **Depends on / blocked by:** None. One-line fix per dimension in `transform_builders.py`.
 
+**Completed:** v0.1.12 (2026-05-06) — PR #78. `int(params["height"].sample())` / `int(params["width"].sample())` in `build_random_sized_b_box_safe_crop_params`.
+
 ---
 
 ## Completed
@@ -504,6 +514,11 @@ patterns established, lessons learned) lives in [docs/decisions/](docs/decisions
 Item numbers are stable so commit messages and PR descriptions referencing
 "item N" / "TODO #N" still resolve.
 
+- **#31** Invalid albumentations parameter values in CLAHE and ColorJitter rules ✅ — `clip_limit` floor raised to 1.0; ColorJitter `hue` clamped to `[-0.5, 0.5]`. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#32** `translate_from_characteristics` mutable alias into `CHARACTERISTIC_RULES` ✅ — `dict(params)` shallow copy at both merge sites; regression test passes. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#33** `RandomSunFlare` `src_radius` float → int ✅ — `int(params["src_radius"].sample())` in `build_random_sun_flare_params`. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#34** `SafeRotate` builder routing fixed ✅ — renamed `build_safe_rotation_params` → `build_safe_rotate_params`. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#35** `RandomSizedBBoxSafeCrop` height/width int cast ✅ — `int(.sample())` for both dimensions. Shipped v0.1.12, 2026-05-06. PR #78.
 - **#1** Auto-resume orphaned Coordinator tasks on FastAPI startup ✅ → [docs/decisions/01-03-coordinator-durability.md](docs/decisions/01-03-coordinator-durability.md) — `resume_orphaned_coordinators()` scans Redis on startup, skips pre-approve and terminal runs, relaunches the rest; `store_approved_contract` / `get_approved_contract` persist the contract in the Redis HASH so startup recovery can reconstruct the Coordinator; ~20 unit tests. Shipped 2026-04-27.
 - **#2** Coordinator crash → `failed_unrecoverable` ✅ → [docs/decisions/02-coordinator-crash-failed-unrecoverable.md](docs/decisions/02-coordinator-crash-failed-unrecoverable.md) — `_on_done` now schedules state transition on task exception; TRANSITIONS expanded to allow `failed_unrecoverable` from all 5 previously-missing non-terminal states; 5 unit tests. Shipped 2026-04-27.
 - **#3** Make `POST /api/agent/approve` idempotent ✅ → [docs/decisions/01-03-coordinator-durability.md](docs/decisions/01-03-coordinator-durability.md) — reads current state first; on first call transitions `created → planning` and publishes `contract_approved`; on re-approve skips both (Coordinator resumes from stream PEL); always persists approved contract and calls `_start_coordinator`; 409 on terminal state. Shipped 2026-04-27.

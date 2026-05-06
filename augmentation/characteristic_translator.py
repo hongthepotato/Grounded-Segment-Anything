@@ -196,7 +196,7 @@ class CharacteristicTranslator:
                         "brightness": RangeParameter(0.7, 1.3),
                         "contrast": RangeParameter(0.7, 1.3),
                         "saturation": RangeParameter(0.7, 1.3),
-                        "hue": RangeParameter(-0.7, 0.7),
+                        "hue": RangeParameter(-0.5, 0.5),
                         "p": RangeParameter.scalar(0.6),
                     },
                 },
@@ -208,7 +208,7 @@ class CharacteristicTranslator:
             intensity_ranges={
                 "low": {
                     "CLAHE": {
-                        "clip_limit": RangeParameter(0.8, 2.0),
+                        "clip_limit": RangeParameter(1.0, 2.0),
                         "p": RangeParameter.scalar(0.2),
                     },
                     "RandomBrightnessContrast": {
@@ -343,7 +343,7 @@ class CharacteristicTranslator:
             intensity_ranges={
                 "low": {
                     "CLAHE": {
-                        "clip_limit": RangeParameter(0.8, 2.0),
+                        "clip_limit": RangeParameter(1.0, 2.0),
                         "p": RangeParameter.scalar(0.2),
                     },
                     "Sharpen": {
@@ -980,7 +980,7 @@ class CharacteristicTranslator:
             intensity_ranges={
                 "low": {
                     "CLAHE": {
-                        "clip_limit": RangeParameter(0.8, 2.0),
+                        "clip_limit": RangeParameter(1.0, 2.0),
                         "p": RangeParameter.scalar(0.2),
                     },
                     "RandomGamma": {
@@ -1119,7 +1119,7 @@ class CharacteristicTranslator:
 
         if new_prob > existing_prob:
             logger.debug("Deduplication: Kept new with higher p=%.2f (vs %.2f)", new_prob, existing_prob)
-            return new
+            return dict(new)
         logger.debug("Deduplication: Kept existing with higher p=%.2f (vs %.2f)", existing_prob, new_prob)
         return existing
 
@@ -1189,7 +1189,7 @@ class CharacteristicTranslator:
                             merged_augmentations[aug_type], params
                         )
                     else:
-                        merged_augmentations[aug_type] = params
+                        merged_augmentations[aug_type] = dict(params)
             else:
                 # Fail fast on unknown characteristic
                 available = list(self.CHARACTERISTIC_RULES.keys())
@@ -1213,7 +1213,7 @@ class CharacteristicTranslator:
                                 merged_augmentations[aug_type], params
                             )
                         else:
-                            merged_augmentations[aug_type] = params
+                            merged_augmentations[aug_type] = dict(params)
                 else:
                     # Fail fast on unknown environment
                     available_envs = self.get_available_environments()
