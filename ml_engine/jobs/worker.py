@@ -214,6 +214,9 @@ class TrainingWorker:
             },
         )
 
+        # Inject job_id so handlers (e.g. distillation) can use it for image naming
+        job.config["job_id"] = job.id
+
         # Create and start subprocess
         subprocess_runner = TrainingSubprocess(
             job_id=job.id,
@@ -371,18 +374,33 @@ class TrainingWorker:
             logger.warning("Failed to forward event to agent stream: %s", e)
 
     def _complete_job(self, job: Job, result) -> None:
-        """Mark job as completed and persist structured outcome."""
+        """Mark job as completed and persist structured outcome (incl. ros2_image_tag)."""
         logger.info("Job %s completed successfully", job.id[:8])
 
         outcome = JobOutcome.from_dict(result.outcome) if result.outcome else JobOutcome()
         output_dir = result.output_dir or job.output_dir
 
-        self.store.update_job(
-            job.id,
-            status=JobStatus.COMPLETED,
-            finished_at=datetime.now(),
-            outcome=outcome.to_dict(),
-        )
+        update_kwargs: Dict[str, Any] = {
+            "status": JobStatus.COMPLETED,
+            "finished_at": datetime.now(),
+            "outcome": outcome.to_dict(),
+        }
+
+        # Persist ros2_image_tag written by container_builder to output_dir/image_tag.txt
+        if output_dir:
+            from pathlib import Path as _Path
+
+            tag_file = _Path(output_dir) / "image_tag.txt"
+            if tag_file.exists():
+                try:
+                    update_kwargs["ros2_image_tag"] = tag_file.read_text().strip()
+                    logger.info(
+                        "Persisted ros2_image_tag for job %s: %s", job.id[:8], update_kwargs["ros2_image_tag"]
+                    )
+                except Exception as e:
+                    logger.warning("Could not read image_tag.txt: %s", e)
+
+        self.store.update_job(job.id, **update_kwargs)
 
         event = {
             "type": "job_completed",

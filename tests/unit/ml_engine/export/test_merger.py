@@ -3,9 +3,6 @@ Unit tests for ml_engine.export.merger — written adversarially.
 
 Covers the three branches of `merge_lora_weights`, `save_merged_model`'s
 metadata + class-name handling, and `load_merged_model`'s error paths.
-Specifically tests the edges where the current implementation is sloppy
-or surprising — those tests are marked `xfail` with a clear reason so
-they act as tracked-but-pending design issues, not silent green stamps.
 
 Stubs duck-type the PEFT shape (hasattr-based check) using lightweight
 real classes — no PEFT, no GroundingDINO, no actual LoRA. Keeps the
@@ -197,6 +194,7 @@ class TestSaveMergedModel:
         assert ckpt["metadata"]["format"] == "merged_grounding_dino"
         assert ckpt["metadata"]["peft_merged"] is True
         assert ckpt["metadata"]["requires_peft"] is False
+        assert "training_info" not in ckpt  # absent when caller provides none
 
     def test_class_names_round_trip(self, tmp_path: Path):
         model = _TinyModel()
@@ -225,50 +223,47 @@ class TestSaveMergedModel:
 
         assert ckpt_none["class_names"] == ckpt_empty["class_names"] == []
 
-    def test_extra_metadata_merged_into_metadata_dict(self, tmp_path: Path):
+    def test_training_info_stored_at_separate_checkpoint_key(self, tmp_path: Path):
+        """Caller provenance lives in checkpoint['training_info'], not inside metadata."""
         model = _TinyModel()
         out = tmp_path / "model.pth"
 
         save_merged_model(
             model,
             out,
-            extra_metadata={"epochs": 12, "mAP50": 0.83, "git_sha": "abc1234"},
+            training_info={"epochs": 12, "mAP50": 0.83, "git_sha": "abc1234"},
         )
 
         ckpt = torch.load(out, map_location="cpu", weights_only=False)
-        # Defaults still present
+        # Framework integrity fields stay in metadata
         assert ckpt["metadata"]["format"] == "merged_grounding_dino"
-        # Extras layered in
-        assert ckpt["metadata"]["epochs"] == 12
-        assert ckpt["metadata"]["mAP50"] == 0.83
-        assert ckpt["metadata"]["git_sha"] == "abc1234"
+        assert ckpt["metadata"]["peft_merged"] is True
+        # Caller provenance is under its own key, not mixed into metadata
+        assert ckpt["training_info"]["epochs"] == 12
+        assert ckpt["training_info"]["mAP50"] == 0.83
+        assert ckpt["training_info"]["git_sha"] == "abc1234"
+        assert "epochs" not in ckpt["metadata"]
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: extra_metadata is .update()-merged after the framework defaults, "
-            "so a caller can silently overwrite peft_merged=True or the format string. "
-            "load_merged_model's format-prefix check then misfires. Fix: validate "
-            "extra_metadata keys don't collide with reserved metadata keys, or merge "
-            "extras BEFORE defaults so framework values win."
-        ),
-        strict=True,
-    )
-    def test_extra_metadata_cannot_clobber_framework_defaults(self, tmp_path: Path):
+    def test_training_info_cannot_affect_metadata_even_with_reserved_key_names(self, tmp_path: Path):
         """
-        A caller passing extra_metadata={'peft_merged': False, 'format': 'CUSTOM'}
-        should NOT be able to silently invert the framework's own metadata. Currently
-        it can. This test asserts the desired (safer) behavior; xfail tracks the bug.
+        Passing keys that share names with framework fields (peft_merged, format)
+        inside training_info does not corrupt checkpoint['metadata']. The two
+        namespaces are physically separate — no silent overwrite, no data loss.
         """
-        out = tmp_path / "clobbered.pth"
+        out = tmp_path / "model.pth"
         save_merged_model(
             _TinyModel(),
             out,
-            extra_metadata={"peft_merged": False, "format": "tampered"},
+            training_info={"peft_merged": False, "format": "tampered"},
         )
 
         ckpt = torch.load(out, map_location="cpu", weights_only=False)
-        assert ckpt["metadata"]["peft_merged"] is True  # FAILS today
-        assert ckpt["metadata"]["format"] == "merged_grounding_dino"  # FAILS today
+        # Framework metadata is unaffected
+        assert ckpt["metadata"]["peft_merged"] is True
+        assert ckpt["metadata"]["format"] == "merged_grounding_dino"
+        # Caller's values are preserved intact under training_info
+        assert ckpt["training_info"]["peft_merged"] is False
+        assert ckpt["training_info"]["format"] == "tampered"
 
     def test_creates_parent_directories(self, tmp_path: Path):
         model = _TinyModel()
@@ -383,16 +378,6 @@ class TestLoadMergedModel:
         with pytest.raises(RuntimeError, match=r"(?i)size mismatch|shape"):
             load_merged_model(out, target, strict=True)
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: load_merged_model assumes checkpoint['metadata'] is a dict and "
-            "checkpoint['model_state_dict'] exists. Saving a tampered/legacy checkpoint "
-            "where these assumptions don't hold raises raw KeyError / AttributeError "
-            "instead of a clean error like 'malformed merged-model checkpoint'. Fix: "
-            "wrap the metadata-and-state-dict access in explicit checks."
-        ),
-        strict=True,
-    )
     def test_malformed_checkpoint_raises_clean_error(self, tmp_path: Path):
         """A checkpoint missing the model_state_dict key should fail loudly, not via KeyError."""
         out = tmp_path / "bad.pth"
@@ -403,15 +388,6 @@ class TestLoadMergedModel:
         with pytest.raises(RuntimeError, match=r"(?i)malformed|missing"):
             load_merged_model(out, target)
 
-    @pytest.mark.xfail(
-        reason=(
-            "BUG: when checkpoint['metadata'] is a non-dict (e.g. a string from a "
-            "legacy save), `metadata.get('format', '')` raises AttributeError. The "
-            "code should treat unexpected metadata types as 'unknown format' and "
-            "warn rather than crash."
-        ),
-        strict=True,
-    )
     def test_non_dict_metadata_raises_clean_error(self, tmp_path: Path):
         """metadata: not_a_dict should not crash with AttributeError."""
         out = tmp_path / "weird.pth"

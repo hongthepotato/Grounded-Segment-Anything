@@ -93,11 +93,6 @@ class TestApiResponseStatusEnumGap:
         ["", "OK", "ok", "Succeed", "true", "yes", "passed", "ERROR", " succeed "],
         ids=lambda v: f"status={v!r}",
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:45 — status field is `str` with no enum constraint; "
-        "docstring promises 'succeed'|'failed'. Tighten to Literal['succeed', 'failed'].",
-    )
     def test_invalid_status_should_reject(self, bad_status):
         with pytest.raises(ValidationError):
             ApiResponse(code=200, status=bad_status)
@@ -120,11 +115,6 @@ class TestApiResponseCodeRangeGap:
         "bad_code",
         [-1, 0, 99, 600, 999, 10000],
         ids=lambda v: f"code={v}",
-    )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:44 — code field is `int` with no `ge=100, le=599`. "
-        "Out-of-range HTTP codes silently accepted.",
     )
     def test_out_of_range_code_should_reject(self, bad_code):
         with pytest.raises(ValidationError):
@@ -291,12 +281,6 @@ class TestJobCreateJobTypeEnumGap:
         "bad_type",
         ["", "teacher_train", "TEACHER_TRAINING", "training", "auto_label", " teacher_training"],
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:124 — job_type is `str`; docstring lists allowed "
-        "values. Tighten to Literal/enum so bad values reject at the boundary "
-        "instead of failing with a cryptic handler-dispatch error.",
-    )
     def test_unknown_job_type_should_reject(self, bad_type):
         with pytest.raises(ValidationError):
             JobCreate(job_type=bad_type, config={})
@@ -337,12 +321,6 @@ class TestAutoLabelRequestOutputModeEnumGap:
         "bad_mode",
         ["", "Boxes", "BOXES", "box", "all", "boxes, masks", "none"],
     )
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:245 — output_mode is `str`; tighten to "
-        "Literal['boxes', 'masks', 'both'] so unknown values reject at "
-        "the boundary.",
-    )
     def test_unknown_output_mode_should_reject(self, bad_mode):
         with pytest.raises(ValidationError):
             AutoLabelRequest(image_paths=["a.jpg"], classes=["cat"], output_mode=bad_mode)
@@ -356,20 +334,10 @@ class TestAutoLabelRequestNonEmptyListGap:
     """Empty image_paths or classes is meaningless — autolabeler has nothing
     to do. Schema accepts both today; handler hits a noop or worse."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:243 — image_paths is `List[str]` with no "
-        "min_length; empty list accepted. Tighten to `Field(min_length=1)`.",
-    )
     def test_empty_image_paths_should_reject(self):
         with pytest.raises(ValidationError):
             AutoLabelRequest(image_paths=[], classes=["cat"])
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:244 — classes is `List[str]` with no "
-        "min_length; empty list accepted. Tighten to `Field(min_length=1)`.",
-    )
     def test_empty_classes_should_reject(self):
         with pytest.raises(ValidationError):
             AutoLabelRequest(image_paths=["a.jpg"], classes=[])
@@ -446,12 +414,6 @@ class TestDistillationPairedFieldGap:
     the other is a misconfiguration; should be caught at schema layer.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:266-271 — teacher_dir + unlabeled_image_paths "
-        "form a paired flag per the docstring; passing only one is a misconfig "
-        "but no model_validator enforces the pairing.",
-    )
     def test_teacher_dir_without_unlabeled_should_reject(self):
         with pytest.raises(ValidationError):
             DistillationRequest(
@@ -461,10 +423,6 @@ class TestDistillationPairedFieldGap:
                 unlabeled_image_paths=None,
             )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:266-271 — same paired-flag invariant, other side.",
-    )
     def test_unlabeled_without_teacher_dir_should_reject(self):
         with pytest.raises(ValidationError):
             DistillationRequest(
@@ -647,13 +605,13 @@ class TestTypeCoercion:
     def test_int_field_accepts_string_int(self):
         """Pydantic v2 default mode coerces string→int. Documenting so a
         future strict-mode flip doesn't silently break callers."""
-        j = JobCreate(job_type="x", config={}, priority="5")  # type: ignore[arg-type]
+        j = JobCreate(job_type="teacher_training", config={}, priority="5")  # type: ignore[arg-type]
         assert j.priority == 5
         assert isinstance(j.priority, int)
 
     def test_int_field_rejects_non_numeric_string(self):
         with pytest.raises(ValidationError):
-            JobCreate(job_type="x", config={}, priority="five")  # type: ignore[arg-type]
+            JobCreate(job_type="teacher_training", config={}, priority="five")  # type: ignore[arg-type]
 
     def test_float_field_accepts_int(self):
         """0..1 thresholds at int 0 and 1 should work — documents that
@@ -670,7 +628,7 @@ class TestTypeCoercion:
         assert a.iscrowd == 1
 
     def test_none_for_optional_field(self):
-        j = JobCreate(job_type="x", config={}, output_dir=None)
+        j = JobCreate(job_type="teacher_training", config={}, output_dir=None)
         assert j.output_dir is None
 
     def test_extra_field_silently_dropped(self):
@@ -678,7 +636,7 @@ class TestTypeCoercion:
         Documenting because some routes may want strict mode (rejection)
         to catch typo'd field names (e.g., `tag` vs `tags`)."""
         j = JobCreate(
-            job_type="x",
+            job_type="teacher_training",
             config={},
             tag=["typo"],  # type: ignore[call-arg]  -- typo of `tags`
         )
@@ -736,11 +694,6 @@ class TestWorkerResponseStatusEnumGap:
     """Docstring at api/schemas.py:188 says 'idle, busy, offline'."""
 
     @pytest.mark.parametrize("bad_status", ["", "Idle", "BUSY", "running", "down"])
-    @pytest.mark.xfail(
-        strict=True,
-        reason="api/schemas.py:188 — status is `str`; tighten to "
-        "Literal['idle', 'busy', 'offline'] per the docstring.",
-    )
     def test_unknown_worker_status_should_reject(self, bad_status):
         with pytest.raises(ValidationError):
             WorkerResponse(id="w1", gpu_id=0, hostname="h", status=bad_status)

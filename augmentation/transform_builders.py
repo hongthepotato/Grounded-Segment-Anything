@@ -143,7 +143,7 @@ class TransformParameterBuilder:
 
         return {"scale": params["scale"].to_albumentations_format(), "p": params["p"].sample()}
 
-    def build_safe_rotation_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
+    def build_safe_rotate_params(self, params: Dict[str, AlbumentationsParameter]) -> Dict[str, Any]:
         """Build parameters for Rotate
 
         Args:
@@ -206,8 +206,8 @@ class TransformParameterBuilder:
         """
         self._validate_params(params, ["height", "width", "p"], "RandomSizedBBoxSafeCrop")
         return {
-            "height": params["height"].to_albumentations_format(),
-            "width": params["width"].to_albumentations_format(),
+            "height": int(params["height"].sample()),
+            "width": int(params["width"].sample()),
             "p": params["p"].sample(),
         }
 
@@ -390,7 +390,7 @@ class TransformParameterBuilder:
 
         return {
             "flare_roi": (0, 0, 1, 1),  # Fixed ROI
-            "src_radius": params["src_radius"].sample(),
+            "src_radius": int(params["src_radius"].sample()),
             "p": params["p"].sample(),
         }
 

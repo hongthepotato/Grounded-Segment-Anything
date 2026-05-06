@@ -278,6 +278,28 @@ DEFAULT_SAM_LORA_CONFIG = {
 }
 
 # ============================================================================
+# Agent / Pipeline Error Classification
+# ============================================================================
+
+# Exception types that indicate a transient infrastructure failure (network
+# blip, Redis restart, worker OOM) rather than a logic bug. Used by the
+# Coordinator crash handler to decide whether to retry via failed_retrying
+# or to go straight to failed_unrecoverable.
+#
+# These are specific OSError subclasses, NOT OSError itself. Using the parent
+# OSError would catch FileNotFoundError, PermissionError, ChildProcessError,
+# etc. — permanent failures that should never trigger a retry.
+#
+# redis.exceptions are NOT included here because they require the redis
+# package to be imported, which would add a hard dependency to core/. The
+# crash handler checks those types separately via a lazy import.
+TRANSIENT_EXCEPTION_TYPES = (
+    ConnectionError,  # includes BrokenPipeError, ConnectionReset, ConnectionRefused
+    TimeoutError,  # system-level operation timeout
+    InterruptedError,  # EINTR — system call interrupted by a signal
+)
+
+# ============================================================================
 # Version Info
 # ============================================================================
 

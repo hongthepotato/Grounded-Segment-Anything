@@ -1,0 +1,54 @@
+{
+  "id": "my-camera",
+  "version": "1.0.0",
+  "display_name": "My Camera",
+  "category": "sensor",
+  "hardware_family": "camera",
+  "icon": "camera",
+  "dockerfile": "./Dockerfile",
+  "ports": {
+    "output": [
+      {
+        "id": "image_out",
+        "alias": "image_frame",
+        "ros2_type": "sensor_msgs/Image",
+        "label": "Color Camera"
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "device_index",
+      "type": "int",
+      "label": "Camera device index",
+      "default": 0,
+      "min": 0,
+      "max": 9
+    },
+    {
+      "id": "fps",
+      "type": "int",
+      "label": "Frame rate",
+      "default": 30,
+      "min": 1,
+      "max": 120,
+      "units": "fps"
+    }
+  ],
+  "engineer_params": [
+    {
+      "id": "width",
+      "type": "int",
+      "label": "Frame width",
+      "default": 640,
+      "units": "px"
+    },
+    {
+      "id": "height",
+      "type": "int",
+      "label": "Frame height",
+      "default": 480,
+      "units": "px"
+    }
+  ]
+}

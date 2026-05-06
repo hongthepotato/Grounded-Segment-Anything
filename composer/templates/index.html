@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ROS2 Platform</title>
+  <!-- React Flow via CDN — no build step required -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@xyflow/react@12/dist/umd/index.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/@xyflow/react@12/dist/style.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f13; color: #e2e8f0; height: 100vh; overflow: hidden; }
+
+    /* Layout */
+    #app { display: flex; flex-direction: column; height: 100vh; }
+    #topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #1a1a24; border-bottom: 1px solid #2d2d3d; height: 52px; }
+    #topbar h1 { font-size: 15px; font-weight: 600; color: #a78bfa; flex: 1; }
+    #main { display: flex; flex: 1; overflow: hidden; }
+    #palette { width: 240px; background: #13131c; border-right: 1px solid #2d2d3d; overflow-y: auto; display: flex; flex-direction: column; }
+    #canvas-area { flex: 1; position: relative; }
+    #rightpanel { width: 280px; background: #13131c; border-left: 1px solid #2d2d3d; overflow-y: auto; display: flex; flex-direction: column; }
+
+    /* Topbar buttons */
+    .btn { padding: 6px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.1s; }
+    .btn-primary { background: #7c3aed; color: #fff; }
+    .btn-primary:hover { background: #6d28d9; }
+    .btn-secondary { background: #2d2d3d; color: #e2e8f0; }
+    .btn-secondary:hover { background: #3d3d55; }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; }
+    .btn-danger:hover { background: #991b1b; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .status-badge { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #1e3a2f; color: #4ade80; }
+    .status-badge.offline { background: #3a1e1e; color: #f87171; }
+
+    /* Auth screen */
+    #auth-screen { position: fixed; inset: 0; background: #0f0f13; display: flex; align-items: center; justify-content: center; z-index: 1000; }
+    .auth-card { background: #1a1a24; border: 1px solid #2d2d3d; border-radius: 12px; padding: 32px; width: 360px; }
+    .auth-card h2 { font-size: 18px; font-weight: 600; margin-bottom: 4px; color: #a78bfa; }
+    .auth-card p { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .form-group input { width: 100%; padding: 8px 12px; background: #0f0f13; border: 1px solid #2d2d3d; border-radius: 6px; color: #e2e8f0; font-size: 14px; }
+    .form-group input:focus { outline: none; border-color: #7c3aed; }
+    .auth-error { background: #3a1e1e; color: #f87171; padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; }
+
+    /* Palette */
+    .palette-header { padding: 12px 14px 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; font-weight: 600; }
+    .palette-category { border-bottom: 1px solid #1e1e2d; }
+    .palette-category-title { padding: 8px 14px; font-size: 12px; font-weight: 600; color: #94a3b8; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+    .palette-category-title:hover { background: #1e1e2d; }
+    .palette-block { padding: 8px 14px 8px 26px; font-size: 13px; color: #e2e8f0; cursor: grab; display: flex; align-items: center; gap: 8px; }
+    .palette-block:hover { background: #1e1e2d; }
+    .palette-block:active { cursor: grabbing; }
+    .hw-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; flex-shrink: 0; }
+    .hw-dot.absent { background: #374151; }
+    .block-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #1e3a2f; color: #4ade80; }
+    .block-badge.gpu { background: #1e2a4a; color: #60a5fa; }
+
+    /* Canvas */
+    .react-flow__node { border-radius: 8px; }
+    .block-node { background: #1a1a24; border: 2px solid #2d2d3d; border-radius: 8px; min-width: 180px; font-size: 12px; }
+    .block-node.selected { border-color: #7c3aed; }
+    .block-node-header { padding: 8px 12px; border-bottom: 1px solid #2d2d3d; display: flex; align-items: center; gap: 6px; }
+    .block-node-title { font-weight: 600; font-size: 13px; flex: 1; }
+    .block-node-status { width: 8px; height: 8px; border-radius: 50%; background: #374151; }
+    .block-node-status.running { background: #4ade80; animation: pulse 2s infinite; }
+    .block-node-status.starting { background: #fbbf24; animation: pulse 1s infinite; }
+    .block-node-status.error { background: #f87171; }
+    .block-node-params { padding: 6px 12px 8px; }
+    .param-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .param-label { font-size: 11px; color: #94a3b8; flex: 1; }
+    .param-value { font-size: 11px; color: #e2e8f0; background: #0f0f13; padding: 2px 6px; border-radius: 4px; border: 1px solid #2d2d3d; cursor: text; }
+    .param-value:hover { border-color: #7c3aed; }
+    .block-node-footer { padding: 4px 12px; border-top: 1px solid #1e1e2d; display: flex; justify-content: flex-end; gap: 6px; }
+    .node-btn { font-size: 10px; padding: 2px 6px; border-radius: 3px; border: 1px solid #2d2d3d; background: transparent; color: #94a3b8; cursor: pointer; }
+    .node-btn:hover { background: #2d2d3d; color: #e2e8f0; }
+    .react-flow__handle { width: 10px; height: 10px; border-radius: 50%; border: 2px solid #2d2d3d; background: #1a1a24; }
+    .react-flow__handle:hover { border-color: #7c3aed; background: #7c3aed; }
+    .react-flow__edge-path { stroke: #4f4f6f; }
+    .react-flow__edge.selected .react-flow__edge-path { stroke: #7c3aed; }
+
+    /* LLM input */
+    #llm-input-area { padding: 14px 16px; background: #1a1a24; border-top: 1px solid #2d2d3d; }
+    #llm-input-area h3 { font-size: 12px; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+    #llm-input { display: flex; gap: 8px; }
+    #llm-input textarea { flex: 1; padding: 8px 12px; background: #0f0f13; border: 1px solid #2d2d3d; border-radius: 6px; color: #e2e8f0; font-size: 13px; resize: none; height: 56px; font-family: inherit; }
+    #llm-input textarea:focus { outline: none; border-color: #7c3aed; }
+    #llm-input textarea:disabled { opacity: 0.5; }
+    #llm-offline { font-size: 12px; color: #f87171; padding: 8px 0; }
+
+    /* Right panel */
+    .rp-section { border-bottom: 1px solid #1e1e2d; }
+    .rp-header { padding: 12px 14px; font-size: 12px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+    .rp-header:hover { background: #1e1e2d; }
+    .rp-body { padding: 10px 14px; font-size: 12px; }
+    .rp-graph-list { display: flex; flex-direction: column; gap: 6px; }
+    .rp-graph-item { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 6px 8px; border-radius: 4px; }
+    .rp-graph-item:hover { background: #1e1e2d; }
+    .rp-graph-name { flex: 1; font-size: 12px; color: #e2e8f0; }
+    .rp-graph-meta { font-size: 10px; color: #64748b; }
+    .pipeline-item { padding: 8px; background: #0f0f13; border-radius: 6px; margin-bottom: 8px; }
+    .pipeline-item-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .pipeline-id { font-size: 11px; font-family: monospace; color: #a78bfa; }
+    .pipeline-domain { font-size: 11px; color: #64748b; }
+    .svc-list { display: flex; flex-direction: column; gap: 3px; }
+    .svc-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+    .svc-name { font-size: 11px; font-family: monospace; flex: 1; color: #94a3b8; }
+    .svc-state { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
+    .svc-state.running { background: #1e3a2f; color: #4ade80; }
+    .svc-state.starting { background: #3a2e1e; color: #fbbf24; }
+    .svc-state.exited { background: #3a1e1e; color: #f87171; }
+
+    /* Compose events */
+    #compose-log { padding: 10px 14px; font-size: 11px; font-family: monospace; color: #94a3b8; height: 120px; overflow-y: auto; }
+    .compose-event { margin-bottom: 4px; }
+    .compose-event.block_added { color: #4ade80; }
+    .compose-event.connected { color: #60a5fa; }
+    .compose-event.error { color: #f87171; }
+    .compose-event.finalized { color: #a78bfa; font-weight: 600; }
+    .compose-event.message { color: #e2e8f0; }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// ─── Config ──────────────────────────────────────────────────────────────────
+const API = '';  // same origin
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let _auth = null;  // {username, role}
+let _blocks = [];
+let _hardware = [];
+let _llmAvailable = false;
+let _graphs = [];
+let _pipelines = [];
+let _activeGraphId = null;
+let _nodes = [];
+let _edges = [];
+let _composing = false;
+let _composeLog = [];
+
+// ─── Utilities ───────────────────────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json', ...opts.headers };
+  if (_auth) {
+    headers['Authorization'] = 'Basic ' + btoa(_auth.username + ':' + _auth._pin);
+  }
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) { _auth = null; render(); throw new Error('Unauthorized'); }
+  if (!res.ok) { const t = await res.text(); throw new Error(t); }
+  return res.json();
+}
+
+function categoryIcon(cat) {
+  return { sensor: '📷', detection: '🔍', logic: '⚙️', action: '⚡', output: '📊', arm: '🦾' }[cat] || '🧩';
+}
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+async function doLogin(username, pin) {
+  const headers = { 'Authorization': 'Basic ' + btoa(username + ':' + pin) };
+  const res = await fetch(API + '/api/auth/login', { method: 'POST', headers });
+  if (!res.ok) throw new Error('Invalid username or PIN');
+  const user = await res.json();
+  _auth = { ...user, _pin: pin };
+  await loadInitialData();
+  render();
+}
+
+async function doSetup(username, pin) {
+  await fetch(API + '/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, pin })
+  }).then(r => { if (!r.ok) return r.json().then(e => { throw new Error(e.detail); }); });
+  await doLogin(username, pin);
+}
+
+// ─── Data loading ─────────────────────────────────────────────────────────────
+async function loadInitialData() {
+  const [blocksRes, llmRes, graphsRes, pipelinesRes] = await Promise.allSettled([
+    apiFetch('/api/blocks'),
+    apiFetch('/api/llm-available'),
+    apiFetch('/api/graphs'),
+    apiFetch('/api/pipelines'),
+  ]);
+  if (blocksRes.status === 'fulfilled') { _blocks = blocksRes.value.blocks; _hardware = blocksRes.value.detected_hardware; }
+  if (llmRes.status === 'fulfilled') _llmAvailable = llmRes.value.available;
+  if (graphsRes.status === 'fulfilled') _graphs = graphsRes.value.graphs;
+  if (pipelinesRes.status === 'fulfilled') _pipelines = pipelinesRes.value.pipelines;
+}
+
+async function refreshBlocks() {
+  await apiFetch('/api/blocks/refresh', { method: 'POST' });
+  const res = await apiFetch('/api/blocks');
+  _blocks = res.blocks; _hardware = res.detected_hardware;
+  render();
+}
+
+// ─── Graph operations ─────────────────────────────────────────────────────────
+async function saveGraph(name) {
+  const graph = { id: _activeGraphId, name, nodes: _nodes.map(n => ({
+    node_id: n.id, block_id: n.data.blockId, block_version: n.data.blockVersion,
+    x: n.position.x, y: n.position.y, params: n.data.params,
+  })), edges: _edges.map(e => ({
+    edge_id: e.id, source_node_id: e.source, source_port_id: e.sourceHandle,
+    target_node_id: e.target, target_port_id: e.targetHandle,
+  }))};
+  const saved = await apiFetch('/api/graphs', { method: 'POST', body: JSON.stringify(graph) });
+  _activeGraphId = saved.id;
+  const graphsRes = await apiFetch('/api/graphs');
+  _graphs = graphsRes.graphs;
+  render();
+}
+
+async function loadGraph(graphId) {
+  const graph = await apiFetch(`/api/graphs/${graphId}`);
+  _activeGraphId = graph.id;
+  _nodes = (graph.nodes || []).map(n => ({
+    id: n.node_id, type: 'block', position: { x: n.x || 0, y: n.y || 0 },
+    data: { blockId: n.block_id, blockVersion: n.block_version, params: n.params || {} },
+  }));
+  _edges = (graph.edges || []).map(e => ({
+    id: e.edge_id, source: e.source_node_id, sourceHandle: e.source_port_id,
+    target: e.target_node_id, targetHandle: e.target_port_id, animated: false,
+  }));
+  render();
+}
+
+async function launchPipeline() {
+  const graph = { nodes: _nodes.map(n => ({
+    node_id: n.id, block_id: n.data.blockId, block_version: n.data.blockVersion,
+    params: n.data.params,
+  })), edges: _edges.map(e => ({
+    edge_id: e.id, source_node_id: e.source, source_port_id: e.sourceHandle,
+    target_node_id: e.target, target_port_id: e.targetHandle,
+  }))};
+  const pipeline = await apiFetch('/api/pipelines', { method: 'POST', body: JSON.stringify({ graph }) });
+  _pipelines.push(pipeline);
+  render();
+  // Poll status every 5s
+  const interval = setInterval(async () => {
+    try {
+      const res = await apiFetch(`/api/pipelines/${pipeline.pipeline_id}/status`);
+      const idx = _pipelines.findIndex(p => p.pipeline_id === pipeline.pipeline_id);
+      if (idx !== -1) { _pipelines[idx] = { ..._pipelines[idx], services: res.services }; }
+      render();
+    } catch (_) { clearInterval(interval); }
+  }, 5000);
+}
+
+async function stopPipeline(pipelineId) {
+  await apiFetch(`/api/pipelines/${pipelineId}`, { method: 'DELETE' });
+  _pipelines = _pipelines.filter(p => p.pipeline_id !== pipelineId);
+  render();
+}
+
+// ─── LLM Composition ──────────────────────────────────────────────────────────
+async function startCompose(prompt) {
+  _composing = true; _composeLog = []; render();
+  const { session_id } = await apiFetch('/api/compose', { method: 'POST', body: JSON.stringify({ prompt }) });
+  const evtSrc = new EventSource(API + `/api/compose/${session_id}/stream`);
+  evtSrc.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    _composeLog.push({ type: 'message', text: data.text || JSON.stringify(data) });
+    render();
+  };
+  ['block_added', 'connected', 'error', 'finalized', 'warning', 'done'].forEach(evtType => {
+    evtSrc.addEventListener(evtType, (e) => {
+      const data = JSON.parse(e.data);
+      _composeLog.push({ type: evtType, data });
+      if (evtType === 'block_added' && data.node_id) {
+        const block = _blocks.find(b => b.id === data.block_id) || {};
+        const x = _nodes.length * 220 + 40;
+        _nodes = [..._nodes, { id: data.node_id, type: 'block', position: { x, y: 100 }, data: { blockId: data.block_id, blockVersion: block.version || '1.0.0', params: {} } }];
+      }
+      if (evtType === 'connected' && data.edge_id) {
+        // Edge comes from finalized graph — handled in finalized event
+      }
+      if (evtType === 'finalized' && data.graph) {
+        _edges = (data.graph.edges || []).map(e => ({ id: e.edge_id, source: e.source_node_id, sourceHandle: e.source_port_id, target: e.target_node_id, targetHandle: e.target_port_id }));
+      }
+      if (evtType === 'done' || evtType === 'error') { evtSrc.close(); _composing = false; }
+      render();
+    });
+  });
+}
+
+// ─── Node/Edge management ─────────────────────────────────────────────────────
+function addBlockToCanvas(blockId) {
+  const block = _blocks.find(b => b.id === blockId);
+  if (!block) return;
+  const nodeId = 'node-' + Date.now();
+  const defaultParams = {};
+  (block.supervisor_params || []).forEach(p => { defaultParams[p.id] = p.default; });
+  _nodes = [..._nodes, { id: nodeId, type: 'block', position: { x: _nodes.length * 220 + 40, y: 120 }, data: { blockId, blockVersion: block.version, params: defaultParams } }];
+  render();
+}
+
+function removeNode(nodeId) {
+  _nodes = _nodes.filter(n => n.id !== nodeId);
+  _edges = _edges.filter(e => e.source !== nodeId && e.target !== nodeId);
+  render();
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function render() { ReactDOM.render(React.createElement(App), document.getElementById('root')); }
+
+// ─── Components ───────────────────────────────────────────────────────────────
+function AuthScreen({ firstRun }) {
+  const [username, setUsername] = React.useState('');
+  const [pin, setPin] = React.useState('');
+  const [err, setErr] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+
+  async function submit(e) {
+    e.preventDefault(); setErr(''); setLoading(true);
+    try {
+      if (firstRun) await doSetup(username, pin);
+      else await doLogin(username, pin);
+    } catch(ex) { setErr(ex.message); }
+    setLoading(false);
+  }
+
+  return React.createElement('div', { id: 'auth-screen' },
+    React.createElement('div', { className: 'auth-card' },
+      React.createElement('h2', null, firstRun ? 'Setup' : 'Sign In'),
+      React.createElement('p', null, firstRun ? 'Create the first engineer account.' : 'Enter your username and PIN.'),
+      err && React.createElement('div', { className: 'auth-error' }, err),
+      React.createElement('form', { onSubmit: submit },
+        React.createElement('div', { className: 'form-group' },
+          React.createElement('label', null, 'Username'),
+          React.createElement('input', { type: 'text', value: username, onChange: e => setUsername(e.target.value), required: true, autoFocus: true })
+        ),
+        React.createElement('div', { className: 'form-group' },
+          React.createElement('label', null, 'PIN'),
+          React.createElement('input', { type: 'password', value: pin, onChange: e => setPin(e.target.value), required: true })
+        ),
+        React.createElement('button', { type: 'submit', className: 'btn btn-primary', style: { width: '100%' }, disabled: loading },
+          loading ? 'Please wait…' : (firstRun ? 'Create Account' : 'Sign In')
+        )
+      )
+    )
+  );
+}
+
+function Palette() {
+  const groups = {};
+  _blocks.forEach(b => {
+    const cat = b.category || 'other';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(b);
+  });
+  const order = ['sensor', 'detection', 'logic', 'action', 'output', 'arm', 'other'];
+
+  return React.createElement('div', { id: 'palette' },
+    React.createElement('div', { className: 'palette-header' }, 'Blocks'),
+    _auth?.role === 'engineer' && React.createElement('div', { style: { padding: '0 10px 8px' } },
+      React.createElement('button', { className: 'btn btn-secondary', style: { width: '100%', fontSize: 11 }, onClick: refreshBlocks }, '↻ Refresh Registry')
+    ),
+    order.filter(c => groups[c]).map(cat =>
+      React.createElement('div', { key: cat, className: 'palette-category' },
+        React.createElement('div', { className: 'palette-category-title' }, categoryIcon(cat) + ' ' + cat),
+        groups[cat].map(block =>
+          React.createElement('div', {
+            key: block.id, className: 'palette-block',
+            draggable: true,
+            onClick: () => addBlockToCanvas(block.id),
+            onDragEnd: () => addBlockToCanvas(block.id),
+            title: block.id,
+          },
+            block.hardware_detection_hint
+              ? React.createElement('span', { className: 'hw-dot ' + (_hardware.includes(block.hardware_detection_hint) ? '' : 'absent') })
+              : null,
+            block.display_name,
+            block.requires_gpu ? React.createElement('span', { className: 'block-badge gpu' }, 'GPU') : null,
+          )
+        )
+      )
+    )
+  );
+}
+
+function BlockNode({ id, data, selected }) {
+  const block = _blocks.find(b => b.id === data.blockId) || {};
+  const params = block.supervisor_params || [];
+  const inputPorts = (block.ports?.input || []);
+  const outputPorts = (block.ports?.output || []);
+
+  return React.createElement('div', { className: 'block-node' + (selected ? ' selected' : '') },
+    // Input handles
+    inputPorts.map((p, i) =>
+      React.createElement(XyFlow.Handle, { key: p.id, type: 'target', position: 'Left', id: p.id, style: { top: 36 + i * 18 }, title: p.label + ' (' + p.alias + ')' })
+    ),
+    React.createElement('div', { className: 'block-node-header' },
+      React.createElement('span', { style: { fontSize: 14 } }, categoryIcon(block.category)),
+      React.createElement('span', { className: 'block-node-title' }, block.display_name || data.blockId),
+      React.createElement('span', { className: 'block-node-status' })
+    ),
+    params.length > 0 && React.createElement('div', { className: 'block-node-params' },
+      params.slice(0, 3).map(p =>
+        React.createElement('div', { key: p.id, className: 'param-row' },
+          React.createElement('span', { className: 'param-label' }, p.label),
+          React.createElement('span', { className: 'param-value', contentEditable: true,
+            suppressContentEditableWarning: true,
+            onBlur: (e) => {
+              const val = e.target.innerText.trim();
+              const idx = _nodes.findIndex(n => n.id === id);
+              if (idx !== -1) { _nodes[idx] = { ..._nodes[idx], data: { ..._nodes[idx].data, params: { ..._nodes[idx].data.params, [p.id]: val } } }; }
+            }
+          }, String(data.params?.[p.id] ?? p.default ?? ''))
+        )
+      )
+    ),
+    React.createElement('div', { className: 'block-node-footer' },
+      React.createElement('button', { className: 'node-btn', onClick: () => removeNode(id) }, '✕ Remove')
+    ),
+    // Output handles
+    outputPorts.map((p, i) =>
+      React.createElement(XyFlow.Handle, { key: p.id, type: 'source', position: 'Right', id: p.id, style: { top: 36 + i * 18 }, title: p.label + ' (' + p.alias + ')' })
+    ),
+  );
+}
+
+function Canvas() {
+  const nodeTypes = React.useMemo(() => ({ block: BlockNode }), []);
+
+  function onConnect(params) {
+    // Validate alias compatibility client-side before adding edge
+    const srcNode = _nodes.find(n => n.id === params.source);
+    const tgtNode = _nodes.find(n => n.id === params.target);
+    if (!srcNode || !tgtNode) return;
+    const srcBlock = _blocks.find(b => b.id === srcNode.data.blockId);
+    const tgtBlock = _blocks.find(b => b.id === tgtNode.data.blockId);
+    const srcPort = srcBlock?.ports?.output?.find(p => p.id === params.sourceHandle);
+    const tgtPort = tgtBlock?.ports?.input?.find(p => p.id === params.targetHandle);
+    if (!srcPort || !tgtPort) return;
+    if (srcPort.alias !== tgtPort.alias) {
+      // annotated_image → image_frame also disallowed
+      const annotOnlyToImage = srcPort.alias === 'annotated_image' && tgtPort.alias === 'image_frame';
+      if (srcPort.alias !== tgtPort.alias || annotOnlyToImage) {
+        alert(`Cannot connect: ${srcPort.alias} → ${tgtPort.alias}\nPort aliases must match.`);
+        return;
+      }
+    }
+    const edgeId = 'e-' + Date.now();
+    _edges = [..._edges, { ...params, id: edgeId, animated: false }];
+    render();
+  }
+
+  return React.createElement(XyFlow.ReactFlow, {
+    nodes: _nodes,
+    edges: _edges,
+    nodeTypes,
+    onConnect,
+    onNodesChange: (changes) => {
+      _nodes = XyFlow.applyNodeChanges(changes, _nodes);
+      render();
+    },
+    onEdgesChange: (changes) => {
+      _edges = XyFlow.applyEdgeChanges(changes, _edges);
+      render();
+    },
+    fitView: true,
+    style: { background: '#0a0a10' },
+  },
+    React.createElement(XyFlow.MiniMap, { style: { background: '#13131c' } }),
+    React.createElement(XyFlow.Controls),
+    React.createElement(XyFlow.Background, { color: '#1e1e2d', gap: 20 })
+  );
+}
+
+function RightPanel() {
+  const [graphName, setGraphName] = React.useState('My Pipeline');
+
+  return React.createElement('div', { id: 'rightpanel' },
+    // Saved graphs
+    React.createElement('div', { className: 'rp-section' },
+      React.createElement('div', { className: 'rp-header' }, 'Saved Graphs'),
+      React.createElement('div', { className: 'rp-body' },
+        React.createElement('div', { style: { display: 'flex', gap: 6, marginBottom: 10 } },
+          React.createElement('input', { style: { flex: 1, padding: '4px 8px', background: '#0f0f13', border: '1px solid #2d2d3d', borderRadius: 4, color: '#e2e8f0', fontSize: 12 },
+            value: graphName, onChange: e => setGraphName(e.target.value), placeholder: 'Graph name' }),
+          React.createElement('button', { className: 'btn btn-secondary', style: { fontSize: 11, padding: '4px 10px' }, onClick: () => saveGraph(graphName) }, 'Save')
+        ),
+        _graphs.length === 0
+          ? React.createElement('div', { style: { color: '#64748b', fontSize: 12 } }, 'No saved graphs')
+          : React.createElement('div', { className: 'rp-graph-list' },
+            _graphs.map(g => React.createElement('div', { key: g.id, className: 'rp-graph-item', onClick: () => loadGraph(g.id) },
+              React.createElement('span', { className: 'rp-graph-name' }, g.name),
+              React.createElement('span', { className: 'rp-graph-meta' }, g.node_count + ' blocks')
+            ))
+          )
+      )
+    ),
+    // Active pipelines
+    React.createElement('div', { className: 'rp-section' },
+      React.createElement('div', { className: 'rp-header' }, 'Active Pipelines (' + _pipelines.length + ')'),
+      React.createElement('div', { className: 'rp-body' },
+        _pipelines.length === 0
+          ? React.createElement('div', { style: { color: '#64748b', fontSize: 12 } }, 'No running pipelines')
+          : _pipelines.map(p => React.createElement('div', { key: p.pipeline_id, className: 'pipeline-item' },
+            React.createElement('div', { className: 'pipeline-item-header' },
+              React.createElement('span', { className: 'pipeline-id' }, 'Pipeline #' + p.pipeline_id.slice(0, 6)),
+              React.createElement('span', { className: 'pipeline-domain' }, 'DDS ' + p.domain_id),
+              React.createElement('button', { className: 'btn btn-danger', style: { fontSize: 10, padding: '2px 8px', marginLeft: 'auto' }, onClick: () => stopPipeline(p.pipeline_id) }, '■ Stop')
+            ),
+            p.services && React.createElement('div', { className: 'svc-list' },
+              p.services.map(s => React.createElement('div', { key: s.Name || s.Service, className: 'svc-row' },
+                React.createElement('span', { className: 'svc-name' }, s.Service || s.Name),
+                React.createElement('span', { className: 'svc-state ' + (s.State || '').toLowerCase() }, s.State || '?')
+              ))
+            )
+          ))
+      )
+    ),
+    // Compose log
+    _composeLog.length > 0 && React.createElement('div', { className: 'rp-section' },
+      React.createElement('div', { className: 'rp-header' }, 'Composition Log'),
+      React.createElement('div', { id: 'compose-log' },
+        _composeLog.map((ev, i) => React.createElement('div', { key: i, className: 'compose-event ' + ev.type },
+          ev.type === 'message' ? ev.text : (ev.type + ': ' + JSON.stringify(ev.data).slice(0, 80))
+        ))
+      )
+    )
+  );
+}
+
+function LLMInputArea() {
+  const [prompt, setPrompt] = React.useState('');
+
+  async function submit() {
+    if (!prompt.trim() || _composing) return;
+    const p = prompt; setPrompt('');
+    await startCompose(p);
+  }
+
+  return React.createElement('div', { id: 'llm-input-area' },
+    React.createElement('h3', null, 'Compose with AI'),
+    _llmAvailable
+      ? React.createElement('div', { id: 'llm-input' },
+        React.createElement('textarea', {
+          value: prompt, onChange: e => setPrompt(e.target.value), disabled: _composing,
+          placeholder: 'Describe the workflow in plain English...',
+          onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }
+        }),
+        React.createElement('button', { className: 'btn btn-primary', onClick: submit, disabled: _composing || !prompt.trim(), style: { alignSelf: 'flex-end' } },
+          _composing ? '…' : 'Compose'
+        )
+      )
+      : React.createElement('div', { id: 'llm-offline' }, '⚠ Offline mode — natural language composition unavailable')
+  );
+}
+
+function App() {
+  const [firstRun, setFirstRun] = React.useState(null);
+
+  React.useEffect(() => {
+    if (firstRun === null) {
+      fetch(API + '/api/auth/first-run').then(r => r.json()).then(d => setFirstRun(d.first_run));
+    }
+  }, [firstRun]);
+
+  if (firstRun === null) return React.createElement('div', { style: { padding: 40, color: '#64748b' } }, 'Loading…');
+  if (firstRun || !_auth) return React.createElement(AuthScreen, { firstRun: !!firstRun });
+
+  return React.createElement('div', { id: 'app' },
+    // Topbar
+    React.createElement('div', { id: 'topbar' },
+      React.createElement('h1', null, '▸ ROS2 Platform'),
+      React.createElement('span', { className: 'status-badge' + (_auth ? '' : ' offline') }, _auth ? _auth.username + ' (' + _auth.role + ')' : 'Offline'),
+      _llmAvailable ? null : React.createElement('span', { className: 'status-badge offline' }, '⚠ Offline'),
+      React.createElement('button', { className: 'btn btn-secondary', onClick: () => { _nodes = []; _edges = []; render(); } }, 'Clear'),
+      React.createElement('button', { className: 'btn btn-primary', onClick: launchPipeline, disabled: _nodes.length === 0 }, '▶ Run Pipeline'),
+      React.createElement('button', { className: 'btn btn-secondary', style: { fontSize: 11 }, onClick: () => { _auth = null; render(); } }, 'Sign out')
+    ),
+    // Main layout
+    React.createElement('div', { id: 'main' },
+      React.createElement(Palette),
+      React.createElement('div', { id: 'canvas-area', style: { display: 'flex', flexDirection: 'column' } },
+        React.createElement('div', { style: { flex: 1 } },
+          React.createElement(Canvas)
+        ),
+        React.createElement(LLMInputArea)
+      ),
+      React.createElement(RightPanel)
+    )
+  );
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+render();
+</script>
+</body>
+</html>

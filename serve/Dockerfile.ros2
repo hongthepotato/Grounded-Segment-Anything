@@ -1,0 +1,51 @@
+# ============================================================
+# Multi-arch ROS2 YOLO Inference Container
+# Supports: linux/amd64 (x86_64 CUDA) + linux/arm64 (Jetson L4T)
+#
+# One-time host setup (run once on training workstation):
+#   docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+#   docker buildx create --use --name multiarch --driver docker-container \
+#     --driver-opt network=host
+#   docker buildx inspect --bootstrap
+#
+# Build + push (takes 45-90 min first time on ARM64 via QEMU emulation,
+# 5-10 min on subsequent cached builds):
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -t registry:5000/yolo-inference:latest --push .
+# ============================================================
+
+# --- x86_64 base (CUDA + ROS2 Humble) ---
+FROM --platform=linux/amd64 ros:humble-ros-base AS base-amd64
+RUN pip3 install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/cu124
+RUN pip3 install --no-cache-dir ultralytics
+
+# --- aarch64 / Jetson base (L4T, includes CUDA + PyTorch for Jetson) ---
+# Pinned by digest for reproducibility. Fallback: nvcr.io/nvidia/l4t-base:r36.4.0
+# (requires building PyTorch from wheel, adds ~20 min).
+FROM --platform=linux/arm64 dustynv/ros:humble-pytorch-l4t-r36.4.0 AS base-arm64
+RUN pip3 install --no-cache-dir ultralytics
+
+# --- Select base by TARGETARCH ---
+ARG TARGETARCH
+FROM base-${TARGETARCH} AS runtime
+
+# Install vision_msgs
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-humble-vision-msgs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and build ROS2 workspace
+COPY ros2_ws /ros2_ws
+RUN . /opt/ros/humble/setup.sh \
+    && cd /ros2_ws \
+    && colcon build --symlink-install
+
+# Bake model weights (copied by container_builder.py into build context)
+COPY model/best.pt /model/best.pt
+RUN mkdir -p /model/cache
+
+# Entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

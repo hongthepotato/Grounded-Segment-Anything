@@ -1,0 +1,46 @@
+{
+  "id": "live-view",
+  "version": "1.0.0",
+  "display_name": "Live View",
+  "category": "output",
+  "icon": "monitor",
+  "ports": {
+    "input": [
+      {
+        "id": "image_in",
+        "alias": "annotated_image",
+        "ros2_type": "sensor_msgs/Image",
+        "label": "Annotated View"
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "stream_port",
+      "type": "int",
+      "label": "MJPEG stream port",
+      "default": 8080,
+      "min": 1024,
+      "max": 65535
+    },
+    {
+      "id": "quality",
+      "type": "int",
+      "label": "JPEG quality",
+      "default": 85,
+      "min": 10,
+      "max": 100
+    }
+  ],
+  "engineer_params": [
+    {
+      "id": "max_fps",
+      "type": "int",
+      "label": "Max stream FPS (0 = no limit)",
+      "default": 15,
+      "min": 0,
+      "max": 60,
+      "units": "fps"
+    }
+  ]
+}

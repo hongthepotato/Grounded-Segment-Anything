@@ -1,0 +1,70 @@
+{
+  "id": "realsense-d435",
+  "version": "1.0.0",
+  "display_name": "RealSense D435",
+  "category": "sensor",
+  "hardware_family": "camera",
+  "icon": "camera",
+  "hardware_detection_hint": "realsense",
+  "ports": {
+    "output": [
+      {
+        "id": "color_out",
+        "alias": "image_frame",
+        "ros2_type": "sensor_msgs/Image",
+        "label": "Color Camera"
+      },
+      {
+        "id": "depth_out",
+        "alias": "depth_frame",
+        "ros2_type": "sensor_msgs/PointCloud2",
+        "label": "Depth",
+        "optional": true
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "serial",
+      "type": "string",
+      "label": "Camera serial ('any' = first found)",
+      "default": "any"
+    },
+    {
+      "id": "resolution",
+      "type": "enum",
+      "label": "Resolution",
+      "default": "640x480",
+      "options": ["640x480", "848x480", "1280x720"]
+    },
+    {
+      "id": "fps",
+      "type": "int",
+      "label": "Frame rate",
+      "default": 30,
+      "min": 6,
+      "max": 90,
+      "units": "fps"
+    }
+  ],
+  "engineer_params": [
+    {
+      "id": "exposure",
+      "type": "int",
+      "label": "Exposure (-1 = auto)",
+      "default": -1
+    },
+    {
+      "id": "gain",
+      "type": "int",
+      "label": "Gain (-1 = auto)",
+      "default": -1
+    },
+    {
+      "id": "calibration_file",
+      "type": "string",
+      "label": "Custom calibration YAML path",
+      "default": ""
+    }
+  ]
+}

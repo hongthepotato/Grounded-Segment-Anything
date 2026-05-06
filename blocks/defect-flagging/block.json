@@ -1,0 +1,41 @@
+{
+  "id": "defect-flagging",
+  "version": "1.0.0",
+  "display_name": "Defect Flagging",
+  "category": "logic",
+  "icon": "flag",
+  "ports": {
+    "input": [
+      {
+        "id": "detections_in",
+        "alias": "detections",
+        "ros2_type": "vision_msgs/Detection2DArray",
+        "label": "Detections"
+      }
+    ],
+    "output": [
+      {
+        "id": "flag_out",
+        "alias": "flag_event",
+        "ros2_type": "std_msgs/Bool",
+        "label": "Defect Flag"
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "flag_label",
+      "type": "string",
+      "label": "Class label to flag (empty = any detection)",
+      "default": ""
+    },
+    {
+      "id": "min_area",
+      "type": "float",
+      "label": "Minimum bounding box area to count as defect",
+      "default": 0.0,
+      "min": 0.0,
+      "units": "px²"
+    }
+  ]
+}

@@ -318,7 +318,8 @@ class TestKeepHigherP:
         existing = {"p": RangeParameter.scalar(0.3)}
         new = {"p": RangeParameter.scalar(0.7)}
         result = translator._keep_higher_p(existing, new)
-        assert result is new
+        assert result == new
+        assert result is not new  # returns a copy, not the original reference
 
     def test_lower_p_loses(self, translator):
         existing = {"p": RangeParameter.scalar(0.7)}
@@ -341,14 +342,16 @@ class TestKeepHigherP:
         existing = {"p": 0.3}
         new = {"p": 0.7}
         result = translator._keep_higher_p(existing, new)
-        assert result is new
+        assert result == new
+        assert result is not new  # returns a copy, not the original reference
 
     def test_handles_mixed_param_and_float(self, translator):
         """RangeParameter on one side, raw float on the other."""
         existing = {"p": RangeParameter.scalar(0.3)}
         new = {"p": 0.7}
         result = translator._keep_higher_p(existing, new)
-        assert result is new
+        assert result == new
+        assert result is not new  # returns a copy, not the original reference
 
 
 class TestKeepHigherPMissingProbabilityKey:
@@ -358,17 +361,21 @@ class TestKeepHigherPMissingProbabilityKey:
     Documenting + flagging as a gap so adding new rules without `p`
     fails loudly here, not deep in dedup."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="characteristic_translator.py:1109-1110 — _keep_higher_p "
-        "does `existing['p']` and `new['p']` directly. Missing `p` raises "
-        "KeyError instead of a clear message. Either guard with `.get('p', "
-        "0.0)` (treats missing as lowest priority) or raise a clearer "
-        "AugmentationRule validation error in __post_init__.",
-    )
-    def test_missing_p_should_raise_clear_error(self, translator):
+    def test_missing_p_existing_raises_clear_error(self, translator):
         existing = {"alpha": RangeParameter.scalar(0.5)}  # no "p"
         new = {"p": RangeParameter.scalar(0.5)}
+        with pytest.raises(ValueError, match="probability"):
+            translator._keep_higher_p(existing, new)
+
+    def test_missing_p_new_raises_clear_error(self, translator):
+        existing = {"p": RangeParameter.scalar(0.5)}
+        new = {"alpha": RangeParameter.scalar(0.5)}  # no "p"
+        with pytest.raises(ValueError, match="probability"):
+            translator._keep_higher_p(existing, new)
+
+    def test_missing_p_both_raises_clear_error(self, translator):
+        existing = {"alpha": RangeParameter.scalar(0.5)}  # no "p"
+        new = {"alpha": RangeParameter.scalar(0.3)}  # no "p"
         with pytest.raises(ValueError, match="probability"):
             translator._keep_higher_p(existing, new)
 
@@ -524,39 +531,22 @@ class TestEnvironmentRulesCoverSelfReportedOptions:
 
 
 # ---------------------------------------------------------------------------
-# Section 6: Schema integrity for 5 representative characteristics
+# Section 6: Schema integrity for all 9 characteristics
 # ---------------------------------------------------------------------------
+
+_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())
 
 
 class TestCharacteristicSchemaIntegrity:
-    """Spot-check the 5 most-used characteristics: every intensity present,
-    every transform has a `p` parameter (so dedup works), every range has
-    sensible min<=max."""
+    """All 9 characteristics: every intensity present, every transform has a
+    `p` parameter (so dedup works), every range has sensible min<=max."""
 
-    @pytest.mark.parametrize(
-        "characteristic",
-        [
-            "changes_shape",
-            "low_contrast",
-            "reflective_surface",
-            "partially_hidden",
-            "moves_or_vibrates",
-        ],
-    )
+    @pytest.mark.parametrize("characteristic", _ALL_CHARACTERISTICS)
     def test_all_three_intensities_present(self, characteristic):
         rule = CharacteristicTranslator.CHARACTERISTIC_RULES[characteristic]
         assert set(rule.intensity_ranges.keys()) >= {"low", "medium", "high"}
 
-    @pytest.mark.parametrize(
-        "characteristic",
-        [
-            "changes_shape",
-            "low_contrast",
-            "reflective_surface",
-            "partially_hidden",
-            "moves_or_vibrates",
-        ],
-    )
+    @pytest.mark.parametrize("characteristic", _ALL_CHARACTERISTICS)
     def test_every_intensity_has_at_least_one_transform(self, characteristic):
         rule = CharacteristicTranslator.CHARACTERISTIC_RULES[characteristic]
         for intensity in ["low", "medium", "high"]:
@@ -566,16 +556,7 @@ class TestCharacteristicSchemaIntegrity:
                 f"would silently produce nothing for this combination."
             )
 
-    @pytest.mark.parametrize(
-        "characteristic",
-        [
-            "changes_shape",
-            "low_contrast",
-            "reflective_surface",
-            "partially_hidden",
-            "moves_or_vibrates",
-        ],
-    )
+    @pytest.mark.parametrize("characteristic", _ALL_CHARACTERISTICS)
     def test_every_transform_has_probability(self, characteristic):
         """Every transform's params must include `p` — _keep_higher_p
         relies on it for dedup and crashes (KeyError) without."""
@@ -588,16 +569,7 @@ class TestCharacteristicSchemaIntegrity:
                     f"another characteristic. Add p=RangeParameter.scalar(...)."
                 )
 
-    @pytest.mark.parametrize(
-        "characteristic",
-        [
-            "changes_shape",
-            "low_contrast",
-            "reflective_surface",
-            "partially_hidden",
-            "moves_or_vibrates",
-        ],
-    )
+    @pytest.mark.parametrize("characteristic", _ALL_CHARACTERISTICS)
     def test_translate_with_each_intensity_succeeds(self, translator, characteristic):
         """End-to-end: every characteristic resolves at every intensity
         without raising. Catches a class of bug where a rule's

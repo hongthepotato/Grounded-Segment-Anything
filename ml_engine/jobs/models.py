@@ -187,6 +187,9 @@ class Job:
         priority: Job priority (higher = more urgent)
         tags: Optional tags for filtering/grouping
         outcome: Structured result written at job completion (Stage 0+)
+        ros2_image_tag: Pushed image reference for the ROS2 inference container
+            built from this job's artifacts (set by container_builder; consumed
+            by the deploy-info endpoint and edge-device setup script).
     """
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -207,6 +210,7 @@ class Job:
     dispatch_event_id: Optional[str] = (
         None  # Stream entry-id that enqueued this job; guards against duplicate dispatch on PEL recovery
     )
+    ros2_image_tag: Optional[str] = None
 
     def __post_init__(self):
         """Set defaults after initialization."""
@@ -245,6 +249,7 @@ class Job:
             "tags": json.dumps(self.tags),
             "outcome": json.dumps(self.outcome.to_dict() if self.outcome else None),
             "dispatch_event_id": self.dispatch_event_id or "",
+            "ros2_image_tag": self.ros2_image_tag or "",
         }
 
     @classmethod
@@ -320,6 +325,7 @@ class Job:
             tags=tags,
             outcome=outcome,
             dispatch_event_id=data.get("dispatch_event_id") or None,
+            ros2_image_tag=data.get("ros2_image_tag") or None,
         )
 
     @property

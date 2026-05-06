@@ -1,0 +1,174 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ros2-platform/block.schema.json",
+  "title": "Block Definition",
+  "description": "Schema for a platform block's block.json definition file.",
+  "type": "object",
+  "required": ["id", "version", "display_name", "category", "ports"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Unique block identifier. Must match the directory name under blocks/. Lowercase, hyphens only."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "SemVer version string. Graphs pin this version — bump when changing ports or behavior."
+    },
+    "display_name": {
+      "type": "string",
+      "description": "Human-readable name shown on the canvas block card and palette. Supervisor-facing."
+    },
+    "category": {
+      "type": "string",
+      "enum": ["sensor", "detection", "logic", "action", "output", "arm"],
+      "description": "Used to group blocks in the palette. 'arm' is reserved for split arm blocks."
+    },
+    "hardware_family": {
+      "type": "string",
+      "enum": ["camera", "arm", "plc", "conveyor"],
+      "description": "Optional. Blocks in the same hardware_family share port interfaces and are grouped in the palette. Camera blocks all output image_frame; arm blocks all use the joint_state/ee_pose/motion_id/gripper_cmd port set."
+    },
+    "icon": {
+      "type": "string",
+      "description": "Icon name from the platform icon set. Used on the block card. Defaults to the category name if absent."
+    },
+    "dockerfile": {
+      "type": "string",
+      "description": "Path to the Dockerfile relative to the block directory. Defaults to './Dockerfile'."
+    },
+    "image_ref": {
+      "type": "string",
+      "description": "Override the Docker image reference. If omitted, the platform builds the image from the Dockerfile and tags it host-gateway:5000/{id}:{version}."
+    },
+    "hardware_detection_hint": {
+      "type": "string",
+      "enum": ["realsense", "zed", "usb_cam", "ur5", "panda", "kinova"],
+      "description": "If set, the platform shows a green dot on this block's palette card when matching hardware is detected."
+    },
+    "requires_gpu": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, adds 'deploy.resources.reservations.devices' for NVIDIA GPU in the generated compose."
+    },
+    "ports": {
+      "type": "object",
+      "description": "Typed input and output ports. Wires can only connect ports with matching aliases.",
+      "properties": {
+        "input": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/port" }
+        },
+        "output": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/port" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "supervisor_params": {
+      "type": "array",
+      "description": "Parameters shown on the block card. Supervisors can edit these without engineer involvement.",
+      "items": { "$ref": "#/definitions/param" }
+    },
+    "engineer_params": {
+      "type": "array",
+      "description": "Parameters hidden behind 'Advanced' toggle. Exposed only to engineers (requires engineer PIN).",
+      "items": { "$ref": "#/definitions/param" }
+    },
+    "presets_endpoint": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, the platform queries GET /presets on this block's container to populate dropdown options. Required for all arm-motion blocks."
+    }
+  },
+  "definitions": {
+    "port": {
+      "type": "object",
+      "required": ["id", "alias", "ros2_type", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Port identifier. Used internally for topic remapping. Must be unique within this block's ports."
+        },
+        "alias": {
+          "type": "string",
+          "enum": [
+            "image_frame",
+            "detections",
+            "filtered_detections",
+            "flag_event",
+            "annotated_image",
+            "depth_frame",
+            "joint_state",
+            "ee_pose",
+            "force_reading",
+            "motion_id",
+            "motion_complete",
+            "gripper_cmd",
+            "grasp_state"
+          ],
+          "description": "User-facing port type alias. Canvas enforces alias matching — supervisors never see ROS2 types."
+        },
+        "ros2_type": {
+          "type": "string",
+          "description": "The ROS2 message type published or subscribed on this port. Used by the launch engine for topic validation."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human-readable port label shown on the block card connector."
+        },
+        "optional": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, the port does not need to be wired for Run to proceed."
+        }
+      }
+    },
+    "param": {
+      "type": "object",
+      "required": ["id", "type", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Parameter identifier. Passed to the container as an environment variable: PARAM_{ID} (uppercased)."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["string", "int", "float", "bool", "enum"],
+          "description": "Parameter type. 'enum' requires an 'options' field."
+        },
+        "label": {
+          "type": "string",
+          "description": "Human-readable label shown next to the input field on the block card."
+        },
+        "default": {
+          "description": "Default value. Must match the declared type."
+        },
+        "options": {
+          "type": "array",
+          "description": "Required for type: 'enum'. The selectable values.",
+          "items": { "type": "string" }
+        },
+        "units": {
+          "type": "string",
+          "description": "Optional unit suffix shown in the UI (e.g. 'fps', 'ms', '%')."
+        },
+        "min": {
+          "type": "number",
+          "description": "Minimum value for int/float params. UI clamps to this range."
+        },
+        "max": {
+          "type": "number",
+          "description": "Maximum value for int/float params."
+        }
+      }
+    }
+  }
+}

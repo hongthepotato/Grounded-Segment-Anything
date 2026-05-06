@@ -41,6 +41,7 @@ env/
 !configs/agent/skills/*.md
 !TODOS.md
 !CLAUDE.md
+!CHANGELOG.md
 !docs/**/*.md
 
 # Jupyter Notebook

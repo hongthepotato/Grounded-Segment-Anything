@@ -8,70 +8,6 @@ Deferred work items with enough context to pick up later. Keep entries self-cont
 
 Three related design gaps surfaced during the first `/plan → /approve` integration attempt on branch `agentic`. All three contribute to the same symptom class: a run gets stuck in a non-terminal state with no way for the system to recover on its own. See the RCA for run `5327209d-af51-47bc-8179-37f22786383f` (2026-04-21) for a concrete trace.
 
-### 1. Auto-resume orphaned Coordinator tasks on FastAPI startup
-
-**What:** On FastAPI app startup, scan Redis for runs in a non-terminal state and re-launch their Coordinator `asyncio.Task`. Today, Coordinators are only launched from `POST /api/agent/approve` ([api/routes/agent.py:68-103](api/routes/agent.py#L68-L103)).
-
-**Why:** The Coordinator lives as an in-memory asyncio task in the FastAPI process. Any container restart kills the task silently. Redis state and the event stream are persistent, so the run's data is intact, but nothing is consuming the stream — the state is orphaned. The user has no way to recover short of manual Redis edits.
-
-**Pros:**
-- Restarts (deploys, crashes, `docker compose up` during dev) stop being data-loss events.
-- Prerequisite for any multi-instance deployment.
-- Removes a class of "stuck at `planning`" bug reports.
-
-**Cons:**
-- Need to handle leader election or single-writer guarantee if >1 FastAPI replica runs. For current single-instance dev, trivial; for prod, nontrivial.
-- Startup scan adds latency and Redis load proportional to active-run count. Probably fine (expect <100 active runs).
-- Resumed Coordinator must tolerate re-reading events it already processed — need to verify `stream_consumer` uses a durable `last_id` per run, not `"0-0"` from scratch.
-
-**Context:** `_start_coordinator` at [api/routes/agent.py:68](api/routes/agent.py#L68) is the launch point today. Look at `StateMachine` + `TERMINAL_STATES` in [ml_engine/agent/state_machine.py](ml_engine/agent/state_machine.py#L59) for the "non-terminal" set. FastAPI startup hook goes in the app factory (search for `app = FastAPI(` in `api/`). Keep it idempotent — `_start_coordinator` already no-ops if a task exists.
-
-**Depends on / blocked by:** Verifying `stream_consumer` resume semantics first. If consumer starts from `"0-0"` on every Coordinator launch, re-running past events is a correctness risk and must be fixed before auto-resume ships.
-
----
-
-### 2. Transition state to `failed_unrecoverable` when Coordinator task crashes
-
-**What:** In the `_on_done` callback at [api/routes/agent.py:93-99](api/routes/agent.py#L93-L99), when the Coordinator task raises, transition the run's state to `failed_unrecoverable` with the exception message stored in `error_message`, in addition to the existing `logger.error(...)`.
-
-**Why:** Today, a Coordinator crash logs and vanishes. The run stays in whatever state it was in when the task started (typically `planning`). `/status` returns a healthy-looking response with `coordinator_active: false` and no error context — indistinguishable from "running normally." The only visible symptom is that subsequent `/approve` calls return a cryptic state-transition 400.
-
-**Pros:**
-- Crashes become visible via `/status` and the event stream.
-- Frontend can show a clear failure state instead of a hung spinner.
-- Terminal state prevents nonsense retry attempts.
-
-**Cons:**
-- `_on_done` runs in an async context but isn't itself async — need to schedule the state transition (e.g. `asyncio.create_task(...)`) since `_on_done` is a sync callback.
-- "Crash" is not always unrecoverable; a transient import error is different from a logic bug. Consider `failed_retrying` for some cases. Start simple (always `failed_unrecoverable`), refine later.
-
-**Context:** Current `_on_done` at [api/routes/agent.py:93-99](api/routes/agent.py#L93-L99). `StateMachine.transition` accepts `error_message` as a kwarg, see [ml_engine/agent/state_machine.py:122-139](ml_engine/agent/state_machine.py#L122-L139). Allowed transitions from `planning` include `failed_unrecoverable` ([state_machine.py:69](ml_engine/agent/state_machine.py#L69)). From other states, check `TRANSITIONS` — failed exits may not be reachable from every state and will need adding.
-
-**Depends on / blocked by:** None. Smallest fix of the three; can ship independently.
-
----
-
-### 3. Make `POST /api/agent/approve` idempotent
-
-**What:** When `/approve` is called on a run whose state is already past `created` (i.e. already approved), return a non-error response that either re-spawns the Coordinator task (if absent) or returns 409 with a clear "already approved" message. Don't return the current 400 with an internal state-transition error.
-
-**Why:** The current behavior leaks internals: the client gets `"Invalid transition 'planning' -> 'planning'. Allowed: ['pending_contract_approval', 'failed_unrecoverable']"`. That's a state-machine implementation detail with no actionable information for a caller who just wants to retry after a network hiccup or a deploy. Combined with #1 (no auto-resume), this is the worst case: the run IS stuck, and the retry path is blocked too.
-
-**Pros:**
-- Retries after transient failures (timeouts, container restart, network blips) become safe.
-- Pairs well with #1 — a UI that polls `/status` can safely re-issue `/approve` to resume.
-- Consistent with REST idempotency expectations for non-POST-like POSTs.
-
-**Cons:**
-- Need to decide idempotent semantics precisely: (a) silently re-spawn the task if absent, or (b) 409 with `{run_id, state, note}`. Behaviors are different — (a) is friendlier, (b) is stricter. Recommend (a) for dev ergonomics.
-- Slightly complicates the endpoint — need to branch on current state before transitioning.
-
-**Context:** `/approve` at [api/routes/agent.py:178-215](api/routes/agent.py#L178-L215). Current flow: unconditional `sm.transition("planning")` then `_start_coordinator`. Replace with: read current state first; if `created`, transition; if `planning` or beyond and not terminal, skip transition and still call `_start_coordinator` (which is already idempotent); if terminal, return 409.
-
-**Depends on / blocked by:** Best done together with #1, because re-spawning the Coordinator only makes sense once auto-resume infrastructure exists to verify the Task wasn't already running. Ship #2 first for observability, then #1 + #3 together.
-
----
-
 ## CI / Testing — follow-ups from ci-and-tests PR
 
 Six items deferred during the `/plan-eng-review` of the CI/test infrastructure PR. Filed 2026-04-23. All depend on the `ci-and-tests` branch merging first.
@@ -143,37 +79,6 @@ Six items deferred during the `/plan-eng-review` of the CI/test infrastructure P
 
 ---
 
-### 14. `tests/test_sam_lora.py` — 13 pre-existing failures + a CI scope gap
-
-**What:** Investigate and resolve 13 pre-existing test failures in `tests/test_sam_lora.py`. Discovered 2026-04-25 while running the full `pytest tests` (vs the narrower `pytest tests/unit tests/integration tests/contract` that CI runs). Verified pre-existing via `git stash` against `agentic`'s baseline — NOT introduced by any PR in this work stream.
-
-**Sample failures (concrete signal for the investigator):**
-- `TestSAMHQLoRAConfig::test_lora_target_modules_format` — asserts `'q_proj' in target_modules` but actual `target_modules` is `['qkv', 'proj']`. Either the target-module naming changed (and the test wasn't updated), OR there's a real regression in `ml_engine/models/teacher/sam_lora.py`.
-- `TestSAMHQLoRAForwardPass::test_forward_returns_expected_keys` — expected output shape `(2, 3, 256, 256)`, got `(2, 3, 1024, 1024)`. Indicates either the SAM forward pass was rewritten to return native 1024-resolution masks (without updating the test) OR the test was wrong from the start.
-
-**Why this needs attention:**
-1. **Real bug vs stale test** — both interpretations have evidence. Either way, the truth needs to be established. If real bug: `sam_lora.py` is silently broken in production. If stale test: confusing signal whenever someone runs the test file directly.
-2. **CI scope gap** — `tests/test_sam_lora.py` is a root-level test file (`tests/*.py`) that CI's `pytest tests/unit tests/integration tests/contract` never picks up. So these failures have been invisible to CI for as long as they've existed. CI was designed to skip root-level tests intentionally (item 11 of the ci-and-tests design doc lists root-level files as "audit for staleness — `test_data_manager.py`, `test_sam_lora.py`, `test_auto_labeler.py`"), but the audit never finished. This is the unfinished half of that audit.
-
-**Pros:**
-- Resolves a real signal/noise problem (right now nobody knows if these are bugs)
-- Closes the CI scope gap — either delete dead tests or move them under `tests/unit/` so CI runs them
-- May reveal an actual production bug in SAM-HQ LoRA wrapper
-
-**Cons:**
-- Investigation requires understanding SAM-HQ LoRA internals (target_modules, forward pass shape contract)
-- If the tests turn out to be stale, deletion + reasoning needs to be documented
-- If a real bug is found, the fix may be deeper than expected (LoRA adapter shape contract changes are usually invasive)
-
-**Context:** The 3 root-level tests in `tests/` are: `test_sam_lora.py`, `test_data_manager.py`, `test_auto_labeler.py`. The ci-and-tests design doc explicitly flagged these as "audit for staleness" but didn't follow through. Same investigation should cover all three. Suggested minimal path:
-
-1. Run each root-level test file with verbose pytest (`-v --tb=long`). Cluster failures.
-2. For each cluster, decide: real bug → file separately + fix; stale test → delete with one-line PR commit explaining why; outdated assumption → update the test.
-3. After per-file decisions: either move the file under `tests/unit/` (so CI catches future regressions) or delete it.
-
-**Depends on / blocked by:** None. Independent of in-flight work.
-
----
 
 ### 15. WebSocket route `/ws/jobs/{job_id}` — restore live event tailing
 
@@ -221,86 +126,9 @@ Then the route's main loop becomes `async for event in _subscribe_to_events(...)
 
 ---
 
-### 17. Restore `text_threshold` token-level filtering in GroundingDINODetector (silent drop bug)
-
-**What:** The `text_threshold` parameter flows from the public API
-(`api/schemas.py:247`, default 0.5) all the way through:
-`POST /api/autolabel` → `autolabel.py:75` → `auto_label.py:82` →
-`DetectionThresholds.text` → `AutoLabeler.config.thresholds.text` →
-`detector.detect(text_threshold=...)` → and is **silently dropped** by
-`GroundingDINODetector.detect()` (`ml_engine/inference/detectors/grounding_dino.py`).
-The implementation currently accepts the param but does nothing with it
-(marked `_ = text_threshold` for linter silence). The original token-level
-filter (`logit > text_threshold` inside `logits_to_class_scores` /
-`get_phrases_from_posmap` per the demo files in `grounded_sam_demo.py:86`)
-was removed during a refactor and never restored.
-
-**Why this is a real bug:** The API contract advertises a knob the user
-expects to control text-prompt sensitivity. Today, changing
-`text_threshold` from 0.5 to 0.9 (or 0.1) has zero effect on the returned
-detections — only `box_threshold` and `nms_threshold` filter results.
-Users who tune the knob expecting changed behavior will report it as
-"the detector ignores my config" — and they'll be right.
-
-**Pros:**
-- Honors the public API contract; eliminates a silent no-op knob
-- Restores the original GroundingDINO paper's token-level filtering, which
-  matters when prompts have ambiguous/overlapping tokens (e.g.
-  "person, person riding a bike" — token-level filtering disambiguates)
-- Removes one of the few remaining `# TODO: text_threshold` comments and
-  the explanatory note in `DetectorProtocol.detect`'s docstring
-
-**Cons:**
-- Need to inspect `logits_to_class_scores` and decide where the threshold
-  applies — at the per-token sigmoid stage, or at the per-class aggregation
-  stage. The demos use it at the per-token stage
-  (`get_phrases_from_posmap(logit > text_threshold, ...)`); modern detect
-  doesn't use the phrase-extraction code path, so a 1:1 port doesn't apply.
-- Changing detection behavior is a behavior change; need a test that
-  asserts text_threshold actually filters (and isn't a placebo). Without
-  a test, "fixed" can silently regress to "still ignored" later.
-
-**Plumbing context (already partly done in Step 2.4.7 of TODO #6):**
-- `DetectorProtocol.detect` in `ml_engine/inference/detectors/base.py`
-  declares `text_threshold: float = 0.5` (kept).
-- `GroundingDINODetector.detect` in
-  `ml_engine/inference/detectors/grounding_dino.py` accepts but ignores
-  the param (`_ = text_threshold` placeholder + docstring TODO link).
-- `AutoLabeler` in `ml_engine/inference/auto_labeler.py:153` now passes
-  `text_threshold=self.config.thresholds.text` through (was previously
-  dropped at this layer too — restored as part of the typing fix so the
-  Protocol matches).
-
-**Test surface:**
-- `tests/unit/ml_engine/inference/test_grounding_dino_detector.py` (new):
-  - `test_text_threshold_filters_low_confidence_tokens` — synthesize a
-    prediction tensor where one token is high-confidence (>0.9) and one is
-    low (~0.3); assert that `detect(prompts=[...], text_threshold=0.5)`
-    keeps the high one and drops the low one. Will FAIL today (bug
-    documented), pass after the fix.
-  - `test_text_threshold_at_extremes` — text_threshold=0.0 keeps all,
-    text_threshold=1.0 drops all (sanity bookends).
-- `tests/integration/test_autolabel_text_threshold_e2e.py` (optional but
-  high value): submit an autolabel job with a high text_threshold against
-  a known-ambiguous image, assert fewer detections than with default 0.5.
-  Catches plumbing regressions in CI.
-
-**Context:** Surfaced 2026-04-26 during Step 2.4.7 of TODO #6 (mypy cleanup
-of `ml_engine/inference/`). The mypy gate flagged a Protocol/impl signature
-mismatch (`DetectorProtocol.detect` requires text_threshold; impl had it
-commented out). The typing-fix path could have been "delete from Protocol"
-(declare it dead) — but tracing upstream showed the value flows from a
-real public-API field, so the right fix is to honor the API contract
-instead of pruning it. Marker comment in `grounding_dino.py:detect()`
-docstring + `_ = text_threshold` placeholder point here.
-
-**Depends on / blocked by:** None. Independent of TODO #16's plumbing
-work. Recommend shipping with the test above so the fix can't silently
-regress.
-
 ---
 
-### 18. Tighten remaining `api/schemas.py` enum/range validators (7 truly-breaking categories — needs frontend audit)
+### ~~18. Tighten remaining `api/schemas.py` enum/range validators (7 truly-breaking categories — needs frontend audit)~~
 
 **What:** 7 `api/schemas.py` fields still have docstring-vs-validator
 gaps after the safe subset shipped in PR test/p2-api-schemas. Each is
@@ -421,52 +249,261 @@ points at the exact source line + recommended fix.
 HTTP code + non-empty list + paired flag are independent of each other
 and the audit, but each wants a callsite enumeration before shipping.
 
+**Completed:** v0.1.8 (2026-05-05) — All 7 categories shipped in PR fix/xfails-and-f841. Enum tightenings: `ApiResponse.status` → `Literal["succeed", "failed"]`, `JobCreate.job_type` → `Literal["teacher_training", "student_distillation"]`, `AutoLabelRequest.output_mode` → `Literal["boxes", "masks", "both"]`, `WorkerResponse.status` → `Literal["idle", "busy", "offline"]`. Range: `ApiResponse.code` → `Field(ge=100, le=599)`. Non-empty lists: `AutoLabelRequest.image_paths` + `classes` → `Field(min_length=1)`. Paired flag: `DistillationRequest._check_paired_fields` model_validator added. All 37 xfails removed and passing as regular tests.
+
 ---
 
-### 19. `_keep_higher_p` crashes with KeyError when a transform's params lack `p`
 
-**What:** `CharacteristicTranslator._keep_higher_p` at
-`augmentation/characteristic_translator.py:1109-1110` does
-`existing["p"]` and `new["p"]` directly. If a future rule defines a
-transform without a `p` parameter, the dedup path crashes with a bare
-`KeyError: 'p'` — confusing if the rule author doesn't know dedup is
-the consumer.
+### ~~20. Refine Coordinator crash classification (failed_retrying for transient errors)~~
 
-**Test surface:** 1 xfail in `tests/unit/augmentation/test_characteristic_translator.py`
-(`TestKeepHigherPMissingProbabilityKey::test_missing_p_should_raise_clear_error`)
-documents the gap. When the fix lands, flip the `@pytest.mark.xfail`
-decorator off.
+**Completed:** v0.1.5 (2026-04-29) — `_handle_coordinator_crash()` classifies exceptions as transient (`ConnectionError`, `TimeoutError`, `InterruptedError`, `redis.exceptions.ConnectionError/TimeoutError`) or permanent. Transient crashes in retryable states (`auto_labeling`, `teacher_training`, `student_distillation`) with retries remaining route to `failed_retrying` + Coordinator re-launch. Permanent errors and retries-exhausted go to `failed_unrecoverable`. `TRANSIENT_EXCEPTION_TYPES` in `core/constants.py` is the single source of truth. Also fixed: silent-return bug on `failed_retrying` transition failure now falls through to `failed_unrecoverable`. 13 new tests in `TestCrashClassification`. GitHub issue #53.
 
-**Fix options (1-3 lines):**
+---
 
-- **Lenient:** treat missing `p` as priority 0 — `existing.get("p", 0.0)`
-  / `new.get("p", 0.0)`. Existing rule (with `p`) wins by default.
-- **Strict:** add the `p` check to `AugmentationRule.__post_init__` so
-  malformed rules fail loudly at module-import time, not at translate-
-  call time. The test in
-  `TestCharacteristicSchemaIntegrity::test_every_transform_has_probability`
-  enforces this for the 5 spot-checked characteristics; promoting it
-  to `__post_init__` covers all 21 rules.
-- **Both:** validate at construction (strict) AND fall back to 0.0 in
-  the dedup path (defense-in-depth for future runtime-mutated rules).
+### ~~21. `pending_contract_approval` — no endpoint to advance out of it (blocker)~~
 
-**Why deferred:** Cosmetic / defensive. No live rule violates the
-constraint today (the schema-integrity tests pass for all 5 spot-
-checked characteristics; spot-checking the remaining 16 is mechanical).
-Worth filing so a fix lands the next time someone touches the rules.
+**Completed:** v0.1.4 (2026-04-28) — Extended `POST /api/agent/gate/{run_id}/{action}` to handle `pending_contract_approval`. Chose Option A (human-gated pause): approve → `auto_labeling` (event: `contract_approved`), reject → `cancelled`. Also fixed pre-existing bug where `pending_approval` reject incorrectly targeted `escalated` (not a valid SM transition). 13 unit tests in `TestHumanGate`. GitHub issue #52.
 
-**Pros:** Clearer error for the rule author; defense-in-depth.
+**Depends on / blocked by:** None. Self-contained. Should be resolved before any end-to-end integration testing since the happy path goes through this state.
 
-**Cons:** None of consequence. The lenient fallback could mask a
-typo'd `p` key (`prob` instead of `p`) by treating it as priority 0.
+---
 
-**Test surface:** No new tests needed — `test_characteristic_translator.py`
-already has the xfail.
+### ~~22. `failed_retrying` — no retry dispatch (stuck state)~~
 
-**Context:** Surfaced 2026-04-27 during item #12.3 (P2 unit test
-roster — `test_characteristic_translator.py`).
+**Completed:** v0.1.6 (2026-05-02) — `on_event` now captures `failed_stage = current` before transitioning away, then executes `failed_stage → failed_retrying → failed_stage` and calls `DispatchStageTool.execute()` directly to re-enqueue the job. Dispatch failure or SM-transition failure both route to `failed_unrecoverable`. `LoopState.stage_dispatch_overrides` forwarded verbatim. 14 new tests in `TestRetryDispatch`. GitHub issue #54.
 
-**Depends on / blocked by:** None.
+---
+
+### ~~23. Worker tasks never self-terminate after run reaches terminal state~~
+
+**Completed:** v0.1.10 (2026-05-06) — `AgentLoop.should_stop()` now overrides the base-class stub with the same pattern already used by `ExecutorWorker` and `EvaluatorWorker`: instantiate `StateMachine`, call `current_state()`, return `True` if in `TERMINAL_STATES`, catch `KeyError` (uninitialized state) and return `False`. Since `Coordinator.run()` uses `asyncio.gather` on all three workers, `AgentLoop` exiting now allows the gather to complete and the Coordinator task to finish cleanly. 5 new tests in `TestAgentLoopShouldStop`. GitHub issue #55.
+
+---
+
+### 24. Multi-instance Coordinator collision — no distributed lock on resume
+
+**What:** `resume_orphaned_coordinators()` has no distributed lock. If two FastAPI replicas start simultaneously (rolling deploy, blue/green, crash-loop restart), both scan Redis and both call `_start_coordinator` for the same non-terminal runs. Two Coordinator tasks share the same consumer group name (`"coordinator"`) with the same `consumer_name="coordinator-0"`. Redis delivers each message to one consumer in the group, but two concurrent consumers with the same name have undefined delivery behavior — messages can be double-processed or starved.
+
+**Why:** `_start_coordinator` is idempotent within a single process (`_coordinator_tasks` dict prevents duplicate tasks in-process), but the guard is in-memory and not shared across replicas.
+
+**Fix:** Before launching a Coordinator, acquire a Redis lock (`SET run:{run_id}:coordinator_lock NX PX 30000`). Release on Coordinator exit (or let it TTL if the process dies). Only one replica holds the lock at a time. The other replica's `_start_coordinator` call silently no-ops if the lock is taken.
+
+**Context:** `resume_orphaned_coordinators` at [api/routes/agent.py:142-171](api/routes/agent.py#L142-L171). `_start_coordinator` idempotency guard at [api/routes/agent.py:77-79](api/routes/agent.py#L77-L79).
+
+**Depends on / blocked by:** Only relevant at >1 replica. Current single-instance dev is unaffected. Defer until multi-instance deployment is planned.
+
+---
+
+### ~~25. `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics~~
+
+**What:** `TestCharacteristicSchemaIntegrity::test_every_transform_has_probability` spot-checks `changes_shape`, `low_contrast`, `reflective_surface`, `partially_hidden`, `moves_or_vibrates`. Four characteristics are unchecked: `changes_size`, `semi_transparent`, `similar_to_background`, `multiple_objects`. A missing `p` key in any of their transforms would evade the test and crash `_keep_higher_p` at runtime.
+
+**Also:** `semi_transparent` low-intensity `RandomFog` uses key `alpha_corf` — likely a typo for `alpha_coef` (used consistently elsewhere at lines 314 and 330). The schema test doesn't catch data typos, only missing `p`.
+
+**Fix (2 parts):**
+- Extend the parametrize list in `test_every_transform_has_probability` to include all 9 characteristics.
+- Verify `semi_transparent`'s `alpha_corf` key is intentional or correct it.
+
+**Why deferred:** Same pattern as TODO #19. No live overlap collision today, but adding a new rule for any of the 4 unchecked characteristics without `p` would crash silently.
+
+**Context:** Surfaced 2026-04-28 during `/ship` adversarial review of PR #50.
+
+**Depends on / blocked by:** None. Mechanical extension.
+
+**Completed:** v0.1.11 (2026-05-06) — All 4 parametrize lists in `TestCharacteristicSchemaIntegrity` expanded to cover all 9 characteristics via `_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())`. `alpha_corf` typo corrected to `alpha_coef` in `semi_transparent/low/RandomFog`. 36 tests pass (up from 20).
+
+---
+
+### 26. Environment rules have no schema integrity tests
+
+**What:** `CHARACTERISTIC_RULES` has schema tests in `TestCharacteristicSchemaIntegrity`, but `ENVIRONMENT_RULES` (12 environment rules: `variable_lighting`, `fixed_camera`, etc.) has no equivalent. `_keep_higher_p` is called in both the characteristic dedup loop (line 1183) and the environment dedup loop (line 1207). An environment rule missing `p` in any transform would crash `_keep_higher_p` at runtime.
+
+**Fix:** Add `TestEnvironmentSchemaIntegrity` class mirroring `TestCharacteristicSchemaIntegrity` — parametrize over all environment rule keys, assert every transform at every intensity has a `p` key.
+
+**Why deferred:** No live environment rule violates the constraint today. Defensive coverage.
+
+**Context:** Surfaced 2026-04-28 during `/ship` adversarial review of PR #50.
+
+**Depends on / blocked by:** None. ~20 lines of test.
+
+---
+
+### 28. Adopt typed config dataclasses across teacher training pipeline
+
+**What:** `origin/ros2-integration` commit `c11a123` ("clear typed config in fine-tuning pipeline") introduced typed config dataclasses (`TeacherTrainingConfig`, `LoopConfig`, `LoraConfig`, `GroundingDINOConfig`, `SAMConfig`, `ConfigurationError`) in `ml_engine/training/config_types.py` and rewrote `teacher.py`, `trainer.py`, and the three `model_trainers/*` files to use typed attribute access (`self.config.foo`) instead of dict-based access (`self.config.get("foo", default)`). The agentic ← ros2-integration merge took agentic's dict-based versions wholesale for those 5 files. `config_types.py` itself landed in the tree as an orphan (no consumers post-merge).
+
+**Why deferred:** The typed-config refactor touched the same lines as ~10 unrelated agentic-side changes (`job_id` lineage, BN re-freeze in `TrainingManager`, epoch-level scheduler step, NaN-batch skip, differential SAM LR, `JobOutcome`/`outcome.json` write, ruff/mypy cleanup). Combining both inside the merge would have required a coordinated multi-file rewrite that's a refactor in its own right, not a merge resolution. Land the merge clean; ship typed configs as a focused follow-up.
+
+**Files to touch when this is picked up:**
+- `ml_engine/training/config_types.py` — already in tree (orphan). If deleted before this work begins, recover via `git show origin/ros2-integration:ml_engine/training/config_types.py`.
+- `ml_engine/training/config.py::build_teacher_training_config()` — currently returns `dict`; change return type to `TeacherTrainingConfig`.
+- `ml_engine/training/trainer.py` — `Trainer.__init__` config param + ~6 internal `self.config.get(...)` sites become typed attribute access. Keep agentic-only changes (epoch-level `step_scheduler()`, `train()` returns `Dict[str, float]`, `stop_training` early-stop fix, `BundleManifest.lineage={"job_id": self.job_id}`).
+- `ml_engine/training/model_trainers/base.py` — `__init__` adds `loop: LoopConfig` kwarg; rewrite `_create_optimizer`, `_create_scheduler`, `save_checkpoint`, `save_adapters` for typed access. Keep agentic-only changes (`self.model: Any` PEFT-boundary annotation, `step_scheduler()` method, `TrainingManager(... config_overrides=...)`).
+- `ml_engine/training/model_trainers/grounding_dino.py` — `_load_model` typed access. Keep agentic-only `_get_positive_map` cache, NaN-batch skip in `compute_loss`, PEFT unwrap in `_create_criterion`.
+- `ml_engine/training/model_trainers/sam.py` — `_load_model` + the new agentic `_create_optimizer` override (differential LR for mask_decoder vs LoRA) rewritten for typed access. Keep agentic-only `max_valid` trim in `compute_loss`.
+- `ml_engine/jobs/handlers/teacher.py` — `build_teacher_training_config` returns `TeacherTrainingConfig`; ros2's inline `_build_config` method can be inlined here or kept in `config.py` — pick one location, not both.
+
+**Schema gap that must be closed before adoption:** `TeacherTrainingConfig` has no `training_dynamics` field. Agentic uses `cfg.get("training_dynamics")` (commit `ceb3124`) to forward HPO overrides into `TrainingManager`. Without adding `training_dynamics: Optional[Dict[str, Any]] = None` to `TeacherTrainingConfig` (or per-model configs), the HPO path silently breaks under typed configs.
+
+**Pros:**
+- Mypy catches typo'd config field names at static-analysis time instead of producing silent `None` defaults at runtime.
+- Self-documenting: the dataclass IS the schema; no chasing docstrings or grepping for `cfg.get(`.
+- Eliminates the scattered hardcoded defaults pattern (`cfg.get("foo", DEFAULT_FOO)` repeated across files).
+
+**Cons:**
+- Coordinated edit across 6 files. Each `cfg.get(...)` site needs individual rewriting. Many sites were ruff-touched on agentic so diffs look larger than the semantic change.
+- Schema rigidity: adding a new HPO knob requires touching both YAML and the dataclass (also arguably a feature — explicit schema evolution).
+- ros2's `_build_config` uses `dataclasses.fields` filtering to silently drop unknown YAML keys. Decide whether to keep that behavior (forgiving) or raise on unknown keys (strict).
+
+**Recommended sequencing:**
+1. Add `training_dynamics: Optional[Dict[str, Any]] = None` to `TeacherTrainingConfig` in `config_types.py`. Without this step, HPO breaks the moment typed configs land.
+2. Rewrite `build_teacher_training_config()` to return `TeacherTrainingConfig`.
+3. Update `Trainer.__init__` signature and internal accesses.
+4. Update `BaseModelTrainer.__init__` and the 4 affected method bodies.
+5. Update `grounding_dino.py` and `sam.py` `_load_model` (and SAM's new `_create_optimizer` override).
+6. Drop the inline `_build_config` from `teacher.py` if duplicated by `config.py`.
+7. Run `mypy --strict ml_engine/training/` — typed config should clear most remaining `Any`-boundary noise here.
+
+**Context:** Surfaced 2026-05-03 during the ros2-integration → agentic merge resolution. The full pre-merge analysis (per-file diff classification + load-bearing-vs-deferrable verdict) is in the merge commit message and accompanying merge worklog. The 4-line sketch of why combined resolution would force a multi-file rewrite is documented inline in the merge commit.
+
+**Depends on / blocked by:** ros2-integration → agentic merge must land first (the post-merge tree is the working baseline). No external dependencies.
+
+---
+
+### ~~29. Rewrite ros2-integration's 3 new test files (incomplete + sync-API mismatch)~~
+
+**What:** ros2-integration added several test files under `tests/unit/ml_engine/` and `tests/unit/composer/` that need rework before they actually exercise their targets. They are accepted into the merge as-is to keep the merge focused on conflict resolution; their cleanup is tracked here.
+
+**Files affected:**
+- `tests/unit/ml_engine/test_distillation_ros2_integration.py` — half-written. `TestDistillationStep5::test_ros2_build_triggered_when_flag_set` sets up `progress_queue`, `cancel_event`, `mock_run` fixtures but the body is `with patch.object(handler, "run") as mock_run: pass` — placeholder, never wired up. The test never actually invokes the real `StudentDistillationHandler.run()` and never asserts that `build_ros2_container` was called. **Result: this test currently passes vacuously.** F841 unused-local is suppressed via `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` until the test logic is finished.
+- `tests/unit/composer/test_registry.py` — same pattern. A `mock_schema` dict is constructed at line 155 but never used by the surrounding test (the test mocks `always_fail` instead). F841 also suppressed via per-file-ignores. Likely the test was written, the author switched the mocking strategy, and the now-orphaned fixture got left behind.
+- `tests/unit/ml_engine/test_deploy_api.py` — written against the **sync** `JobManager` API. After agentic's async refactor (`AsyncJobManager`, `async def`), these tests fail at import or at first call. Needs to be rewritten with `pytest.mark.asyncio` + `AsyncMock` / `AsyncJobManager` fixtures.
+- `tests/unit/ml_engine/test_yolo_node.py` — had unused imports (`patch`, `PropertyMock`, `torch`, etc.) — already auto-fixed by `ruff check --fix` during the merge. Needs a manual review pass to confirm the test logic actually exercises `serve/ros2_ws/src/yolo_inference/yolo_inference/node.py` correctly post-cleanup; the unused imports may signal scaffolded-but-not-wired code paths.
+
+**Why deferred:** Test rewrites would have multiplied the merge resolution scope. Better to land the merge clean (with the test files in their as-merged state and the lint gate green via per-file-ignores) and rewrite tests as a focused follow-up where each file gets the attention it needs.
+
+**Pros:**
+- Restores meaningful test coverage for the ros2 features (container_builder + deploy endpoints + YOLO node).
+- Removes the per-file-ignore in `pyproject.toml` once `test_distillation_ros2_integration.py` is finished.
+- Aligns ros2's tests with agentic's async API.
+
+**Cons:**
+- Each file is its own design exercise — can't be done in a single sed pass. The distillation_ros2_integration test in particular needs a decision on whether to integration-test (subprocess invocation + real handler.run) or unit-test (mock everything around `build_ros2_container`).
+
+**Recommended sequencing:**
+1. **`test_deploy_api.py` first** — straightforward async port using `pytest.mark.asyncio` + `AsyncMock`. Mirror the agentic pattern in any existing `tests/unit/api/test_*_async.py` test as a reference.
+2. **`test_distillation_ros2_integration.py` next** — finish the test logic. The author's intent (per the inline comment) is to `patch build_ros2_container and verify it's called with correct args when flag is set` — that's a clean unit test. Drop the `with patch.object(handler, "run") as mock_run: pass` scaffolding; the real test is patching `build_ros2_container` and calling `handler.run(...)` directly with `build_ros2_container=true` in the job_config. Then remove the per-file-ignore from `pyproject.toml`.
+3. **`test_yolo_node.py` last** — review whether the auto-fixed unused imports leave the test exercising real code paths. Add missing assertions if needed.
+
+**Context:** Surfaced 2026-05-03 during the ros2-integration → agentic merge resolution (Step 13c — ruff lint pass). The 3 files were added by ros2 commits `34b35f6` ("test: add unit tests for platform and block nodes (written, not run)") and `8655e13`. The "(written, not run)" parenthetical in the commit message is candid: these tests were authored but the author never executed them, so test-time bugs were not caught pre-merge.
+
+**Completed:** v0.1.8 (2026-05-05) — All remaining items resolved in PR fix/xfails-and-f841. `test_distillation_ros2_integration.py`: removed dead scaffolding (`progress_queue`, `cancel_event`, `called_with`, `fake_build`, inert `patch` context) from `test_ros2_build_triggered_when_flag_set`; test now directly asserts config keys without unused locals; renamed docstring to match actual assertion scope. `test_registry.py`: removed unused `mock_schema` variable; `always_fail` monkeypatching pattern retained. Both F841 per-file-ignores removed from `pyproject.toml`. All composer tests pass (`bcrypt`/`jsonschema` resolved in v0.1.7 via declared-deps fix). **ml_engine portion completed v0.1.7** — see that entry for `test_deploy_api.py`, `_complete_job` SubprocessResult, and `test_yolo_node.py` fixes.
+
+**Depends on / blocked by:** ros2-integration → agentic merge must land first. No external dependencies. `test_deploy_api.py` needs the rewriter to be familiar with `AsyncJobManager` patterns from agentic's existing async tests.
+
+---
+
+### ~~30. `save_merged_model` metadata layout — cleaner separation of framework vs caller keys~~
+
+**Completed:** v0.1.9 (2026-05-05) — `checkpoint["metadata"]` now holds only the three framework integrity fields (`format`, `peft_merged`, `requires_peft`). Caller provenance lives in the separate `checkpoint["training_info"]` key, written only when non-empty. Parameter renamed `extra_metadata` → `training_info`. `packager.py` updated to match. Tests updated: `test_extra_metadata_merged_into_metadata_dict` → `test_training_info_stored_at_separate_checkpoint_key` (checks separation); `test_extra_metadata_cannot_clobber_framework_defaults` → `test_training_info_cannot_affect_metadata_even_with_reserved_key_names` (shows physical isolation). `load_merged_model` unchanged — it only reads `checkpoint["metadata"]` so old checkpoints (no `training_info` key) load cleanly.
+
+---
+
+### ~~27. PEL replay on SIGKILL after `sm.transition("failed_retrying")` — wastes a retry slot~~
+
+**Completed:** v0.1.7 (2026-05-03) — Extracted `_handle_job_failed()` from `on_event`. Fresh path stores `retry_work_stage` atomically in SM metadata alongside the `failed_retrying` transition. PEL replay path detects `current == "failed_retrying"`, reads `retry_work_stage` back from `sm.load()`, skips budget charge, and converges at shared re-dispatch block. Missing or corrupt metadata routes to `failed_unrecoverable` with an error log. 14 new tests in `TestRetryDispatch` covering corrupt/missing/wrong metadata, dispatch raises, SM re-entry raises, all three stages, and budget double-charge regression.
+
+---
+
+### ~~31. Invalid albumentations parameter values in CLAHE and ColorJitter rules~~
+
+**What:** Two parameter values in `CHARACTERISTIC_RULES` will crash albumentations at transform-construction time, but pass all current tests because the test suite never calls albumentations constructors (only `translate_from_characteristics` dict assembly):
+
+1. `CLAHE clip_limit` — three rules set `clip_limit=RangeParameter(0.8, 2.0)`. Albumentations rejects any `clip_limit` tuple containing a value `< 1.0` with a `ValidationError`. Affected: `low_contrast/low`, `similar_to_background/low`, and `poor_lighting/low` (if that rule exists).
+2. `ColorJitter hue` — `reflective_surface/high/ColorJitter` sets `hue=RangeParameter(-0.7, 0.7)`. Albumentations enforces `hue ∈ [-0.5, 0.5]`.
+
+**Fix:**
+- Change `RangeParameter(0.8, 2.0)` → `RangeParameter(1.0, 2.0)` in all CLAHE `clip_limit` entries.
+- Change `RangeParameter(-0.7, 0.7)` → `RangeParameter(-0.5, 0.5)` in `reflective_surface/high/ColorJitter`.
+
+**Why deferred:** Tests pass because the translate layer only assembles dicts; it does not call albumentations. These crashes only manifest at inference time when a caller actually applies the augmentation pipeline.
+
+**Context:** Surfaced 2026-05-06 during `/ship` adversarial review of PR #63 (issue #63 branch). Pre-existing bugs, not introduced by that PR.
+
+**Depends on / blocked by:** None. Mechanical value changes.
+
+**Completed:** v0.1.12 (2026-05-06) — PR #78. `RangeParameter(0.8, 2.0)` → `RangeParameter(1.0, 2.0)` in three CLAHE rules; `RangeParameter(-0.7, 0.7)` → `RangeParameter(-0.5, 0.5)` in ColorJitter hue.
+
+---
+
+### ~~32. `translate_from_characteristics` returns direct references into mutable class-level rule dicts~~
+
+**What:** `merged_augmentations[aug_type] = params` assigns the exact dict object from `CHARACTERISTIC_RULES[...].intensity_ranges[intensity][aug_type]`. Any caller that mutates the returned `result["augmentations"]` dict permanently corrupts `CHARACTERISTIC_RULES` for all subsequent calls in the same process — including across request handlers in a web server.
+
+**Fix:** Shallow-copy each params dict on insertion:
+```python
+merged_augmentations[aug_type] = dict(params)
+```
+
+**Why deferred:** No caller currently mutates the returned dict. The risk is latent but real in a web-server context where request handlers share the same process.
+
+**Context:** Surfaced 2026-05-06 during `/ship` adversarial review of PR #63. Pre-existing design issue in `characteristic_translator.py`.
+
+**Depends on / blocked by:** None. One-line fix + regression test.
+
+**Completed:** v0.1.12 (2026-05-06) — PR #78. `merged_augmentations[aug_type] = dict(params)` at both merge sites; regression test `test_translate_result_does_not_alias_class_level_rule_dict` now passes.
+
+---
+
+### ~~33. `RandomSunFlare` `src_radius` sampled as float — albumentations requires integer~~
+
+**What:** `build_random_sun_flare_params` returns `"src_radius": params["src_radius"].sample()`. `RangeParameter(200, 300).sample()` returns a `float` (e.g., 216.96). Albumentations' `RandomSunFlare` validates `src_radius` as an integer and rejects the float with `Input should be a valid integer, got a number with a fractional part`. The transform is silently dropped from the pipeline.
+
+Affected rules: `reflective_surface` at all three intensities.
+
+**Fix:** Cast to int: `"src_radius": int(params["src_radius"].sample())`
+
+**Context:** Surfaced 2026-05-06 by `tests/integration/test_characteristic_translator_pipeline.py`. Confirmed with albumentations validation directly.
+
+**Depends on / blocked by:** None. One-character fix in `transform_builders.py`.
+
+**Completed:** v0.1.12 (2026-05-06) — PR #78. `int(params["src_radius"].sample())` in `build_random_sun_flare_params`.
+
+---
+
+### ~~34. `SafeRotate` has no specific builder — falls back to generic, passes `p` as tuple~~
+
+**What:** `TransformParameterBuilder.get_builder_method("SafeRotate")` converts to snake_case `"safe_rotate"` and looks for `build_safe_rotate_params`. The actual method is `build_safe_rotation_params` (with `rotation`, not `rotate`). The lookup misses, falls back to `build_generic_params`.
+
+`build_generic_params` maps `p` as a regular parameter via `to_albumentations_format()`, returning a tuple `(0.4, 0.4)` instead of a scalar float. Albumentations rejects it: `p — Input should be a valid number`. The transform is silently skipped.
+
+Affected rules: `moves_or_vibrates` and `camera=shaky` at all three intensities.
+
+**Fix (choose one):**
+- Rename `build_safe_rotation_params` → `build_safe_rotate_params` to match the snake_case lookup.
+- Or add an explicit routing entry in `get_builder_method` for the mismatch.
+
+**Context:** Surfaced 2026-05-06 by `tests/integration/test_characteristic_translator_pipeline.py`.
+
+**Depends on / blocked by:** None. Rename or one-line routing patch in `transform_builders.py`.
+
+**Completed:** v0.1.12 (2026-05-06) — PR #78. Renamed `build_safe_rotation_params` → `build_safe_rotate_params` to match snake_case routing.
+
+---
+
+### ~~35. `RandomSizedBBoxSafeCrop` height/width passed as float tuple — albumentations requires integer~~
+
+**What:** `build_random_sized_b_box_safe_crop_params` returns `"height": params["height"].to_albumentations_format()`. For a scalar (`RangeParameter.scalar(1024)`), `to_albumentations_format()` returns `(1024.0, 1024.0)` — a float tuple. Albumentations requires a plain integer for `height` and `width` and raises `Input should be a valid integer`. The transform is silently skipped.
+
+Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all three intensities.
+
+**Fix:** Use `.sample()` and cast: `"height": int(params["height"].sample())`
+
+**Context:** Surfaced 2026-05-06 by `tests/integration/test_characteristic_translator_pipeline.py`.
+
+**Depends on / blocked by:** None. One-line fix per dimension in `transform_builders.py`.
+
+**Completed:** v0.1.12 (2026-05-06) — PR #78. `int(params["height"].sample())` / `int(params["width"].sample())` in `build_random_sized_b_box_safe_crop_params`.
 
 ---
 
@@ -477,10 +514,22 @@ patterns established, lessons learned) lives in [docs/decisions/](docs/decisions
 Item numbers are stable so commit messages and PR descriptions referencing
 "item N" / "TODO #N" still resolve.
 
+- **#31** Invalid albumentations parameter values in CLAHE and ColorJitter rules ✅ — `clip_limit` floor raised to 1.0; ColorJitter `hue` clamped to `[-0.5, 0.5]`. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#32** `translate_from_characteristics` mutable alias into `CHARACTERISTIC_RULES` ✅ — `dict(params)` shallow copy at both merge sites; regression test passes. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#33** `RandomSunFlare` `src_radius` float → int ✅ — `int(params["src_radius"].sample())` in `build_random_sun_flare_params`. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#34** `SafeRotate` builder routing fixed ✅ — renamed `build_safe_rotation_params` → `build_safe_rotate_params`. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#35** `RandomSizedBBoxSafeCrop` height/width int cast ✅ — `int(.sample())` for both dimensions. Shipped v0.1.12, 2026-05-06. PR #78.
+- **#1** Auto-resume orphaned Coordinator tasks on FastAPI startup ✅ → [docs/decisions/01-03-coordinator-durability.md](docs/decisions/01-03-coordinator-durability.md) — `resume_orphaned_coordinators()` scans Redis on startup, skips pre-approve and terminal runs, relaunches the rest; `store_approved_contract` / `get_approved_contract` persist the contract in the Redis HASH so startup recovery can reconstruct the Coordinator; ~20 unit tests. Shipped 2026-04-27.
+- **#2** Coordinator crash → `failed_unrecoverable` ✅ → [docs/decisions/02-coordinator-crash-failed-unrecoverable.md](docs/decisions/02-coordinator-crash-failed-unrecoverable.md) — `_on_done` now schedules state transition on task exception; TRANSITIONS expanded to allow `failed_unrecoverable` from all 5 previously-missing non-terminal states; 5 unit tests. Shipped 2026-04-27.
+- **#3** Make `POST /api/agent/approve` idempotent ✅ → [docs/decisions/01-03-coordinator-durability.md](docs/decisions/01-03-coordinator-durability.md) — reads current state first; on first call transitions `created → planning` and publishes `contract_approved`; on re-approve skips both (Coordinator resumes from stream PEL); always persists approved contract and calls `_start_coordinator`; 409 on terminal state. Shipped 2026-04-27.
 - **#4** Pre-commit hooks ✅ → [docs/decisions/04-pre-commit-hooks.md](docs/decisions/04-pre-commit-hooks.md) — local + CI lint parity via `uv run --no-sync`. Shipped 2026-04-24 (PR #26).
 - **#6** mypy baseline cleanup — drive 416 errors to zero, then flip the gate ✅ → [docs/decisions/06-mypy-baseline-cleanup.md](docs/decisions/06-mypy-baseline-cleanup.md) — 9 PRs total. Mypy now gates merges across `core ml_engine api augmentation` (119 source files, 0 errors). Surfaced 3 real production bugs + filed TODOs #16 and #17 for follow-ups. Establishes the boundary-`Any`, redis-overload, `MpEvent`, path-shadow, and lazy-init-`Any` patterns most subsequent type work follows. Shipped 2026-04-26.
 - **#9** Clean up ruff baseline (3593 findings at ci-and-tests merge time) ✅ → [docs/decisions/09-ruff-baseline-cleanup.md](docs/decisions/09-ruff-baseline-cleanup.md) — 5 PRs total (#29-32 per-directory cleanup + #33 gate flip). Ruff now gates merges. Set the per-directory-cleanup-then-flip-the-gate precedent that #6 later followed for mypy. Shipped 2026-04-25.
 - **#10** Error-path coverage for `augmentation_factory._validate_bboxes` ✅ → [docs/decisions/10-augmentation-validator-tests.md](docs/decisions/10-augmentation-validator-tests.md) — 44 parametrized tests, every error branch under test, ~8s runtime. Shipped 2026-04-24.
 - **#12** Priority-2 unit test roster — 6 remaining files from ci-and-tests design doc ✅ → [docs/decisions/12-p2-unit-test-roster.md](docs/decisions/12-p2-unit-test-roster.md) — 4 PRs total. ~470 new tests (375 passing + 47 xfail markers documenting source gaps; 13 of those gaps fixed inline, 38 remain in TODOs #18 + #19). Established the `xfail(strict=True)` as embedded to-do list pattern. Shipped 2026-04-27.
 - **#13** Type-annotate `ml_engine/export/merger.py` ✅ → [docs/decisions/13-merger-py-mypy-fix.md](docs/decisions/13-merger-py-mypy-fix.md) — established the `Any`-at-the-boundary precedent for PEFT's `__getattr__` delegation. Shipped 2026-04-25 (`chore/mypy-merger-hygiene`).
+- **#17** Restore `text_threshold` token-level filtering in `GroundingDINODetector` ✅ → [docs/decisions/17-text-threshold-filtering.md](docs/decisions/17-text-threshold-filtering.md) — `logits_to_class_scores` now zeros sub-threshold tokens before per-class mean; `detect()` passes the param through instead of discarding it; 32 adversarial tests (boundary, mutation, class-flip, dilution, NMS, monotone sweep). Shipped 2026-04-28.
 - **#16** Plumb `job_id` through training pipeline so artifact manifests carry real lineage ✅ → [docs/decisions/16-job-id-lineage-plumbing.md](docs/decisions/16-job-id-lineage-plumbing.md) — first follow-up surfaced by #6. Trial subprocesses use composed `f"{job_id}/{trial_id}"` form. Shipped 2026-04-27 (PR #41).
+- **#14** `tests/test_sam_lora.py` audit — 13 stale failures + CI scope gap ✅ — All 13 failures were stale tests. Moved to `tests/unit/ml_engine/test_sam_lora.py` so CI picks them up. Fixed 3 real bugs: `upscale_masks()` crashes on 5D multimask tensors (5D reshape path added); `SegmentationLoss` ignored `iou_predictions` (IoU quality MSE regression added); `box_prompts=[N=0]` now raises clear `ValueError` at call site. Pre-landing: added explicit `[B,N]` shape guard + clear error on `iou_predictions`, `iou_quality` key in default weights dict, rank guard on `upscale_masks`. 24 tests. Shipped 2026-04-28.
+- **#19** `_keep_higher_p` KeyError on missing `p` key ✅ — Added guard at `characteristic_translator.py:1109` that raises `ValueError` with a clear message when either params dict is missing `p`. xfail test promoted to passing regression guard (93 pass, 0 xfail). Shipped 2026-04-28.
+- **#25** `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics + `alpha_corf` typo ✅ — All 4 `@pytest.mark.parametrize` decorators in `TestCharacteristicSchemaIntegrity` now use `_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())` (derived from production dict, auto-updates when new characteristics are added). `alpha_corf` → `alpha_coef` typo corrected in `semi_transparent/low/RandomFog`. 36 tests pass (up from 20). Shipped 2026-05-06.
