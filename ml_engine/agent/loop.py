@@ -24,6 +24,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import redis.asyncio as _aredis
 
+from ml_engine.agent.state_machine import TERMINAL_STATES, StateMachine
 from ml_engine.agent.stream_consumer import (
     StreamConsumer,
     stream_key,
@@ -146,6 +147,20 @@ class AgentLoop(StreamConsumer):
         # Populated in on_start(); this worker is the sole writer, so the
         # in-memory copy is authoritative across iterations.
         self._state: Optional[LoopState] = None
+
+    async def should_stop(self) -> bool:
+        """Stop when the pipeline run reaches a terminal state."""
+        sm = StateMachine(run_id=self.run_id, redis_async=self._r)
+        try:
+            if await sm.current_state() in TERMINAL_STATES:
+                logger.info(
+                    "Run %s reached terminal state, AgentLoop stopping",
+                    self.run_id,
+                )
+                return True
+        except KeyError:
+            pass  # State not initialized yet -- keep running
+        return False
 
     async def on_start(self) -> None:
         self._state = await self._load_state()

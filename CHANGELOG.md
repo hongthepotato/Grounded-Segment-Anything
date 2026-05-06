@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.10] — 2026-05-06
+
+### Fixed
+
+- **`AgentLoop` never self-terminated after run reached terminal state** — `AgentLoop.should_stop()` now overrides the `StreamConsumer` base-class stub (which always returned `False`) with the same pattern already used by `ExecutorWorker` and `EvaluatorWorker`: instantiate `StateMachine`, call `current_state()`, return `True` if the state is in `TERMINAL_STATES`, catch `KeyError` for uninitialized state and return `False`. Since `Coordinator.run()` waits on all three coroutines via `asyncio.gather`, an `AgentLoop` that never exited meant the gather never returned and the Coordinator task leaked for every completed run. The loop now exits cleanly on the next `should_stop()` check after the state transitions to terminal.
+
+### Tests
+
+- **5 new tests in `TestAgentLoopShouldStop`** — `test_returns_true_when_run_is_terminal`, `test_returns_true_for_all_four_terminal_states` (exhaustively covers `done`, `failed_unrecoverable`, `escalated`, `cancelled`), `test_returns_false_when_run_is_non_terminal`, `test_returns_false_when_state_key_absent` (verifies `KeyError` is caught and does not propagate), `test_run_exits_early_when_state_becomes_terminal` (integration: loop exits after event handler transitions state to terminal, second queued event is not processed). GitHub issue #55. TODO #23.
+
 ## [0.1.9] — 2026-05-05
 
 ### Changed

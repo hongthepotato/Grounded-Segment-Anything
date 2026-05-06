@@ -274,17 +274,9 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### 23. Worker tasks never self-terminate after run reaches terminal state
+### ~~23. Worker tasks never self-terminate after run reaches terminal state~~
 
-**What:** `StreamConsumer.should_stop()` always returns `False` ([stream_consumer.py:320-322](ml_engine/agent/stream_consumer.py#L320-L322)). After a run reaches `done`, `escalated`, or `cancelled` (e.g., via `/gate/{run_id}/approve`), the Coordinator, ExecutorWorker, and EvaluatorWorker tasks keep polling the stream indefinitely via `asyncio.gather`. `_on_done` (in `_start_coordinator`) fires only when the task completes — which never happens. The tasks are leaked per completed run.
-
-**Why:** `should_stop()` was left as a no-op stub. The state machine check inside `on_event` silently drops events when terminal, but doesn't cause the loop to exit.
-
-**Fix:** Override `should_stop()` in each worker (or in `AgentLoop` / the base class) to call `sm.current_state()` and return `True` when the state is in `TERMINAL_STATES`. The `should_stop()` call is inside the main `while True` loop in `StreamConsumer.run()`, so returning `True` breaks out cleanly.
-
-**Context:** `should_stop()` stub at [ml_engine/agent/stream_consumer.py:320-322](ml_engine/agent/stream_consumer.py#L320-L322). Main loop check at [ml_engine/agent/stream_consumer.py:148-154](ml_engine/agent/stream_consumer.py#L148-L154). `asyncio.gather` in `Coordinator.run()` at [ml_engine/agent/coordinator.py:616-620](ml_engine/agent/coordinator.py#L616-L620).
-
-**Depends on / blocked by:** None. Low urgency — impact is a handful of idle polling tasks per completed run, not a correctness issue.
+**Completed:** v0.1.10 (2026-05-06) — `AgentLoop.should_stop()` now overrides the base-class stub with the same pattern already used by `ExecutorWorker` and `EvaluatorWorker`: instantiate `StateMachine`, call `current_state()`, return `True` if in `TERMINAL_STATES`, catch `KeyError` (uninitialized state) and return `False`. Since `Coordinator.run()` uses `asyncio.gather` on all three workers, `AgentLoop` exiting now allows the gather to complete and the Coordinator task to finish cleanly. 5 new tests in `TestAgentLoopShouldStop`. GitHub issue #55.
 
 ---
 

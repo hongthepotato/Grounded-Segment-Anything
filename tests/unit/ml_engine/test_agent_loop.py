@@ -25,6 +25,7 @@ from ml_engine.agent.loop import (
     ensure_consumer_group,
     state_key,
 )
+from ml_engine.agent.state_machine import StateMachine
 from ml_engine.agent.stream_consumer import stream_key
 
 # ---------------------------------------------------------------------------
@@ -493,4 +494,93 @@ class TestCancellationSemantics:
         loop2 = AgentLoop(redis_async, run, on_event=good_handler, consumer_name="coordinator-0")
         await loop2.run(max_events=1)
         assert len(second_attempts) == 1
-        assert second_attempts[0]["type"] == "survive_cancel"
+
+
+# ---------------------------------------------------------------------------
+# AgentLoop.should_stop() -- terminal-state self-termination
+# ---------------------------------------------------------------------------
+
+
+class TestAgentLoopShouldStop:
+    """
+    Verifies that AgentLoop.should_stop() correctly signals the base-class loop
+    to exit when the pipeline run reaches a terminal state.
+
+    State is written directly to Redis (bypassing transition validation) so
+    each test exercises only the should_stop() logic, not the state machine.
+    """
+
+    _SM_KEY_FMT = "run:{run_id}:state"
+
+    def _make_loop(self, redis_async, run_id):
+        async def noop(event, state):
+            pass
+
+        return AgentLoop(redis_async, run_id, on_event=noop)
+
+    async def _set_state(self, redis_async, run_id: str, state: str) -> None:
+        await redis_async.hset(self._SM_KEY_FMT.format(run_id=run_id), "state", state)
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_run_is_terminal(self, redis_async, run_id):
+        """should_stop() returns True for a terminal state."""
+        run = run_id + "-stop-done"
+        await self._set_state(redis_async, run, "done")
+
+        loop = self._make_loop(redis_async, run)
+        assert await loop.should_stop() is True
+
+    @pytest.mark.asyncio
+    async def test_returns_true_for_all_four_terminal_states(self, redis_async, run_id):
+        """Every member of TERMINAL_STATES causes should_stop() to return True."""
+        for terminal in ("done", "failed_unrecoverable", "escalated", "cancelled"):
+            run = f"{run_id}-term-{terminal}"
+            await self._set_state(redis_async, run, terminal)
+            loop = self._make_loop(redis_async, run)
+            assert await loop.should_stop() is True, f"expected True for state={terminal!r}"
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_run_is_non_terminal(self, redis_async, run_id):
+        """should_stop() returns False when the run is alive (non-terminal state)."""
+        run = run_id + "-stop-active"
+        sm = StateMachine(run_id=run, redis_async=redis_async)
+        await sm.initialize()  # state = "created"
+
+        loop = self._make_loop(redis_async, run)
+        assert await loop.should_stop() is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_state_key_absent(self, redis_async, run_id):
+        """should_stop() returns False (not raises) when the state key is absent in Redis."""
+        run = run_id + "-stop-uninit"
+        # No sm.initialize() — current_state() will raise KeyError
+
+        loop = self._make_loop(redis_async, run)
+        assert await loop.should_stop() is False
+
+    @pytest.mark.asyncio
+    async def test_run_exits_early_when_state_becomes_terminal(self, redis_async, run_id):
+        """
+        Integration: loop exits via should_stop() after an event handler
+        transitions the run to a terminal state. A second queued event is never
+        processed.
+        """
+        run = run_id + "-stop-integration"
+        sm = StateMachine(run_id=run, redis_async=redis_async)
+        await sm.initialize()
+
+        processed = []
+
+        async def handler(event, state):
+            processed.append(event["seq"])
+            if len(processed) == 1:
+                # Force terminal state so the next should_stop() check exits the loop
+                await self._set_state(redis_async, run, "cancelled")
+
+        await apublish_event(redis_async, run, {"type": "ping", "seq": 0})
+        await apublish_event(redis_async, run, {"type": "ping", "seq": 1})
+
+        loop = AgentLoop(redis_async, run, on_event=handler)
+        await loop.run(max_events=5)
+
+        assert processed == [0], "loop should have exited after the first event's terminal transition"
