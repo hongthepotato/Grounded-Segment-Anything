@@ -451,6 +451,52 @@ merged_augmentations[aug_type] = dict(params)
 
 ---
 
+### 33. `RandomSunFlare` `src_radius` sampled as float — albumentations requires integer
+
+**What:** `build_random_sun_flare_params` returns `"src_radius": params["src_radius"].sample()`. `RangeParameter(200, 300).sample()` returns a `float` (e.g., 216.96). Albumentations' `RandomSunFlare` validates `src_radius` as an integer and rejects the float with `Input should be a valid integer, got a number with a fractional part`. The transform is silently dropped from the pipeline.
+
+Affected rules: `reflective_surface` at all three intensities.
+
+**Fix:** Cast to int: `"src_radius": int(params["src_radius"].sample())`
+
+**Context:** Surfaced 2026-05-06 by `tests/integration/test_characteristic_translator_pipeline.py`. Confirmed with albumentations validation directly.
+
+**Depends on / blocked by:** None. One-character fix in `transform_builders.py`.
+
+---
+
+### 34. `SafeRotate` has no specific builder — falls back to generic, passes `p` as tuple
+
+**What:** `TransformParameterBuilder.get_builder_method("SafeRotate")` converts to snake_case `"safe_rotate"` and looks for `build_safe_rotate_params`. The actual method is `build_safe_rotation_params` (with `rotation`, not `rotate`). The lookup misses, falls back to `build_generic_params`.
+
+`build_generic_params` maps `p` as a regular parameter via `to_albumentations_format()`, returning a tuple `(0.4, 0.4)` instead of a scalar float. Albumentations rejects it: `p — Input should be a valid number`. The transform is silently skipped.
+
+Affected rules: `moves_or_vibrates` and `camera=shaky` at all three intensities.
+
+**Fix (choose one):**
+- Rename `build_safe_rotation_params` → `build_safe_rotate_params` to match the snake_case lookup.
+- Or add an explicit routing entry in `get_builder_method` for the mismatch.
+
+**Context:** Surfaced 2026-05-06 by `tests/integration/test_characteristic_translator_pipeline.py`.
+
+**Depends on / blocked by:** None. Rename or one-line routing patch in `transform_builders.py`.
+
+---
+
+### 35. `RandomSizedBBoxSafeCrop` height/width passed as float tuple — albumentations requires integer
+
+**What:** `build_random_sized_b_box_safe_crop_params` returns `"height": params["height"].to_albumentations_format()`. For a scalar (`RangeParameter.scalar(1024)`), `to_albumentations_format()` returns `(1024.0, 1024.0)` — a float tuple. Albumentations requires a plain integer for `height` and `width` and raises `Input should be a valid integer`. The transform is silently skipped.
+
+Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all three intensities.
+
+**Fix:** Use `.sample()` and cast: `"height": int(params["height"].sample())`
+
+**Context:** Surfaced 2026-05-06 by `tests/integration/test_characteristic_translator_pipeline.py`.
+
+**Depends on / blocked by:** None. One-line fix per dimension in `transform_builders.py`.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
