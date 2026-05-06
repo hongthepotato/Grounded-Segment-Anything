@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.12] — 2026-05-06
+
+### Fixed
+
+- **CLAHE `clip_limit` floor raised to 1.0** — Three `CHARACTERISTIC_RULES` entries (`low_contrast/low`, `similar_to_background/low`, `poor_lighting/low`) set `clip_limit=RangeParameter(0.8, 2.0)`. Albumentations enforces `clip_limit >= 1.0` and raised `ValidationError`, causing the transform to be silently dropped from the pipeline. Changed to `RangeParameter(1.0, 2.0)`. TODOs #31.
+- **ColorJitter `hue` clamped to `[-0.5, 0.5]`** — `reflective_surface/high` set `hue=RangeParameter(-0.7, 0.7)`. Albumentations enforces this bound; the transform was silently dropped. Changed to `RangeParameter(-0.5, 0.5)`. TODO #31.
+- **`translate_from_characteristics` returns dict copies, not aliases** — `merged_augmentations[aug_type] = params` assigned the exact dict object from `CHARACTERISTIC_RULES`. Any caller mutating the returned dict would permanently corrupt class-level rule state for all subsequent calls in the same process. Fixed with `dict(params)` shallow copy at both merge sites (characteristic and environment paths). TODO #32.
+- **`RandomSunFlare` `src_radius` cast to int** — `build_random_sun_flare_params` returned `params["src_radius"].sample()` which yields a `float`. Albumentations requires an integer; the transform was silently dropped. Fixed with `int(params["src_radius"].sample())`. TODO #33.
+- **`SafeRotate` builder routing fixed** — `get_builder_method("SafeRotate")` resolved to `build_safe_rotate_params` (snake_case conversion), but the actual method was `build_safe_rotation_params`. The lookup missed and fell back to `build_generic_params`, which routed `p` through `to_albumentations_format()` returning a tuple instead of a scalar float. Fixed by renaming `build_safe_rotation_params` → `build_safe_rotate_params`. TODO #34.
+- **`RandomSizedBBoxSafeCrop` height/width accept plain integers** — `build_random_sized_b_box_safe_crop_params` passed `to_albumentations_format()` for height and width, returning float tuples `(1024.0, 1024.0)`. Albumentations requires plain integers; the transform was silently dropped. Fixed with `int(params["height"].sample())` / `int(params["width"].sample())`. TODO #35.
+
+### Tests
+
+- **Integration test suite upgraded from 22 xfail to 52 pass** — `tests/integration/test_characteristic_translator_pipeline.py` previously documented all five bugs as `xfail(strict=True)` markers. All five fixes above eliminate the failures; all 22 previously-xfailing cases now pass. The `xfail` markers and their scaffolding constants (`_CLAHE_LOW`, `_SAFE_ROTATE`, `_BBOX_SAFE_CROP`, `_SUN_FLARE`, `_SUN_FLARE_AND_COLOR_JITTER`) are removed. Suite: 52 passed, 0 xfailed. Issue #78.
+
 ## [0.1.11] — 2026-05-06
 
 ### Fixed
