@@ -528,39 +528,22 @@ class TestEnvironmentRulesCoverSelfReportedOptions:
 
 
 # ---------------------------------------------------------------------------
-# Section 6: Schema integrity for 5 representative characteristics
+# Section 6: Schema integrity for all 9 characteristics
 # ---------------------------------------------------------------------------
+
+_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())
 
 
 class TestCharacteristicSchemaIntegrity:
-    """Spot-check the 5 most-used characteristics: every intensity present,
-    every transform has a `p` parameter (so dedup works), every range has
-    sensible min<=max."""
+    """All 9 characteristics: every intensity present, every transform has a
+    `p` parameter (so dedup works), every range has sensible min<=max."""
 
-    @pytest.mark.parametrize(
-        "characteristic",
-        [
-            "changes_shape",
-            "low_contrast",
-            "reflective_surface",
-            "partially_hidden",
-            "moves_or_vibrates",
-        ],
-    )
+    @pytest.mark.parametrize("characteristic", _ALL_CHARACTERISTICS)
     def test_all_three_intensities_present(self, characteristic):
         rule = CharacteristicTranslator.CHARACTERISTIC_RULES[characteristic]
         assert set(rule.intensity_ranges.keys()) >= {"low", "medium", "high"}
 
-    @pytest.mark.parametrize(
-        "characteristic",
-        [
-            "changes_shape",
-            "low_contrast",
-            "reflective_surface",
-            "partially_hidden",
-            "moves_or_vibrates",
-        ],
-    )
+    @pytest.mark.parametrize("characteristic", _ALL_CHARACTERISTICS)
     def test_every_intensity_has_at_least_one_transform(self, characteristic):
         rule = CharacteristicTranslator.CHARACTERISTIC_RULES[characteristic]
         for intensity in ["low", "medium", "high"]:
@@ -570,16 +553,7 @@ class TestCharacteristicSchemaIntegrity:
                 f"would silently produce nothing for this combination."
             )
 
-    @pytest.mark.parametrize(
-        "characteristic",
-        [
-            "changes_shape",
-            "low_contrast",
-            "reflective_surface",
-            "partially_hidden",
-            "moves_or_vibrates",
-        ],
-    )
+    @pytest.mark.parametrize("characteristic", _ALL_CHARACTERISTICS)
     def test_every_transform_has_probability(self, characteristic):
         """Every transform's params must include `p` — _keep_higher_p
         relies on it for dedup and crashes (KeyError) without."""
@@ -592,16 +566,7 @@ class TestCharacteristicSchemaIntegrity:
                     f"another characteristic. Add p=RangeParameter.scalar(...)."
                 )
 
-    @pytest.mark.parametrize(
-        "characteristic",
-        [
-            "changes_shape",
-            "low_contrast",
-            "reflective_surface",
-            "partially_hidden",
-            "moves_or_vibrates",
-        ],
-    )
+    @pytest.mark.parametrize("characteristic", _ALL_CHARACTERISTICS)
     def test_translate_with_each_intensity_succeeds(self, translator, characteristic):
         """End-to-end: every characteristic resolves at every intensity
         without raising. Catches a class of bug where a rule's

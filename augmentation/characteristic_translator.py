@@ -298,7 +298,7 @@ class CharacteristicTranslator:
             intensity_ranges={
                 "low": {
                     "RandomFog": {
-                        "alpha_corf": RangeParameter.scalar(0.06),
+                        "alpha_coef": RangeParameter.scalar(0.06),
                         "fog_coef_range": RangeParameter(0.02, 0.05),
                         "p": RangeParameter.scalar(0.2),
                     },
