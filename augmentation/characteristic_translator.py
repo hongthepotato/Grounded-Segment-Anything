@@ -1119,7 +1119,7 @@ class CharacteristicTranslator:
 
         if new_prob > existing_prob:
             logger.debug("Deduplication: Kept new with higher p=%.2f (vs %.2f)", new_prob, existing_prob)
-            return new
+            return dict(new)
         logger.debug("Deduplication: Kept existing with higher p=%.2f (vs %.2f)", existing_prob, new_prob)
         return existing
 

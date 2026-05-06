@@ -318,7 +318,8 @@ class TestKeepHigherP:
         existing = {"p": RangeParameter.scalar(0.3)}
         new = {"p": RangeParameter.scalar(0.7)}
         result = translator._keep_higher_p(existing, new)
-        assert result is new
+        assert result == new
+        assert result is not new  # returns a copy, not the original reference
 
     def test_lower_p_loses(self, translator):
         existing = {"p": RangeParameter.scalar(0.7)}
@@ -341,14 +342,16 @@ class TestKeepHigherP:
         existing = {"p": 0.3}
         new = {"p": 0.7}
         result = translator._keep_higher_p(existing, new)
-        assert result is new
+        assert result == new
+        assert result is not new  # returns a copy, not the original reference
 
     def test_handles_mixed_param_and_float(self, translator):
         """RangeParameter on one side, raw float on the other."""
         existing = {"p": RangeParameter.scalar(0.3)}
         new = {"p": 0.7}
         result = translator._keep_higher_p(existing, new)
-        assert result is new
+        assert result == new
+        assert result is not new  # returns a copy, not the original reference
 
 
 class TestKeepHigherPMissingProbabilityKey:
