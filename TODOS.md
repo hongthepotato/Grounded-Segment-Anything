@@ -294,7 +294,7 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
-### 25. `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics
+### ~~25. `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics~~
 
 **What:** `TestCharacteristicSchemaIntegrity::test_every_transform_has_probability` spot-checks `changes_shape`, `low_contrast`, `reflective_surface`, `partially_hidden`, `moves_or_vibrates`. Four characteristics are unchecked: `changes_size`, `semi_transparent`, `similar_to_background`, `multiple_objects`. A missing `p` key in any of their transforms would evade the test and crash `_keep_higher_p` at runtime.
 
@@ -309,6 +309,8 @@ and the audit, but each wants a callsite enumeration before shipping.
 **Context:** Surfaced 2026-04-28 during `/ship` adversarial review of PR #50.
 
 **Depends on / blocked by:** None. Mechanical extension.
+
+**Completed:** v0.1.11 (2026-05-06) — All 4 parametrize lists in `TestCharacteristicSchemaIntegrity` expanded to cover all 9 characteristics via `_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())`. `alpha_corf` typo corrected to `alpha_coef` in `semi_transparent/low/RandomFog`. 36 tests pass (up from 20).
 
 ---
 
@@ -413,6 +415,42 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 ---
 
+### 31. Invalid albumentations parameter values in CLAHE and ColorJitter rules
+
+**What:** Two parameter values in `CHARACTERISTIC_RULES` will crash albumentations at transform-construction time, but pass all current tests because the test suite never calls albumentations constructors (only `translate_from_characteristics` dict assembly):
+
+1. `CLAHE clip_limit` — three rules set `clip_limit=RangeParameter(0.8, 2.0)`. Albumentations rejects any `clip_limit` tuple containing a value `< 1.0` with a `ValidationError`. Affected: `low_contrast/low`, `similar_to_background/low`, and `poor_lighting/low` (if that rule exists).
+2. `ColorJitter hue` — `reflective_surface/high/ColorJitter` sets `hue=RangeParameter(-0.7, 0.7)`. Albumentations enforces `hue ∈ [-0.5, 0.5]`.
+
+**Fix:**
+- Change `RangeParameter(0.8, 2.0)` → `RangeParameter(1.0, 2.0)` in all CLAHE `clip_limit` entries.
+- Change `RangeParameter(-0.7, 0.7)` → `RangeParameter(-0.5, 0.5)` in `reflective_surface/high/ColorJitter`.
+
+**Why deferred:** Tests pass because the translate layer only assembles dicts; it does not call albumentations. These crashes only manifest at inference time when a caller actually applies the augmentation pipeline.
+
+**Context:** Surfaced 2026-05-06 during `/ship` adversarial review of PR #63 (issue #63 branch). Pre-existing bugs, not introduced by that PR.
+
+**Depends on / blocked by:** None. Mechanical value changes.
+
+---
+
+### 32. `translate_from_characteristics` returns direct references into mutable class-level rule dicts
+
+**What:** `merged_augmentations[aug_type] = params` assigns the exact dict object from `CHARACTERISTIC_RULES[...].intensity_ranges[intensity][aug_type]`. Any caller that mutates the returned `result["augmentations"]` dict permanently corrupts `CHARACTERISTIC_RULES` for all subsequent calls in the same process — including across request handlers in a web server.
+
+**Fix:** Shallow-copy each params dict on insertion:
+```python
+merged_augmentations[aug_type] = dict(params)
+```
+
+**Why deferred:** No caller currently mutates the returned dict. The risk is latent but real in a web-server context where request handlers share the same process.
+
+**Context:** Surfaced 2026-05-06 during `/ship` adversarial review of PR #63. Pre-existing design issue in `characteristic_translator.py`.
+
+**Depends on / blocked by:** None. One-line fix + regression test.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
@@ -433,3 +471,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#16** Plumb `job_id` through training pipeline so artifact manifests carry real lineage ✅ → [docs/decisions/16-job-id-lineage-plumbing.md](docs/decisions/16-job-id-lineage-plumbing.md) — first follow-up surfaced by #6. Trial subprocesses use composed `f"{job_id}/{trial_id}"` form. Shipped 2026-04-27 (PR #41).
 - **#14** `tests/test_sam_lora.py` audit — 13 stale failures + CI scope gap ✅ — All 13 failures were stale tests. Moved to `tests/unit/ml_engine/test_sam_lora.py` so CI picks them up. Fixed 3 real bugs: `upscale_masks()` crashes on 5D multimask tensors (5D reshape path added); `SegmentationLoss` ignored `iou_predictions` (IoU quality MSE regression added); `box_prompts=[N=0]` now raises clear `ValueError` at call site. Pre-landing: added explicit `[B,N]` shape guard + clear error on `iou_predictions`, `iou_quality` key in default weights dict, rank guard on `upscale_masks`. 24 tests. Shipped 2026-04-28.
 - **#19** `_keep_higher_p` KeyError on missing `p` key ✅ — Added guard at `characteristic_translator.py:1109` that raises `ValueError` with a clear message when either params dict is missing `p`. xfail test promoted to passing regression guard (93 pass, 0 xfail). Shipped 2026-04-28.
+- **#25** `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics + `alpha_corf` typo ✅ — All 4 `@pytest.mark.parametrize` decorators in `TestCharacteristicSchemaIntegrity` now use `_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())` (derived from production dict, auto-updates when new characteristics are added). `alpha_corf` → `alpha_coef` typo corrected in `semi_transparent/low/RandomFog`. 36 tests pass (up from 20). Shipped 2026-05-06.

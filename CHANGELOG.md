@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.11] — 2026-05-06
+
+### Fixed
+
+- **`alpha_corf` typo corrected in `semi_transparent` low-intensity `RandomFog` rule** — `augmentation/characteristic_translator.py` line 301 had `"alpha_corf": RangeParameter.scalar(0.06)` where the key should be `"alpha_coef"` (consistent with the medium and high intensity entries at lines 314 and 327). The misspelling would silently pass an unrecognised parameter key to albumentations' `RandomFog` at inference time instead of the intended alpha coefficient.
+
+### Tests
+
+- **`TestCharacteristicSchemaIntegrity` expanded to all 9 characteristics** — Previously all four parametrized test methods (`test_all_three_intensities_present`, `test_every_intensity_has_at_least_one_transform`, `test_every_transform_has_probability`, `test_translate_with_each_intensity_succeeds`) spot-checked only 5 of the 9 characteristics in `CHARACTERISTIC_RULES`. The four uncovered characteristics (`changes_size`, `semi_transparent`, `similar_to_background`, `multiple_objects`) are now included. Test count: 20 → 36. The parametrize argument is now derived directly from `CharacteristicTranslator.CHARACTERISTIC_RULES.keys()` so new characteristics are automatically covered without a manual list update. GitHub issue #63. TODO #25.
+
 ## [0.1.10] — 2026-05-06
 
 ### Fixed
