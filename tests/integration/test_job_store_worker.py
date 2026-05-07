@@ -26,9 +26,11 @@ Pitfall catalogue:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import pytest
+import pytest_asyncio
 
 from ml_engine.agent.loop import AgentLoop, apublish_event, ensure_consumer_group
 from ml_engine.agent.stream_consumer import stream_key
@@ -41,19 +43,31 @@ from ml_engine.jobs.models import Job, JobStatus, JobType
 # ---------------------------------------------------------------------------
 
 _QUEUE = "job_queue"
+_CONSUMER_0 = "coordinator-0"
+_CONSUMER_1 = "coordinator-1"
 
 
 def _decode(raw: bytes | str) -> str:
     return raw.decode() if isinstance(raw, bytes) else raw
 
 
-async def _blpop(redis_async: Any, timeout: float = 1) -> str | None:
+async def _blpop(redis_async: Any, timeout: float = 0.1) -> str | None:
     """BLPOP job_queue and return the job_id string, or None if empty."""
     result = await redis_async.blpop(_QUEUE, timeout=timeout)
     if result is None:
         return None
     _key, raw_id = result
     return _decode(raw_id)
+
+
+@pytest_asyncio.fixture
+async def running_job(redis_async: Any):
+    """Submit a job, dequeue it, and mark it RUNNING. Returns (manager, job)."""
+    manager = AsyncJobManager(redis_client=redis_async)
+    job = await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={})
+    await _blpop(redis_async)
+    await manager.store.update_job(job.id, status=JobStatus.RUNNING)
+    return manager, job
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +80,7 @@ async def _blpop(redis_async: Any, timeout: float = 1) -> str | None:
 async def test_job_enqueue_dequeue_flow(redis_async: Any) -> None:
     """Submit → BLPOP → RUNNING → COMPLETED round-trip. Core integration boundary."""
     manager = AsyncJobManager(redis_client=redis_async)
-    job = await manager.submit_job(job_type="auto_label", config={})
+    job = await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={})
 
     assert await redis_async.llen(_QUEUE) == 1
 
@@ -88,7 +102,7 @@ async def test_five_jobs_all_dequeue_unique_ids(redis_async: Any) -> None:
     """Five submitted jobs enqueue; each BLPOP yields a unique, correct id.
     Catches: duplicate enqueue, RPUSH ordering preserving identity."""
     manager = AsyncJobManager(redis_client=redis_async)
-    submitted = [await manager.submit_job(job_type="auto_label", config={}) for _ in range(5)]
+    submitted = [await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={}) for _ in range(5)]
     submitted_ids = {j.id for j in submitted}
 
     assert await redis_async.llen(_QUEUE) == 5
@@ -109,8 +123,8 @@ async def test_high_priority_job_dequeued_first(redis_async: Any) -> None:
     """priority>0 uses LPUSH (front); priority=0 uses RPUSH (back).
     Catches: inverted priority direction — urgent jobs buried behind normal ones."""
     manager = AsyncJobManager(redis_client=redis_async)
-    normal = await manager.submit_job(job_type="auto_label", config={}, priority=0)
-    urgent = await manager.submit_job(job_type="auto_label", config={}, priority=1)
+    normal = await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={}, priority=0)
+    urgent = await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={}, priority=1)
 
     first_id = await _blpop(redis_async)
     assert first_id == urgent.id, "high-priority job must be dequeued before normal"
@@ -125,7 +139,7 @@ async def test_config_roundtrip_nested(redis_async: Any) -> None:
     Catches: json.dumps/loads mismatch or field truncation in Job.to_dict()."""
     cfg = {"lr": 0.001, "layers": [1, 2, 3], "model": {"name": "resnet", "depth": 50}}
     manager = AsyncJobManager(redis_client=redis_async)
-    await manager.submit_job(job_type="auto_label", config=cfg)
+    await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config=cfg)
     jid = await _blpop(redis_async)
     fetched = await manager.get_job(jid)
     assert fetched is not None
@@ -159,7 +173,7 @@ async def test_all_valid_job_types_accepted(redis_async: Any) -> None:
 async def test_queue_empty_after_all_dequeued(redis_async: Any) -> None:
     """After dequeuing all submitted jobs, queue length is 0 and further BLPOP is empty."""
     manager = AsyncJobManager(redis_client=redis_async)
-    await manager.submit_job(job_type="auto_label", config={})
+    await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={})
 
     jid = await _blpop(redis_async)
     assert jid is not None
@@ -177,7 +191,7 @@ async def test_cancel_pending_removes_from_queue_no_ghost(redis_async: Any) -> N
     """Cancel PENDING: llen drops to 0, status CANCELLED, no ghost entry survives LREM.
     This is the primary LREM guard test — the named pitfall 'cancel-pending-no-lrem'."""
     manager = AsyncJobManager(redis_client=redis_async)
-    job = await manager.submit_job(job_type="auto_label", config={})
+    job = await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={})
     assert await redis_async.llen(_QUEUE) == 1
 
     cancelled = await manager.cancel_job(job.id)
@@ -197,7 +211,7 @@ async def test_cancel_pending_removes_from_queue_no_ghost(redis_async: Any) -> N
 async def test_cancel_middle_job_of_five(redis_async: Any) -> None:
     """Cancel 2 of 5 jobs; exactly 3 remain; dequeued ids never include cancelled ones."""
     manager = AsyncJobManager(redis_client=redis_async)
-    jobs = [await manager.submit_job(job_type="auto_label", config={}) for _ in range(5)]
+    jobs = [await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={}) for _ in range(5)]
     cancel_ids = {jobs[1].id, jobs[3].id}
 
     for jid in cancel_ids:
@@ -221,7 +235,7 @@ async def test_double_cancel_pending_second_returns_false(redis_async: Any) -> N
     """Double-cancel of a PENDING job: first returns True, second returns False.
     CANCELLED is terminal; cancel_job guards against terminal-state re-cancel."""
     manager = AsyncJobManager(redis_client=redis_async)
-    job = await manager.submit_job(job_type="auto_label", config={})
+    job = await manager.submit_job(job_type=JobType.AUTO_LABEL.value, config={})
 
     first = await manager.cancel_job(job.id)
     assert first is True
@@ -232,13 +246,10 @@ async def test_double_cancel_pending_second_returns_false(redis_async: Any) -> N
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_cancel_running_job_sets_cancelling_no_lrem(redis_async: Any) -> None:
+async def test_cancel_running_job_sets_cancelling_no_lrem(running_job: Any, redis_async: Any) -> None:
     """Cancel RUNNING → CANCELLING (not CANCELLED). No LREM: already dequeued by worker.
     Catches: LREM on an empty queue causing an unintended LPUSH re-enqueue elsewhere."""
-    manager = AsyncJobManager(redis_client=redis_async)
-    job = await manager.submit_job(job_type="auto_label", config={})
-    await _blpop(redis_async)
-    await manager.store.update_job(job.id, status=JobStatus.RUNNING)
+    manager, job = running_job
 
     result = await manager.cancel_job(job.id)
     assert result is True
@@ -251,12 +262,9 @@ async def test_cancel_running_job_sets_cancelling_no_lrem(redis_async: Any) -> N
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_cancel_cancelling_job_returns_true(redis_async: Any) -> None:
+async def test_cancel_cancelling_job_returns_true(running_job: Any) -> None:
     """cancel_job on an already-CANCELLING job returns True (idempotent, no second event)."""
-    manager = AsyncJobManager(redis_client=redis_async)
-    job = await manager.submit_job(job_type="auto_label", config={})
-    await _blpop(redis_async)
-    await manager.store.update_job(job.id, status=JobStatus.RUNNING)
+    manager, job = running_job
     await manager.cancel_job(job.id)  # → CANCELLING
 
     result = await manager.cancel_job(job.id)
@@ -265,12 +273,9 @@ async def test_cancel_cancelling_job_returns_true(redis_async: Any) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_cancel_terminal_job_returns_false(redis_async: Any) -> None:
+async def test_cancel_terminal_job_returns_false(running_job: Any) -> None:
     """cancel_job on COMPLETED returns False without modifying state."""
-    manager = AsyncJobManager(redis_client=redis_async)
-    job = await manager.submit_job(job_type="auto_label", config={})
-    await _blpop(redis_async)
-    await manager.store.update_job(job.id, status=JobStatus.RUNNING)
+    manager, job = running_job
     await manager.store.update_job(job.id, status=JobStatus.COMPLETED)
 
     result = await manager.cancel_job(job.id)
@@ -294,12 +299,9 @@ async def test_cancel_nonexistent_job_returns_false(redis_async: Any) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_cancel_failed_job_returns_false(redis_async: Any) -> None:
+async def test_cancel_failed_job_returns_false(running_job: Any) -> None:
     """FAILED is terminal — cancel returns False and status stays FAILED."""
-    manager = AsyncJobManager(redis_client=redis_async)
-    job = await manager.submit_job(job_type="auto_label", config={})
-    await _blpop(redis_async)
-    await manager.store.update_job(job.id, status=JobStatus.RUNNING)
+    manager, job = running_job
     await manager.store.update_job(job.id, status=JobStatus.FAILED)
 
     result = await manager.cancel_job(job.id)
@@ -416,8 +418,6 @@ async def test_count_jobs_empty_returns_zero(redis_async: Any) -> None:
 async def test_update_job_multiple_fields_atomic(redis_async: Any) -> None:
     """update_job with status + worker_id + started_at persists all fields together.
     Catches: partial update where status moves but scalar fields are silently dropped."""
-    from datetime import datetime, timezone
-
     store = AsyncRedisJobStore(redis_client=redis_async)
     job = Job(type=JobType.AUTO_LABEL.value, config={})
     await store.enqueue_job(job)
@@ -434,7 +434,7 @@ async def test_update_job_multiple_fields_atomic(redis_async: Any) -> None:
     assert fetched is not None
     assert fetched.status == JobStatus.RUNNING
     assert fetched.worker_id == "worker-42"
-    assert fetched.started_at is not None
+    assert fetched.started_at == started
 
 
 # ---------------------------------------------------------------------------
@@ -467,7 +467,7 @@ async def test_pel_empty_after_successful_run(run_id: str, redis_async: Any) -> 
         redis_client=redis_async,
         run_id=run_id,
         on_event=handler_a,
-        consumer_name="coordinator-0",
+        consumer_name=_CONSUMER_0,
     )
     await loop_a.run(max_events=3)
     assert len(processed_a) == 3
@@ -484,7 +484,7 @@ async def test_pel_empty_after_successful_run(run_id: str, redis_async: Any) -> 
         redis_client=redis_async,
         run_id=run_id,
         on_event=handler_b,
-        consumer_name="coordinator-0",
+        consumer_name=_CONSUMER_0,
     )
     # cancel_check=lambda: True exits immediately after _drain_pel finds nothing
     await loop_b.run(cancel_check=lambda: True)
@@ -510,7 +510,7 @@ async def test_pel_clean_for_new_consumer_name(run_id: str, redis_async: Any) ->
         redis_client=redis_async,
         run_id=run_id,
         on_event=noop,
-        consumer_name="coordinator-0",
+        consumer_name=_CONSUMER_0,
     )
     await loop_0.run(max_events=2)
 
@@ -524,7 +524,7 @@ async def test_pel_clean_for_new_consumer_name(run_id: str, redis_async: Any) ->
         redis_client=redis_async,
         run_id=run_id,
         on_event=handler_1,
-        consumer_name="coordinator-1",
+        consumer_name=_CONSUMER_1,
     )
     await loop_1.run(cancel_check=lambda: True)
     assert len(processed_1) == 0, "different consumer_name must not see coordinator-0's ACKed events"
