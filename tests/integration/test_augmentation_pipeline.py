@@ -47,11 +47,7 @@ _CROP_CHARACTERISTICS = {"changes_size", "multiple_objects"}
 
 
 def _char_params() -> list:
-    return [
-        pytest.param(c, i, id=f"{i}-{c}")
-        for c in _ALL_CHARACTERISTICS
-        for i in _INTENSITIES
-    ]
+    return [pytest.param(c, i, id=f"{i}-{c}") for c in _ALL_CHARACTERISTICS for i in _INTENSITIES]
 
 
 @pytest.fixture(scope="module")
@@ -306,9 +302,7 @@ def test_high_intensity_p_strictly_greater_than_low_intensity() -> None:
 
 
 @pytest.mark.integration
-def test_input_image_not_mutated_by_pipeline(
-    rgb_image: np.ndarray, sample_bbox: List[List[int]]
-) -> None:
+def test_input_image_not_mutated_by_pipeline(rgb_image: np.ndarray, sample_bbox: List[List[int]]) -> None:
     """
     Calling pipeline(image=rgb_image) must not modify the original array in-place.
     Catches pipelines that call np operations without copy, mutating the caller's data.
@@ -318,9 +312,7 @@ def test_input_image_not_mutated_by_pipeline(
 
     pipeline(image=rgb_image, bboxes=sample_bbox)
 
-    assert np.array_equal(rgb_image, original), (
-        "pipeline must not mutate the input image array in-place"
-    )
+    assert np.array_equal(rgb_image, original), "pipeline must not mutate the input image array in-place"
 
 
 @pytest.mark.integration
@@ -404,9 +396,7 @@ def test_all_characteristics_produce_at_least_one_transform() -> None:
     """
     for characteristic in _ALL_CHARACTERISTICS:
         for intensity in _INTENSITIES:
-            result = _TRANSLATOR.translate_from_characteristics(
-                [characteristic], intensity=intensity
-            )
+            result = _TRANSLATOR.translate_from_characteristics([characteristic], intensity=intensity)
             assert len(result["augmentations"]) > 0, (
                 f"{characteristic!r} at {intensity!r} produced empty augmentations dict"
             )
@@ -451,8 +441,7 @@ def test_keypoints_passed_through_pipeline(rgb_image: np.ndarray) -> None:
 
     assert isinstance(output["keypoints"], list), "output['keypoints'] must be a list"
     assert len(output["keypoints"]) == len(keypoints_in), (
-        f"keypoint count must not change: in={len(keypoints_in)}, "
-        f"out={len(output['keypoints'])}"
+        f"keypoint count must not change: in={len(keypoints_in)}, out={len(output['keypoints'])}"
     )
 
 
