@@ -42,7 +42,7 @@ from ml_engine.jobs.models import Job, JobStatus, JobType
 # Helpers
 # ---------------------------------------------------------------------------
 
-_QUEUE = "job_queue"
+_QUEUE = AsyncRedisJobStore.JOB_QUEUE_KEY
 _CONSUMER_0 = "coordinator-0"
 _CONSUMER_1 = "coordinator-1"
 
@@ -155,6 +155,7 @@ async def test_submit_invalid_job_type_raises_no_queue_entry(redis_async: Any) -
     with pytest.raises(ValueError, match="Invalid job type"):
         await manager.submit_job(job_type="not_a_real_type", config={})
     assert await redis_async.llen(_QUEUE) == 0, "invalid submit must not touch queue"
+    assert await redis_async.keys("job:*") == [], "invalid submit must not leave orphan hash"
 
 
 @pytest.mark.asyncio
@@ -472,7 +473,7 @@ async def test_pel_empty_after_successful_run(run_id: str, redis_async: Any) -> 
     await loop_a.run(max_events=3)
     assert len(processed_a) == 3
 
-    pending_info = await redis_async.xpending(stream_key(run_id), "coordinator")
+    pending_info = await redis_async.xpending(stream_key(run_id), AgentLoop.CONSUMER_GROUP)
     assert pending_info["pending"] == 0, "PEL must be empty after all events ACKed"
 
     processed_b: list = []
