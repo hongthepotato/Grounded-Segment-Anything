@@ -32,7 +32,9 @@ async def redis_async(fake_server: fakeredis.FakeServer) -> fakeredis.aioredis.F
 @pytest.fixture
 def redis_sync(fake_server: fakeredis.FakeServer) -> fakeredis.FakeRedis:
     """Sync fakeredis client backed by the same FakeServer (for dequeue assertions)."""
-    return fakeredis.FakeRedis(server=fake_server, decode_responses=False)
+    client = fakeredis.FakeRedis(server=fake_server, decode_responses=False)
+    yield client
+    client.close()
 
 
 @pytest.fixture

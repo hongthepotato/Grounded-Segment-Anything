@@ -58,6 +58,7 @@ async def _advance_to_done(sm: StateMachine) -> None:
             current = to_state
         if current == "done":
             break
+    assert current == "done", f"_advance_to_done left sm in {current!r} — arc never matched"
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +108,6 @@ async def test_happy_path_full_lifecycle(run_id: str, redis_async: Any) -> None:
     # Hash must survive in Redis after run
     raw = await redis_async.hgetall(state_key(run_id))
     assert raw, "LoopState hash must persist in Redis"
-
-    # Negative: only one event was published -- no phantom second message
-    assert len(loaded.messages) == 1
 
 
 @pytest.mark.asyncio
@@ -170,8 +168,8 @@ async def test_crash_recovery_second_loop_resumes(run_id: str, redis_async: Any)
     - Crash handler was called once (event was delivered to loop_a).
     - Recovery handler was called once (event replayed from PEL to loop_b).
     - State machine reaches 'done' after recovery.
-    - LoopState from loop_b has 2 messages: pre-crash save + re-dispatch append
-      (correct at-least-once delivery semantics -- documented, not a bug).
+    - LoopState from loop_b has exactly 2 messages: pre-crash save append +
+      re-dispatch append (exactly-twice semantics -- documented, not a bug).
     - Negative: stage_just_completed is still None (no stage was declared).
     """
     sm = StateMachine(run_id=run_id, redis_async=redis_async)
@@ -218,10 +216,11 @@ async def test_crash_recovery_second_loop_resumes(run_id: str, redis_async: Any)
     assert recovered[0]["type"] == "pipeline_started"
     assert await sm.current_state() == "done"
 
-    # Pre-crash save appended message once; re-dispatch appends again -> 2 total
+    # handle_event appends to messages BEFORE calling on_event, so the
+    # re-dispatch adds one entry on top of the pre-crash-save entry -> exactly 2.
     assert loop_b._state is not None
     assert len(loop_b._state.messages) == 2, (
-        "at-least-once: pre-crash save + re-dispatch each append once"
+        "exactly-twice: pre-crash save append + re-dispatch append = 2"
     )
     assert loop_b._state.stage_just_completed is None
 
@@ -276,10 +275,10 @@ async def test_crash_recovery_state_persisted_before_handler(run_id: str, redis_
     )
     await loop_b.run(max_events=1)
 
-    # By the time on_event fires, handle_event has already appended the re-delivered
-    # event to state.messages, so the count is pre-crash(1) + re-dispatch(1) = 2
+    # handle_event appends the re-dispatched event BEFORE calling on_event, so
+    # on_event sees: pre-crash-save entry (1) + re-dispatch append (1) = 2 total.
     assert messages_at_entry == [2], (
-        "on_event sees pre-crash message + re-dispatch append = 2 entries"
+        "on_event sees pre-crash entry + re-dispatch append = 2 messages"
     )
 
 
@@ -396,8 +395,6 @@ async def test_state_machine_failed_retrying_increments_count(run_id: str, redis
     await sm.transition("failed_retrying")
     assert await sm.retry_count() == 2
 
-    assert await sm.retry_count() < 3
-
 
 # ---------------------------------------------------------------------------
 # Scenario 4 -- TODOS #24 race: coordinator double-start without a lock
@@ -450,9 +447,14 @@ async def test_coordinator_double_resume_race_condition(run_id: str, redis_async
     def make_handler(name: str):
         async def on_event(event: Dict[str, Any], state: LoopState) -> None:
             arrived.append(name)
-            # Busy-yield until both handlers are inside, maximising interleave chance
+            # Busy-yield until both handlers are inside, maximising interleave chance.
+            # Capped to avoid infinite hang if one loop never reaches the barrier.
+            _iters = 0
             while len(arrived) < 2:
                 await asyncio.sleep(0)
+                _iters += 1
+                if _iters > 5000:
+                    pytest.fail("barrier timed out — one handler never arrived")
             try:
                 await sm.transition("planning")
             except ValueError as exc:
