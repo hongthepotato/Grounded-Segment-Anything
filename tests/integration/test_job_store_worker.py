@@ -496,9 +496,14 @@ async def test_pel_empty_after_successful_run(run_id: str, redis_async: Any) -> 
 @pytest.mark.integration
 async def test_pel_clean_for_new_consumer_name(run_id: str, redis_async: Any) -> None:
     """
-    A different consumer_name has its own PEL slot. After coordinator-0 processes
-    all events, coordinator-1 starting fresh has zero PEL entries for itself.
-    Catches: consumer-group PEL keyed per consumer_name, not per group.
+    PEL is keyed per (group, consumer_name). coordinator-1 starting fresh must NOT
+    replay coordinator-0's already-ACKed events; it should only see genuinely new
+    messages delivered to it.
+
+    Uses max_events (bounded internal counter) rather than cancel_check (external
+    abort signal) so that _drain_pel actually runs and verifies the empty PEL before
+    reading from the stream. cancel_check=lambda: True would short-circuit _drain_pel
+    entirely and skip the verification we care about.
     """
     await ensure_consumer_group(redis_async, run_id)
     for _ in range(2):
@@ -515,7 +520,10 @@ async def test_pel_clean_for_new_consumer_name(run_id: str, redis_async: Any) ->
     )
     await loop_0.run(max_events=2)
 
-    # coordinator-1 never consumed anything — its PEL slot is empty
+    # Publish a new event AFTER coordinator-0 has ACKed its two heartbeats.
+    # coordinator-1 should receive exactly this one new event — not a replay.
+    await apublish_event(redis_async, run_id, {"type": "new_task"})
+
     processed_1: list = []
 
     async def handler_1(event: Dict[str, Any], _state: Any) -> None:
@@ -527,5 +535,9 @@ async def test_pel_clean_for_new_consumer_name(run_id: str, redis_async: Any) ->
         on_event=handler_1,
         consumer_name=_CONSUMER_1,
     )
-    await loop_1.run(cancel_check=lambda: True)
-    assert len(processed_1) == 0, "different consumer_name must not see coordinator-0's ACKed events"
+    # max_events=1: _drain_pel runs (finds empty PEL for coordinator-1), then
+    # reads exactly the one new_task event from the stream and stops.
+    await loop_1.run(max_events=1)
+
+    assert len(processed_1) == 1, "coordinator-1 must receive the new event, not coordinator-0's ACKed events"
+    assert processed_1[0].get("type") == "new_task", "coordinator-1 must see new_task, not replayed heartbeat"
