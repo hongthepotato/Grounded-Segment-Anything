@@ -292,6 +292,8 @@ and the audit, but each wants a callsite enumeration before shipping.
 
 **Depends on / blocked by:** Only relevant at >1 replica. Current single-instance dev is unaffected. Defer until multi-instance deployment is planned.
 
+**Test coverage:** `tests/integration/test_agent_lifecycle.py::test_coordinator_double_resume_race_condition` — `@pytest.mark.xfail(strict=True)`. Two `AgentLoop` instances (coordinator-0, coordinator-1) race `sm.transition("planning")` behind a barrier; the second gets `ValueError` confirming the TOCTOU. XFAILED = race confirmed. XPASS = lock has landed (remove the marker).
+
 ---
 
 ### ~~25. `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics~~
