@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.13] — 2026-05-07
+
+### Tests
+
+- **Agent lifecycle integration test suite** — 9 tests covering `AgentLoop` + `StateMachine` across four scenarios: happy-path full state arc to `done`, crash recovery via Redis PEL reclaim (XCLAIM), state machine fence (invalid and terminal transitions rejected), and a `@pytest.mark.xfail(strict=True)` test confirming the TODOS #24 coordinator double-start race. Shared `fakeredis` fixtures added to `tests/integration/conftest.py`.
+
 ## [0.1.12] — 2026-05-06
 
 ### Fixed
