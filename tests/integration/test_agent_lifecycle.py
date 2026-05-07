@@ -23,7 +23,6 @@ import asyncio
 from typing import Any, Dict, List
 
 import pytest
-import pytest_asyncio
 
 from ml_engine.agent.loop import (
     AgentLoop,
