@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.14] — 2026-05-07
+
+### Tests
+
+- **Job store → worker dequeue integration test suite** — 23 tests across four scenarios covering the async job queue boundary: enqueue/dequeue happy path (priority ordering, config roundtrip, all `JobType` values, invalid-type validation), cancel guard logic (LREM removal for PENDING, RUNNING→CANCELLING without LREM, idempotent CANCELLING, all terminal states), `AsyncRedisJobStore` status index consistency (SREM+SADD atomicity, multi-status SCARD accuracy, multi-field atomic update), and PEL drain after ACK (successful run leaves PEL at zero; second consumer sees nothing). Shared `running_job` async fixture eliminates setup boilerplate across cancel-state tests.
+
 ## [0.1.13] — 2026-05-07
 
 ### Tests
