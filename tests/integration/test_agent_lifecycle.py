@@ -218,9 +218,7 @@ async def test_crash_recovery_second_loop_resumes(run_id: str, redis_async: Any)
     # handle_event appends to messages BEFORE calling on_event, so the
     # re-dispatch adds one entry on top of the pre-crash-save entry -> exactly 2.
     assert loop_b._state is not None
-    assert len(loop_b._state.messages) == 2, (
-        "exactly-twice: pre-crash save append + re-dispatch append = 2"
-    )
+    assert len(loop_b._state.messages) == 2, "exactly-twice: pre-crash save append + re-dispatch append = 2"
     assert loop_b._state.stage_just_completed is None
 
 
@@ -276,9 +274,7 @@ async def test_crash_recovery_state_persisted_before_handler(run_id: str, redis_
 
     # handle_event appends the re-dispatched event BEFORE calling on_event, so
     # on_event sees: pre-crash-save entry (1) + re-dispatch append (1) = 2 total.
-    assert messages_at_entry == [2], (
-        "on_event sees pre-crash entry + re-dispatch append = 2 messages"
-    )
+    assert messages_at_entry == [2], "on_event sees pre-crash entry + re-dispatch append = 2 messages"
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +454,7 @@ async def test_coordinator_double_resume_race_condition(run_id: str, redis_async
                 await sm.transition("planning")
             except ValueError as exc:
                 handler_errors.append(f"{name}: {exc}")
+
         return on_event
 
     loop_a = AgentLoop(
@@ -480,6 +477,4 @@ async def test_coordinator_double_resume_race_condition(run_id: str, redis_async
 
     # With a lock: loser is blocked before calling transition() -> no errors.
     # Without a lock (TODOS #24): one coordinator errors -> assert fails -> XFAILED.
-    assert not handler_errors, (
-        f"TODOS #24: coordinator raced without distributed lock -> {handler_errors}"
-    )
+    assert not handler_errors, f"TODOS #24: coordinator raced without distributed lock -> {handler_errors}"
