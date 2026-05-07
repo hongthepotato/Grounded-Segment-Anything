@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.15] — 2026-05-07
+
+### Tests
+
+- **Augmentation pipeline integration test suite** — 43 tests across four scenarios covering the full `ConfigurableAugmentationPipeline.__call__` pixel-apply path with real numpy images and bboxes. Scenario 1: all 9 characteristics × 3 intensities (30 parametrized tests) confirm valid uint8 RGB output and exact 4-key output dict. Scenario 2 (bbox adversarial): coordinate space correctness after `RandomSizedBBoxSafeCrop` resize to 1024×1024, count-never-increases invariant with `min_visibility=0.3`, spatial transform coordinate validity, empty bbox list, and 1×1 pixel bbox edge case. Scenario 3 (stacking): dedup count (low_contrast + similar_to_background → exactly 4 transforms), `p`-value ordering verified in built pipeline (high intensity CLAHE `p` > low intensity), no input array mutation, all-9-characteristics stack, repeated-call stability. Scenario 4 (structural): identity pipeline pixel-identity, non-empty output for every characteristic/intensity pair, masks/keypoints empty-list defaults, masks round-trip through stack/unstack, keypoints preserved by color-only transforms.
+
 ## [0.1.14] — 2026-05-07
 
 ### Tests
