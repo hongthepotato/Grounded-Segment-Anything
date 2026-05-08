@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.16] — 2026-05-08
+
+### Fixed
+
+- **GIoU loss + Hungarian matching cost biased on small-object detection** — `groundingdino.util.box_ops.box_iou` adds `+ 1e-6` to the IoU denominator. The bias scales as `1e-6 / (area + 1e-6)`: invisible at typical box sizes (~2.5e-5 at 20%×20%), but ~1% at 1%×1% and ~50% at 0.1%×0.1%. This degraded both the GIoU loss signal AND the Hungarian assignment cost on small objects (think small defects, distant pedestrians). New module `ml_engine/utils/box_ops.py` provides bias-free `box_iou` / `generalized_box_iou` (bare division with `clamp(min=1e-12)` as defense in depth — strict no-op for live inputs, only activates on genuinely degenerate boxes). `ml_engine/training/losses.py` (matcher + `loss_boxes`) and `ml_engine/evaluation/evaluator.py` (`_is_detection_success` IoU≥0.5 check) now use the local bias-free implementations. Vendored upstream code is untouched.
+
+### Tests
+
+- **ML pipeline CPU integration suite** — 52 tests covering `SegmentationLoss` (analytical exact values, invariants, errors), `build_criterion` (basics, bounds, perfect-detection, GIoU mathematical invariants across 6 box sizes including microscopic), and `build_teacher_training_config` (YAML contract, override merging). Group three (`TestBuildCriterionGIoUInvariants`, 8 tests) directly proves the GIoU fix: self-match=0 across box sizes, scale invariance, symmetry, translation invariance, monotone separation, disjoint upper bound, valid range over 50 random pairs.
+- **`box_iou` / `generalized_box_iou` unit suite** — 15 tests directly exercising the new utility: self-match=1.0 across 6 box sizes (0.5 down to 1e-4), half-overlap=1/3 analytical, disjoint, symmetry, translation invariance, NxM shape, point-box no-NaN, degenerate-xyxy assertion firing, and 50-pair valid-range fuzz.
+- **Dual-accept exception contracts pinned** — Three test sites that accepted "NaN OR raise" or `(RuntimeError, ValueError)` now pin a single contract, so future regressions in either direction trigger test failure. `test_nan_predictions_produce_non_finite_or_raise` → `test_nan_predictions_propagate_to_loss` (pin: `math.isnan(loss)`, drop the dual-accept try/except — preserves AMP `GradScaler` semantics). `test_sam_lora.py:587` and its sibling integration test now pin `pytest.raises(ValueError, match=r"iou_predictions must be shape \[B, N\]")` instead of `(RuntimeError, ValueError)`. `test_validators.py:1016` pinned to graceful-success contract for empty nested segmentation `[[]]`. Audit found 8 dual-accept sites total; 3 fixed, 6 remaining filed as TODO #40.
+
 ## [0.1.15] — 2026-05-07
 
 ### Tests

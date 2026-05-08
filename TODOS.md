@@ -509,6 +509,103 @@ Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all 
 
 ---
 
+### 36. Test determinism — seed `_gdino_outputs` / `_gdino_targets` helpers
+
+**Priority:** P2.
+
+**What:** [tests/integration/test_ml_pipeline_cpu.py](tests/integration/test_ml_pipeline_cpu.py#L57-L72) defines `_gdino_outputs` and `_gdino_targets` helpers that call `torch.rand(...)` without seeding. Roughly 6 existing tests in that file consume those helpers (`TestBuildCriterionBasics::test_returns_non_empty_dict`, `test_main_loss_keys_present`, `test_gradient_flows_through_losses`, `test_multi_class_produces_finite_losses`, `TestBuildCriterionBounds::*`, `TestBuildCriterionPerfectDetection::test_near_zero_ce_on_low_confidence_zero_token_labels`).
+
+**Why:** Tests are technically non-deterministic. Failures involving boundary conditions (e.g. `class_error` exactly at 0 or 100, GIoU near ±1) won't reproduce on rerun. No flake observed yet, but the surface is real — surfaced by the testing specialist during `/review` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
+
+**Fix (one of):**
+- `@pytest.fixture(autouse=True) def _seed_rng(): torch.manual_seed(0)` at module top, OR
+- Pass `generator=torch.Generator().manual_seed(N)` into `torch.rand(...)` calls inside both helpers, OR
+- Add `torch.manual_seed(0)` as the first line of each helper.
+
+**Pros:** Eliminates the entire class of "won't reproduce on rerun" flakes from these helpers in ~2 lines.
+
+**Cons:** Touches 6+ existing tests' implicit randomness profile. Low risk because none of those tests assert on specific random values.
+
+**Depends on / blocked by:** None.
+
+---
+
+### 38. fp16-safe clamp threshold in `ml_engine/utils/box_ops.py`
+
+**Priority:** P3 (latent, currently shielded by criterion's fp16/fp32 dtype mix).
+
+**What:** [ml_engine/utils/box_ops.py](ml_engine/utils/box_ops.py) uses `union.clamp(min=1e-12)` and `enclosing.clamp(min=1e-12)`. `1e-12` underflows to 0 in fp16, making the clamp a no-op under fp16 autocast. Surfaced by adversarial review during `/ship` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
+
+**Why:** Currently masked because `loss_boxes` and `HungarianMatcher.forward` mix fp16 pred boxes with fp32 target boxes from the dataloader; PyTorch promotes the IoU computation to fp32 where 1e-12 is representable. A fully-fp16 pipeline (e.g., someone calls `.half()` on targets) would re-expose 0/0 NaN risk on degenerate / underflowed-width predicted boxes.
+
+**Tradeoff investigated and rejected:** Bumping the threshold to `1e-6` is fp16-safe but reintroduces the exact bias the PR was fixing for area<1e-6 boxes (microscopic crack-scale defects). Two unit tests in `tests/unit/test_losses.py::TestLocalBoxIoU` (`test_self_match_iou_exactly_one_for_microscopic_box`, `test_self_match_giou_exactly_one_across_box_sizes` at side=1e-4) directly fail with that threshold.
+
+**Better fix candidates:**
+- `union.clamp(min=torch.finfo(union.dtype).tiny)` — dtype-aware: fp32→1.18e-38 (effectively 0 floor, perfect), fp16→6.10e-5 (acceptable; biases boxes with area<6e-5 in fp16 only, which already underflow upstream anyway), fp64→2.2e-308.
+- Promote dtype explicitly: `iou = (inter.float() / union.float().clamp(min=1e-12)).to(inter.dtype)`. Keeps fp32 computation regardless of caller dtype.
+
+**Pros of fixing:** True dtype-agnostic correctness for all-fp16 callers.
+**Cons:** Two extra lines + a unit test parametrized over fp16/fp32. Low payoff because no current caller is fully fp16.
+
+**Depends on / blocked by:** None.
+
+---
+
+### 39. Class-scoped fixture for `build_criterion` in GIoU invariant tests
+
+**Priority:** P3 (cosmetic perf — does not affect correctness).
+
+**What:** [tests/integration/test_ml_pipeline_cpu.py::TestBuildCriterionGIoUInvariants](tests/integration/test_ml_pipeline_cpu.py#L561) calls `build_criterion(num_classes=1)` inside `_giou_loss(...)` on every invocation. Across the 8 tests in the class, the criterion gets rebuilt ~33 times. `build_criterion` reads YAML and constructs `GroundingDINOCriterion + HungarianMatcher` — non-trivial.
+
+**Why:** The 8-test class adds ~3 seconds of redundant setup to the CPU integration suite. Not flake-inducing, just wasteful.
+
+**Fix:** Hoist criterion to a class-scoped pytest fixture and pass it into `_giou_loss`:
+```python
+@pytest.fixture(scope="class")
+def criterion(self):
+    return build_criterion(num_classes=1)
+
+@staticmethod
+def _giou_loss(criterion, pred_box, gt_box):
+    ...
+```
+
+**Depends on / blocked by:** None.
+
+**Surfaced:** `/review` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
+
+---
+
+### 40. Pin loose `pytest.raises` contracts across the test suite (dual-acceptance audit)
+
+**Priority:** P3 (P2 cases A/B already fixed inline; remaining 6 are lower-impact but same disease).
+
+**What:** A grep audit done while filing #37 found 8 dual-acceptance test sites — tests whose assertion accepts two distinct outcomes, masking regression in either direction. Two were fixed inline (see "Audit context" below). Six remain. Each accepts a loose pair like `(RuntimeError, ValueError)` or even bare `pytest.raises(Exception)`, which catches `AssertionError` from broken test setup and lets the contract drift silently between explicit validation and incidental torch/dict errors.
+
+**The six remaining sites:**
+
+1. [tests/integration/test_ml_pipeline_cpu.py:327](tests/integration/test_ml_pipeline_cpu.py#L327) — `pytest.raises((RuntimeError, ValueError))` on batch-size mismatch in `SegmentationLoss`. Today only `RuntimeError` fires (torch reshape). Pin to `RuntimeError` with a `match`, OR add an explicit `ValueError` check in `losses.py` and pin to that.
+
+2. [tests/integration/test_ml_pipeline_cpu.py:385](tests/integration/test_ml_pipeline_cpu.py#L385) — `pytest.raises((RuntimeError, AssertionError))` on (M, 3) boxes. Assertion vs torch op are very different bug classes; sibling `test_missing_token_labels_raises` already pins `AssertionError` with a match. Match that.
+
+3. [tests/integration/test_ml_pipeline_cpu.py:540](tests/integration/test_ml_pipeline_cpu.py#L540) — `pytest.raises((KeyError, ValueError))` on missing `class_mapping`. Today `KeyError` (native dict access) fires. Pin to that, OR add explicit `ValueError` validation in `build_teacher_training_config` and pin to that.
+
+4. [tests/unit/ml_engine/test_sam_lora.py:533](tests/unit/ml_engine/test_sam_lora.py#L533) — `pytest.raises((RuntimeError, ValueError))` on spatial H/W mismatch. Today only `RuntimeError` fires (no explicit spatial check in `losses.py`). Pin to `RuntimeError` with `match`, OR add explicit check.
+
+5. `tests/contract/test_redis_store_invariants.py` (~line 244) — bare `pytest.raises(Exception)` while injecting a specific `RuntimeError`. Pin to the injected type.
+
+6. [tests/unit/ml_engine/data/test_validators.py:337](tests/unit/ml_engine/data/test_validators.py#L337) — bare `pytest.raises(Exception)` for `compute_bbox_from_mask([[]])`. Investigate the actual exception pycocotools throws, pin to that specific type with a `match`.
+
+**Why:** A loose `pytest.raises((RuntimeError, ValueError))` accepts a regression where the explicit `raise ValueError("clear message")` is removed and torch's vague `RuntimeError: shape ... is invalid` takes over. Users go from a helpful error to a torch internal one with no test signal. `pytest.raises(Exception)` is even worse — it accepts `AssertionError` from a broken test setup. The pattern is consistent: when the test author wasn't sure which exception fires, they accepted both rather than running the code once and pinning.
+
+**Audit context:** Done as a sweep after `/review` flagged TODO #37 (the parent of this disease). Eight sites total found across `tests/`. Two P2 cases already fixed inline on `integration-tests/ml-pipeline-cpu` (2026-05-08): `tests/unit/ml_engine/test_sam_lora.py:587` (sibling integration test had the right pin: `match=r"iou_predictions must be shape \[B, N\]"`) and `tests/unit/ml_engine/data/test_validators.py:1016-1032` (explicit "either succeeds or raises clear error" comment + redundant `(ValueError, Exception)` catch — verified live behavior succeeds gracefully, pinned to that).
+
+**Fix recipe per site:** (a) run the test with the loose `pytest.raises` removed to see which exception actually fires today; (b) decide whether that's the contract you want; (c) pin with `pytest.raises(SpecificType, match=r"distinguishing-phrase")`. If the contract should be a typed exception that doesn't exist yet, add the explicit `raise` in the source first.
+
+**Depends on / blocked by:** None. Each site is independent.
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
@@ -535,3 +632,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#14** `tests/test_sam_lora.py` audit — 13 stale failures + CI scope gap ✅ — All 13 failures were stale tests. Moved to `tests/unit/ml_engine/test_sam_lora.py` so CI picks them up. Fixed 3 real bugs: `upscale_masks()` crashes on 5D multimask tensors (5D reshape path added); `SegmentationLoss` ignored `iou_predictions` (IoU quality MSE regression added); `box_prompts=[N=0]` now raises clear `ValueError` at call site. Pre-landing: added explicit `[B,N]` shape guard + clear error on `iou_predictions`, `iou_quality` key in default weights dict, rank guard on `upscale_masks`. 24 tests. Shipped 2026-04-28.
 - **#19** `_keep_higher_p` KeyError on missing `p` key ✅ — Added guard at `characteristic_translator.py:1109` that raises `ValueError` with a clear message when either params dict is missing `p`. xfail test promoted to passing regression guard (93 pass, 0 xfail). Shipped 2026-04-28.
 - **#25** `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics + `alpha_corf` typo ✅ — All 4 `@pytest.mark.parametrize` decorators in `TestCharacteristicSchemaIntegrity` now use `_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())` (derived from production dict, auto-updates when new characteristics are added). `alpha_corf` → `alpha_coef` typo corrected in `semi_transparent/low/RandomFog`. 36 tests pass (up from 20). Shipped 2026-05-06.
+- **#37** Pin NaN-handling contract in NaN-predictions test ✅ — Renamed `test_nan_predictions_produce_non_finite_or_raise` → `test_nan_predictions_propagate_to_loss`, dropped the `try/except (ValueError, RuntimeError): pass` dual-accept, tightened `not isfinite` → `isnan` (excludes ±Inf). Verified live behavior: SegmentationLoss propagates NaN through to loss output, which is what AMP `GradScaler.step()` expects so it can detect bad steps and skip the optimizer update. Sibling P2 cases A/B (`test_sam_lora.py:587`, `test_validators.py:1016`) fixed in the same commit; 6 lower-impact dual-accept sites filed as #40. Shipped 2026-05-08.

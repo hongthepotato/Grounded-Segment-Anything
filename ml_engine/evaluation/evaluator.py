@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict, List, Tuple
 
 import torch
-from groundingdino.util.box_ops import box_cxcywh_to_xyxy, box_iou
+from groundingdino.util.box_ops import box_cxcywh_to_xyxy
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -20,6 +20,11 @@ from ml_engine.evaluation.metrics import (
     SegmentationMetrics,
     SimpleMetricsConverter,
 )
+
+# Use the bias-free local box_iou; the vendored version adds +1e-6 to the IoU
+# denominator, which can flip near-threshold matches at iou >= 0.5 for small
+# objects. See ml_engine/utils/box_ops.py for rationale.
+from ml_engine.utils.box_ops import box_iou
 
 logger = logging.getLogger(__name__)
 
