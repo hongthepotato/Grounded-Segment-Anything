@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.17] — 2026-05-08
+
+### Tests
+
+- **`TestBuildCriterionGIoUInvariants` class-scoped `criterion` fixture (closes #84)** — The seven GIoU invariant tests previously rebuilt the criterion ~33 times (every `_giou_loss` call constructed a new `GroundingDINOCriterion` + `HungarianMatcher` with a 7-decoder-layer aux/encoder weight dict). New `@pytest.fixture(scope="class") def criterion` builds it once per class; `_giou_loss` now takes the fixture as its first argument and the seven test methods inject it. Verified via patched call counter: `build_criterion` invocation count drops to 1 in single-process runs. Trims ~3s off `tests/integration/test_ml_pipeline_cpu.py`. No assertion or test-logic changes; `GroundingDINOCriterion.forward()` is a stateless `nn.Module` (no `self.X = ...`, no buffers, no RNG ops on the path used by these tests), so sharing across the class is correctness-preserving. CI uses `pytest-xdist --dist=loadscope`, which keeps an entire class on one worker — fixture builds exactly once per class per test run.
+
 ## [0.1.16] — 2026-05-08
 
 ### Fixed

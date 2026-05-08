@@ -551,31 +551,6 @@ Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all 
 
 ---
 
-### 39. Class-scoped fixture for `build_criterion` in GIoU invariant tests
-
-**Priority:** P3 (cosmetic perf — does not affect correctness).
-
-**What:** [tests/integration/test_ml_pipeline_cpu.py::TestBuildCriterionGIoUInvariants](tests/integration/test_ml_pipeline_cpu.py#L561) calls `build_criterion(num_classes=1)` inside `_giou_loss(...)` on every invocation. Across the 8 tests in the class, the criterion gets rebuilt ~33 times. `build_criterion` reads YAML and constructs `GroundingDINOCriterion + HungarianMatcher` — non-trivial.
-
-**Why:** The 8-test class adds ~3 seconds of redundant setup to the CPU integration suite. Not flake-inducing, just wasteful.
-
-**Fix:** Hoist criterion to a class-scoped pytest fixture and pass it into `_giou_loss`:
-```python
-@pytest.fixture(scope="class")
-def criterion(self):
-    return build_criterion(num_classes=1)
-
-@staticmethod
-def _giou_loss(criterion, pred_box, gt_box):
-    ...
-```
-
-**Depends on / blocked by:** None.
-
-**Surfaced:** `/review` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
-
----
-
 ### 40. Pin loose `pytest.raises` contracts across the test suite (dual-acceptance audit)
 
 **Priority:** P3 (P2 cases A/B already fixed inline; remaining 6 are lower-impact but same disease).
@@ -633,3 +608,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#19** `_keep_higher_p` KeyError on missing `p` key ✅ — Added guard at `characteristic_translator.py:1109` that raises `ValueError` with a clear message when either params dict is missing `p`. xfail test promoted to passing regression guard (93 pass, 0 xfail). Shipped 2026-04-28.
 - **#25** `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics + `alpha_corf` typo ✅ — All 4 `@pytest.mark.parametrize` decorators in `TestCharacteristicSchemaIntegrity` now use `_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())` (derived from production dict, auto-updates when new characteristics are added). `alpha_corf` → `alpha_coef` typo corrected in `semi_transparent/low/RandomFog`. 36 tests pass (up from 20). Shipped 2026-05-06.
 - **#37** Pin NaN-handling contract in NaN-predictions test ✅ — Renamed `test_nan_predictions_produce_non_finite_or_raise` → `test_nan_predictions_propagate_to_loss`, dropped the `try/except (ValueError, RuntimeError): pass` dual-accept, tightened `not isfinite` → `isnan` (excludes ±Inf). Verified live behavior: SegmentationLoss propagates NaN through to loss output, which is what AMP `GradScaler.step()` expects so it can detect bad steps and skip the optimizer update. Sibling P2 cases A/B (`test_sam_lora.py:587`, `test_validators.py:1016`) fixed in the same commit; 6 lower-impact dual-accept sites filed as #40. Shipped 2026-05-08.
+- **#39** Class-scoped `build_criterion` fixture for GIoU invariant tests ✅ — `TestBuildCriterionGIoUInvariants` now uses `@pytest.fixture(scope="class") def criterion`; `_giou_loss` takes the fixture as its first argument; the seven test methods inject it. `build_criterion` invocation count drops from ~33 to 1 (verified via patched call counter). ~3s shaved off the CPU integration suite. Shipped v0.1.17, 2026-05-08.

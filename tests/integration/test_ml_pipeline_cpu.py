@@ -566,11 +566,19 @@ class TestBuildTeacherTrainingConfig:
 
 
 class TestBuildCriterionGIoUInvariants:
+    @pytest.fixture(scope="class")
+    def criterion(self):
+        # build_criterion constructs GroundingDINOCriterion + HungarianMatcher
+        # with the full aux/encoder weight_dict. Building once per class (instead
+        # of ~33 times across these tests) shaves ~3s off the suite. Safe to
+        # share: the criterion is a stateless nn.Module — forward() only reads
+        # from self.
+        return build_criterion(num_classes=1)
+
     @staticmethod
-    def _giou_loss(pred_box: torch.Tensor, gt_box: torch.Tensor) -> float:
+    def _giou_loss(criterion, pred_box: torch.Tensor, gt_box: torch.Tensor) -> float:
         """loss_giou for a 1-pred / 1-target setup. Uses very-low logits so
         classification cost is constant and matching is forced (1x1)."""
-        criterion = build_criterion(num_classes=1)
         outputs = {
             "pred_logits": torch.full((1, 1, 256), -100.0),
             "pred_boxes": pred_box.unsqueeze(0),
@@ -585,7 +593,7 @@ class TestBuildCriterionGIoUInvariants:
         return criterion(outputs, targets)["loss_giou"].item()
 
     @pytest.mark.parametrize("side", [0.2, 0.05, 0.01])
-    def test_self_match_loss_is_zero_across_box_sizes(self, side: float) -> None:
+    def test_self_match_loss_is_zero_across_box_sizes(self, criterion, side: float) -> None:
         """Perfect prediction must give loss_giou == 0 for ANY non-degenerate box.
 
         With the original +1e-6 in the IoU denominator the bias scales as
@@ -593,14 +601,14 @@ class TestBuildCriterionGIoUInvariants:
         side=0.01 → 9.9e-3 (~1% loss on perfect prediction).
         """
         box = torch.tensor([[0.5, 0.5, side, side]])
-        loss = self._giou_loss(box, box)
+        loss = self._giou_loss(criterion, box, box)
         predicted_eps_bias = 1e-6 / (side * side + 1e-6)
         assert loss == pytest.approx(0.0, abs=1e-6), (
             f"side={side}: loss_giou={loss:.3e}, expected ~0. "
             f"Predicted +1e-6 epsilon bias = {predicted_eps_bias:.3e}"
         )
 
-    def test_self_match_loss_invariant_to_box_size(self) -> None:
+    def test_self_match_loss_invariant_to_box_size(self, criterion) -> None:
         """Perfect-match loss_giou must not depend on box size.
 
         Catches the epsilon bug as a *ratio* property: even if absolute values
@@ -609,41 +617,41 @@ class TestBuildCriterionGIoUInvariants:
         """
         sides = [0.2, 0.05, 0.01]
         losses = {
-            s: self._giou_loss(torch.tensor([[0.5, 0.5, s, s]]), torch.tensor([[0.5, 0.5, s, s]]))
+            s: self._giou_loss(criterion, torch.tensor([[0.5, 0.5, s, s]]), torch.tensor([[0.5, 0.5, s, s]]))
             for s in sides
         }
         max_loss = max(losses.values())
         assert max_loss < 1e-5, f"loss_giou varies with box size (denominator bias likely): {losses}"
 
-    def test_giou_loss_symmetric(self) -> None:
+    def test_giou_loss_symmetric(self, criterion) -> None:
         """GIoU is symmetric: loss(A as pred, B as gt) == loss(B as pred, A as gt)."""
         a = torch.tensor([[0.3, 0.4, 0.2, 0.15]])
         b = torch.tensor([[0.6, 0.5, 0.25, 0.3]])
-        ab = self._giou_loss(a, b)
-        ba = self._giou_loss(b, a)
+        ab = self._giou_loss(criterion, a, b)
+        ba = self._giou_loss(criterion, b, a)
         assert ab == pytest.approx(ba, abs=1e-6), f"asymmetric: {ab} vs {ba}"
 
-    def test_giou_loss_translation_invariant(self) -> None:
+    def test_giou_loss_translation_invariant(self, criterion) -> None:
         """Translating both boxes by the same offset preserves loss_giou."""
         a = torch.tensor([[0.3, 0.3, 0.2, 0.2]])
         b = torch.tensor([[0.4, 0.4, 0.2, 0.2]])
         offset = torch.tensor([[0.1, 0.1, 0.0, 0.0]])
-        baseline = self._giou_loss(a, b)
-        shifted = self._giou_loss(a + offset, b + offset)
+        baseline = self._giou_loss(criterion, a, b)
+        shifted = self._giou_loss(criterion, a + offset, b + offset)
         assert baseline == pytest.approx(shifted, abs=1e-6), f"translation-variant: {baseline} vs {shifted}"
 
-    def test_giou_loss_monotone_under_separation(self) -> None:
+    def test_giou_loss_monotone_under_separation(self, criterion) -> None:
         """As prediction translates away from target, loss_giou must monotonically
         increase. Catches sign / direction bugs in the GIoU enclosing-box term."""
         target = torch.tensor([[0.5, 0.5, 0.2, 0.2]])
         prev = -float("inf")
         for shift in [0.0, 0.05, 0.1, 0.2, 0.4, 0.7]:
             pred = target + torch.tensor([[shift, 0.0, 0.0, 0.0]])
-            loss = self._giou_loss(pred, target)
+            loss = self._giou_loss(criterion, pred, target)
             assert loss >= prev - 1e-6, f"non-monotone at shift={shift}: loss={loss:.4f} < prev={prev:.4f}"
             prev = loss
 
-    def test_giou_loss_upper_bound_for_disjoint_boxes(self) -> None:
+    def test_giou_loss_upper_bound_for_disjoint_boxes(self, criterion) -> None:
         """Far-apart small boxes → loss_giou approaches 2.0 (giou → -1).
 
         pred at (0,0)-(0.05,0.05), gt at (0.95,0.95)-(1.0,1.0):
@@ -653,10 +661,10 @@ class TestBuildCriterionGIoUInvariants:
         """
         pred = torch.tensor([[0.025, 0.025, 0.05, 0.05]])
         gt = torch.tensor([[0.975, 0.975, 0.05, 0.05]])
-        loss = self._giou_loss(pred, gt)
+        loss = self._giou_loss(criterion, pred, gt)
         assert 1.9 < loss < 2.0, f"expected ~1.995, got {loss}"
 
-    def test_giou_loss_in_valid_range(self) -> None:
+    def test_giou_loss_in_valid_range(self, criterion) -> None:
         """For any pair of non-degenerate boxes: loss_giou ∈ [0, 2]."""
         torch.manual_seed(0)
         for _ in range(20):
@@ -667,5 +675,5 @@ class TestBuildCriterionGIoUInvariants:
             wh_b = torch.rand(2) * 0.35 + 0.05
             a = torch.cat([cxcy_a, wh_a]).unsqueeze(0)
             b = torch.cat([cxcy_b, wh_b]).unsqueeze(0)
-            loss = self._giou_loss(a, b)
+            loss = self._giou_loss(criterion, a, b)
             assert 0.0 - 1e-6 <= loss <= 2.0 + 1e-6, f"out of range: {loss}"
