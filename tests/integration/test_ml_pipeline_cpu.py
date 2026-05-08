@@ -539,3 +539,126 @@ class TestBuildTeacherTrainingConfig:
         dm.get_required_models.return_value = {"grounding_dino": "x.pt"}
         with pytest.raises((KeyError, ValueError)):
             build_teacher_training_config(dm)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9. GroundingDINOCriterion — GIoU mathematical invariants
+#
+# Direct property tests on loss_giou via the build_criterion pipeline. These
+# would have caught the +1e-6 epsilon bias in the original
+# groundingdino.util.box_ops.box_iou denominator: that epsilon biases self-IoU
+# as 1 - 1e-6/(area+1e-6), which scales as 1/area — invisible for normal-sized
+# boxes (~2.5e-5 at side=0.2) but catastrophic for small ones (~1% loss at
+# side=0.01, ~50% loss at side=0.001). loss_giou is multiplied by 2.0 in
+# training, so this directly bleeds gradient signal away from small-object
+# localization.
+#
+# Tests go through build_criterion() rather than calling generalized_box_iou
+# directly so they don't couple to any specific GIoU import path.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestBuildCriterionGIoUInvariants:
+    @staticmethod
+    def _giou_loss(pred_box: torch.Tensor, gt_box: torch.Tensor) -> float:
+        """loss_giou for a 1-pred / 1-target setup. Uses very-low logits so
+        classification cost is constant and matching is forced (1x1)."""
+        criterion = build_criterion(num_classes=1)
+        outputs = {
+            "pred_logits": torch.full((1, 1, 256), -100.0),
+            "pred_boxes": pred_box.unsqueeze(0),
+        }
+        targets = [
+            {
+                "labels": torch.zeros(1, dtype=torch.long),
+                "boxes": gt_box,
+                "token_labels": torch.zeros(1, 256),
+            }
+        ]
+        return criterion(outputs, targets)["loss_giou"].item()
+
+    @pytest.mark.parametrize("side", [0.2, 0.05, 0.01])
+    def test_self_match_loss_is_zero_across_box_sizes(self, side: float) -> None:
+        """Perfect prediction must give loss_giou == 0 for ANY non-degenerate box.
+
+        With the original +1e-6 in the IoU denominator the bias scales as
+        1e-6/(side**2 + 1e-6): side=0.20 → 2.5e-5, side=0.05 → 4.0e-4,
+        side=0.01 → 9.9e-3 (~1% loss on perfect prediction).
+        """
+        box = torch.tensor([[0.5, 0.5, side, side]])
+        loss = self._giou_loss(box, box)
+        predicted_eps_bias = 1e-6 / (side * side + 1e-6)
+        assert loss == pytest.approx(0.0, abs=1e-6), (
+            f"side={side}: loss_giou={loss:.3e}, expected ~0. "
+            f"Predicted +1e-6 epsilon bias = {predicted_eps_bias:.3e}"
+        )
+
+    def test_self_match_loss_invariant_to_box_size(self) -> None:
+        """Perfect-match loss_giou must not depend on box size.
+
+        Catches the epsilon bug as a *ratio* property: even if absolute values
+        are tolerated as float noise, a 400x spread across realistic box sizes
+        is unambiguous evidence of a denominator bias.
+        """
+        sides = [0.2, 0.05, 0.01]
+        losses = {
+            s: self._giou_loss(torch.tensor([[0.5, 0.5, s, s]]), torch.tensor([[0.5, 0.5, s, s]]))
+            for s in sides
+        }
+        max_loss = max(losses.values())
+        assert max_loss < 1e-5, f"loss_giou varies with box size (denominator bias likely): {losses}"
+
+    def test_giou_loss_symmetric(self) -> None:
+        """GIoU is symmetric: loss(A as pred, B as gt) == loss(B as pred, A as gt)."""
+        a = torch.tensor([[0.3, 0.4, 0.2, 0.15]])
+        b = torch.tensor([[0.6, 0.5, 0.25, 0.3]])
+        ab = self._giou_loss(a, b)
+        ba = self._giou_loss(b, a)
+        assert ab == pytest.approx(ba, abs=1e-6), f"asymmetric: {ab} vs {ba}"
+
+    def test_giou_loss_translation_invariant(self) -> None:
+        """Translating both boxes by the same offset preserves loss_giou."""
+        a = torch.tensor([[0.3, 0.3, 0.2, 0.2]])
+        b = torch.tensor([[0.4, 0.4, 0.2, 0.2]])
+        offset = torch.tensor([[0.1, 0.1, 0.0, 0.0]])
+        baseline = self._giou_loss(a, b)
+        shifted = self._giou_loss(a + offset, b + offset)
+        assert baseline == pytest.approx(shifted, abs=1e-6), f"translation-variant: {baseline} vs {shifted}"
+
+    def test_giou_loss_monotone_under_separation(self) -> None:
+        """As prediction translates away from target, loss_giou must monotonically
+        increase. Catches sign / direction bugs in the GIoU enclosing-box term."""
+        target = torch.tensor([[0.5, 0.5, 0.2, 0.2]])
+        prev = -float("inf")
+        for shift in [0.0, 0.05, 0.1, 0.2, 0.4, 0.7]:
+            pred = target + torch.tensor([[shift, 0.0, 0.0, 0.0]])
+            loss = self._giou_loss(pred, target)
+            assert loss >= prev - 1e-6, f"non-monotone at shift={shift}: loss={loss:.4f} < prev={prev:.4f}"
+            prev = loss
+
+    def test_giou_loss_upper_bound_for_disjoint_boxes(self) -> None:
+        """Far-apart small boxes → loss_giou approaches 2.0 (giou → -1).
+
+        pred at (0,0)-(0.05,0.05), gt at (0.95,0.95)-(1.0,1.0):
+          union ≈ 0.005, enclosing area ≈ 1.0
+          giou = 0 - (1.0 - 0.005)/1.0 ≈ -0.995
+          loss = 1 - giou ≈ 1.995
+        """
+        pred = torch.tensor([[0.025, 0.025, 0.05, 0.05]])
+        gt = torch.tensor([[0.975, 0.975, 0.05, 0.05]])
+        loss = self._giou_loss(pred, gt)
+        assert 1.9 < loss < 2.0, f"expected ~1.995, got {loss}"
+
+    def test_giou_loss_in_valid_range(self) -> None:
+        """For any pair of non-degenerate boxes: loss_giou ∈ [0, 2]."""
+        torch.manual_seed(0)
+        for _ in range(20):
+            # cxcywh in [0.1, 0.9] with width/height in [0.05, 0.4]
+            cxcy_a = torch.rand(2) * 0.8 + 0.1
+            wh_a = torch.rand(2) * 0.35 + 0.05
+            cxcy_b = torch.rand(2) * 0.8 + 0.1
+            wh_b = torch.rand(2) * 0.35 + 0.05
+            a = torch.cat([cxcy_a, wh_a]).unsqueeze(0)
+            b = torch.cat([cxcy_b, wh_b]).unsqueeze(0)
+            loss = self._giou_loss(a, b)
+            assert 0.0 - 1e-6 <= loss <= 2.0 + 1e-6, f"out of range: {loss}"

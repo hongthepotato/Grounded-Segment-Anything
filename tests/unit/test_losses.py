@@ -12,6 +12,8 @@ import unittest
 
 import torch
 
+from ml_engine.utils.box_ops import box_iou, generalized_box_iou
+
 
 def _make_matcher_outputs(B: int, N: int, num_tokens: int, device="cpu"):
     """Synthetic HungarianMatcher inputs."""
@@ -461,6 +463,160 @@ class TestLossLabelsDtypeAgnostic(unittest.TestCase):
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             losses = criterion(outputs, targets)
         self.assertIn("loss_ce", losses)
+
+
+class TestLocalBoxIoU(unittest.TestCase):
+    """Direct math tests on box_iou — bias-free IoU with clamp(min=1e-12)
+    in the union denominator. The vendored groundingdino box_iou used `+ 1e-6`
+    instead, which biases self-IoU below 1.0 with error 1e-6/(area+1e-6) —
+    invisible at large boxes, ~1% at 1%×1%, ~50% at 0.1%×0.1%.
+    """
+
+    @staticmethod
+    def _xyxy(cx: float, cy: float, w: float, h: float) -> torch.Tensor:
+        return torch.tensor([[cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]])
+
+    def test_self_match_iou_exactly_one_normal_box(self) -> None:
+
+        box = self._xyxy(0.5, 0.5, 0.2, 0.2)
+        iou, union = box_iou(box, box)
+        self.assertAlmostEqual(iou.item(), 1.0, places=6)
+        self.assertAlmostEqual(union.item(), 0.04, places=6)
+
+    def test_self_match_iou_exactly_one_for_tiny_box(self) -> None:
+        """0.1% × 0.1% box — old groundingdino code gave 0.5 here; should be 1.0."""
+
+        box = self._xyxy(0.5, 0.5, 0.001, 0.001)
+        iou, _ = box_iou(box, box)
+        self.assertAlmostEqual(iou.item(), 1.0, places=6)
+
+    def test_self_match_iou_exactly_one_for_microscopic_box(self) -> None:
+        """1e-4 × 1e-4 box — old code gave ~0.01 (read perfect overlap as no match)."""
+
+        box = self._xyxy(0.5, 0.5, 1e-4, 1e-4)
+        iou, _ = box_iou(box, box)
+        self.assertAlmostEqual(iou.item(), 1.0, places=6)
+
+    def test_disjoint_boxes_iou_zero(self) -> None:
+
+        a = self._xyxy(0.1, 0.1, 0.05, 0.05)
+        b = self._xyxy(0.9, 0.9, 0.05, 0.05)
+        iou, union = box_iou(a, b)
+        self.assertAlmostEqual(iou.item(), 0.0, places=7)
+        self.assertAlmostEqual(union.item(), 0.005, places=6)  # 2 × 0.05²
+
+    def test_half_overlap_iou_one_third(self) -> None:
+        """Two unit-side squares offset by 0.5 → inter=0.5, union=1.5, iou=1/3."""
+
+        a = torch.tensor([[0.0, 0.0, 1.0, 1.0]])
+        b = torch.tensor([[0.5, 0.0, 1.5, 1.0]])
+        iou, _ = box_iou(a, b)
+        self.assertAlmostEqual(iou.item(), 1.0 / 3.0, places=6)
+
+    def test_pairwise_shape_NxM(self) -> None:
+
+        a = torch.rand(3, 4)
+        a[:, 2:] = a[:, :2] + 0.1  # ensure x2>x1, y2>y1
+        b = torch.rand(5, 4)
+        b[:, 2:] = b[:, :2] + 0.1
+        iou, union = box_iou(a, b)
+        self.assertEqual(iou.shape, (3, 5))
+        self.assertEqual(union.shape, (3, 5))
+
+    def test_zero_area_point_box_no_nan(self) -> None:
+        """Degenerate point box (area=0): clamp(min=1e-12) prevents 0/0 → NaN."""
+
+        point = torch.tensor([[0.5, 0.5, 0.5, 0.5]])  # area=0, passes >= assertion
+        iou, _ = box_iou(point, point)
+        self.assertFalse(torch.isnan(iou).any().item())
+        self.assertFalse(torch.isinf(iou).any().item())
+
+
+class TestLocalGeneralizedBoxIoU(unittest.TestCase):
+    """Direct math tests on generalized_box_iou."""
+
+    @staticmethod
+    def _xyxy(cx: float, cy: float, w: float, h: float) -> torch.Tensor:
+        return torch.tensor([[cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]])
+
+    def test_self_match_giou_exactly_one_across_box_sizes(self) -> None:
+
+        for side in [0.5, 0.2, 0.05, 0.01, 0.001, 1e-4]:
+            box = self._xyxy(0.5, 0.5, side, side)
+            giou = generalized_box_iou(box, box).item()
+            self.assertAlmostEqual(
+                giou,
+                1.0,
+                places=6,
+                msg=f"side={side}: giou={giou:.10f}, expected 1.0",
+            )
+
+    def test_disjoint_far_boxes_giou_near_minus_one(self) -> None:
+        """Two tiny boxes at opposite corners: enclosing≈1.0, union≈0.005,
+        giou ≈ 0 - (1.0 - 0.005)/1.0 ≈ -0.995."""
+
+        a = self._xyxy(0.025, 0.025, 0.05, 0.05)
+        b = self._xyxy(0.975, 0.975, 0.05, 0.05)
+        giou = generalized_box_iou(a, b).item()
+        self.assertLess(giou, -0.99)
+        self.assertGreater(giou, -1.0)
+
+    def test_giou_in_valid_range_random_pairs(self) -> None:
+
+        torch.manual_seed(0)
+        for _ in range(50):
+            a = torch.rand(1, 4)
+            a[:, 2:] = a[:, :2] + torch.rand(1, 2) * 0.4 + 0.05
+            b = torch.rand(1, 4)
+            b[:, 2:] = b[:, :2] + torch.rand(1, 2) * 0.4 + 0.05
+            giou = generalized_box_iou(a, b).item()
+            self.assertGreaterEqual(giou, -1.0 - 1e-6)
+            self.assertLessEqual(giou, 1.0 + 1e-6)
+
+    def test_giou_symmetric(self) -> None:
+
+        a = self._xyxy(0.3, 0.4, 0.2, 0.15)
+        b = self._xyxy(0.6, 0.5, 0.25, 0.3)
+        ab = generalized_box_iou(a, b).item()
+        ba = generalized_box_iou(b, a).item()
+        self.assertAlmostEqual(ab, ba, places=7)
+
+    def test_giou_translation_invariant(self) -> None:
+
+        a = self._xyxy(0.3, 0.3, 0.2, 0.2)
+        b = self._xyxy(0.4, 0.4, 0.2, 0.2)
+        offset = torch.tensor([0.1, 0.1, 0.1, 0.1])
+        baseline = generalized_box_iou(a, b).item()
+        shifted = generalized_box_iou(a + offset, b + offset).item()
+        self.assertAlmostEqual(baseline, shifted, places=6)
+
+    def test_degenerate_xyxy_raises(self) -> None:
+        """Strictly degenerate boxes (x2 < x1 or y2 < y1) must trigger assertion."""
+
+        bad = torch.tensor([[0.5, 0.5, 0.4, 0.4]])  # x2 < x1, y2 < y1
+        ok = torch.tensor([[0.0, 0.0, 0.1, 0.1]])
+        with self.assertRaises(AssertionError):
+            generalized_box_iou(bad, ok)
+        with self.assertRaises(AssertionError):
+            generalized_box_iou(ok, bad)
+
+    def test_zero_area_point_box_no_nan(self) -> None:
+        """Point box passes >= assertion; clamp prevents NaN in GIoU enclosing term."""
+
+        point = torch.tensor([[0.5, 0.5, 0.5, 0.5]])
+        giou = generalized_box_iou(point, point)
+        self.assertFalse(torch.isnan(giou).any().item())
+        self.assertFalse(torch.isinf(giou).any().item())
+
+    def test_pairwise_shape_NxM(self) -> None:
+
+        torch.manual_seed(1)
+        a = torch.rand(3, 4)
+        a[:, 2:] = a[:, :2] + 0.1
+        b = torch.rand(5, 4)
+        b[:, 2:] = b[:, :2] + 0.1
+        giou = generalized_box_iou(a, b)
+        self.assertEqual(giou.shape, (3, 5))
 
 
 if __name__ == "__main__":
