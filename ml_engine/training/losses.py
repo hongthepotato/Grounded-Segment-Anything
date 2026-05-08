@@ -11,11 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from groundingdino.util.box_ops import (
-    box_cxcywh_to_xyxy,
-    generalized_box_iou,
-)
+from groundingdino.util.box_ops import box_cxcywh_to_xyxy
 from scipy.optimize import linear_sum_assignment
+
+# Bias-free replacements for the vendored groundingdino.util.box_ops functions.
+# See ml_engine/utils/box_ops.py for rationale.
+from ml_engine.utils.box_ops import generalized_box_iou
 
 
 class HungarianMatcher(nn.Module):
