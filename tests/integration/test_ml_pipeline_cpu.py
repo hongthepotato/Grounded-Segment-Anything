@@ -302,16 +302,23 @@ class TestSegmentationLossInvariants:
         preds, tgts = _seg(logit=0.0, target=1.0)
         assert criterion(preds, tgts)["loss_iou_quality"].item() == 0.0
 
-    def test_nan_predictions_produce_non_finite_or_raise(self) -> None:
-        """Silent NaN propagation would mask gradient explosion in production."""
+    def test_nan_predictions_propagate_to_loss(self) -> None:
+        """NaN in pred_masks propagates to loss (not silently masked, not raised).
+
+        Pinned contract: AMP `GradScaler.step()` and similar trainer-side
+        guards rely on NaN propagating through the loss so they can detect
+        the bad step and skip the optimizer update. If a future change
+        starts raising or sanitizing on NaN inputs, those AMP guards break:
+          - Masking to 0 → scaler sees finite loss, applies garbage gradients
+          - Raising → training crashes instead of gracefully skipping
+        Flip this test only after auditing trainer-side NaN handling in
+        ml_engine/training/training_manager.py.
+        """
         criterion = SegmentationLoss()
         preds = {"pred_masks": torch.full((1, 1, 4, 4), float("nan"))}
         tgts = {"masks": torch.ones(1, 1, 4, 4), "valid_mask": torch.ones(1, 1, dtype=torch.bool)}
-        try:
-            loss = criterion(preds, tgts)["loss"].item()
-            assert not math.isfinite(loss), "NaN inputs should produce non-finite loss"
-        except (ValueError, RuntimeError):
-            pass  # explicit raise also acceptable
+        loss = criterion(preds, tgts)["loss"].item()
+        assert math.isnan(loss), f"expected NaN propagation, got {loss}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -332,7 +339,7 @@ class TestSegmentationLossErrors:
         criterion = SegmentationLoss()
         preds, tgts = _seg(b=1, n=2, h=4, w=4)
         preds["iou_predictions"] = torch.rand(1, 2, 3)  # [B, N, K] — wrong shape
-        with pytest.raises(ValueError, match="iou_predictions must be shape"):
+        with pytest.raises(ValueError, match=r"iou_predictions must be shape \[B, N\]"):
             criterion(preds, tgts)
 
 

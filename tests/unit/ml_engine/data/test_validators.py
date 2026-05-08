@@ -1014,7 +1014,15 @@ class TestImperfectCOCOData:
         # Should report error for annotation 0
 
     def test_normalize_handles_empty_nested_segmentation(self):
-        """normalize_coco_annotations handles [[]] segmentation gracefully."""
+        """normalize_coco_annotations preserves bbox when segmentation is [[]]
+        (empty nested list — a real-world COCO export quirk).
+
+        Pinned contract: must succeed and leave the bbox untouched. Downstream
+        training depends on the bbox surviving normalization. If a future change
+        makes this raise, callers (dataloaders) need their own guard — flip this
+        test to pytest.raises with the new exception only after auditing those
+        callers.
+        """
         data = {
             "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
             "annotations": [
@@ -1022,14 +1030,8 @@ class TestImperfectCOCOData:
             ],
             "categories": [{"id": 0, "name": "cat"}],
         }
-        # Should not crash - either handles gracefully or raises clear error
-        try:
-            result = normalize_coco_annotations(data, in_place=False)
-            # If it succeeds, bbox should be preserved
-            assert result["annotations"][0]["bbox"] == [10, 10, 20, 20]
-        except (ValueError, Exception) as e:
-            # If it fails, should have clear error message
-            assert "segmentation" in str(e).lower() or "empty" in str(e).lower()
+        result = normalize_coco_annotations(data, in_place=False)
+        assert result["annotations"][0]["bbox"] == [10, 10, 20, 20]
 
     def test_normalize_handles_wrong_type_bbox(self):
         """normalize_coco_annotations handles wrong-type bbox with valid segmentation."""

@@ -584,7 +584,7 @@ class TestSegmentationLossEdgeCases:
             "masks": torch.randint(0, 2, (B, N, H, W)).float(),
             "valid_mask": torch.ones(B, N, dtype=torch.bool),
         }
-        with pytest.raises((RuntimeError, ValueError)):
+        with pytest.raises(ValueError, match=r"iou_predictions must be shape \[B, N\]"):
             SegmentationLoss()(predictions, targets)
 
     def test_iou_quality_weight_zero_excludes_quality_from_total(self):
