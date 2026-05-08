@@ -509,6 +509,91 @@ Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all 
 
 ---
 
+### 36. Test determinism — seed `_gdino_outputs` / `_gdino_targets` helpers
+
+**Priority:** P2.
+
+**What:** [tests/integration/test_ml_pipeline_cpu.py](tests/integration/test_ml_pipeline_cpu.py#L57-L72) defines `_gdino_outputs` and `_gdino_targets` helpers that call `torch.rand(...)` without seeding. Roughly 6 existing tests in that file consume those helpers (`TestBuildCriterionBasics::test_returns_non_empty_dict`, `test_main_loss_keys_present`, `test_gradient_flows_through_losses`, `test_multi_class_produces_finite_losses`, `TestBuildCriterionBounds::*`, `TestBuildCriterionPerfectDetection::test_near_zero_ce_on_low_confidence_zero_token_labels`).
+
+**Why:** Tests are technically non-deterministic. Failures involving boundary conditions (e.g. `class_error` exactly at 0 or 100, GIoU near ±1) won't reproduce on rerun. No flake observed yet, but the surface is real — surfaced by the testing specialist during `/review` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
+
+**Fix (one of):**
+- `@pytest.fixture(autouse=True) def _seed_rng(): torch.manual_seed(0)` at module top, OR
+- Pass `generator=torch.Generator().manual_seed(N)` into `torch.rand(...)` calls inside both helpers, OR
+- Add `torch.manual_seed(0)` as the first line of each helper.
+
+**Pros:** Eliminates the entire class of "won't reproduce on rerun" flakes from these helpers in ~2 lines.
+
+**Cons:** Touches 6+ existing tests' implicit randomness profile. Low risk because none of those tests assert on specific random values.
+
+**Depends on / blocked by:** None.
+
+---
+
+### 37. Pin NaN-handling contract in `test_nan_predictions_produce_non_finite_or_raise`
+
+**Priority:** P2.
+
+**What:** [tests/integration/test_ml_pipeline_cpu.py:305-315](tests/integration/test_ml_pipeline_cpu.py#L305) currently accepts BOTH outcomes when `pred_masks` contains NaN: SegmentationLoss either returns a non-finite loss OR raises `ValueError`/`RuntimeError`. The test name itself reads "or raise" — the contract is unpinned.
+
+**Why:** Either future direction (silent-NaN-propagation OR explicit-validation) passes this test, so the test cannot detect a regression in either direction. AMP gradient scalers care about NaN propagation specifically — quietly switching to "raise" would break AMP detection without test failure. Surfaced by the testing specialist during `/review` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
+
+**Fix:** Decide which contract `SegmentationLoss` should pin and assert that one only:
+- If NaN should propagate (so `GradScaler` can `inf_check`): assert `math.isnan(loss.item())` or `not torch.isfinite(loss)`.
+- If NaN should raise: `with pytest.raises((ValueError, RuntimeError)): criterion(...)`.
+
+The existing dual-path try/except hides the contract — either is fine, but pick one.
+
+**Depends on / blocked by:** None. Need a 30-second decision on which contract is desired (likely "propagate as NaN" to align with AMP norms, but worth verifying against trainer-side handling in `ml_engine/training/training_manager.py`).
+
+---
+
+### 38. fp16-safe clamp threshold in `ml_engine/utils/box_ops.py`
+
+**Priority:** P3 (latent, currently shielded by criterion's fp16/fp32 dtype mix).
+
+**What:** [ml_engine/utils/box_ops.py](ml_engine/utils/box_ops.py) uses `union.clamp(min=1e-12)` and `enclosing.clamp(min=1e-12)`. `1e-12` underflows to 0 in fp16, making the clamp a no-op under fp16 autocast. Surfaced by adversarial review during `/ship` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
+
+**Why:** Currently masked because `loss_boxes` and `HungarianMatcher.forward` mix fp16 pred boxes with fp32 target boxes from the dataloader; PyTorch promotes the IoU computation to fp32 where 1e-12 is representable. A fully-fp16 pipeline (e.g., someone calls `.half()` on targets) would re-expose 0/0 NaN risk on degenerate / underflowed-width predicted boxes.
+
+**Tradeoff investigated and rejected:** Bumping the threshold to `1e-6` is fp16-safe but reintroduces the exact bias the PR was fixing for area<1e-6 boxes (microscopic crack-scale defects). Two unit tests in `tests/unit/test_losses.py::TestLocalBoxIoU` (`test_self_match_iou_exactly_one_for_microscopic_box`, `test_self_match_giou_exactly_one_across_box_sizes` at side=1e-4) directly fail with that threshold.
+
+**Better fix candidates:**
+- `union.clamp(min=torch.finfo(union.dtype).tiny)` — dtype-aware: fp32→1.18e-38 (effectively 0 floor, perfect), fp16→6.10e-5 (acceptable; biases boxes with area<6e-5 in fp16 only, which already underflow upstream anyway), fp64→2.2e-308.
+- Promote dtype explicitly: `iou = (inter.float() / union.float().clamp(min=1e-12)).to(inter.dtype)`. Keeps fp32 computation regardless of caller dtype.
+
+**Pros of fixing:** True dtype-agnostic correctness for all-fp16 callers.
+**Cons:** Two extra lines + a unit test parametrized over fp16/fp32. Low payoff because no current caller is fully fp16.
+
+**Depends on / blocked by:** None.
+
+---
+
+### 39. Class-scoped fixture for `build_criterion` in GIoU invariant tests
+
+**Priority:** P3 (cosmetic perf — does not affect correctness).
+
+**What:** [tests/integration/test_ml_pipeline_cpu.py::TestBuildCriterionGIoUInvariants](tests/integration/test_ml_pipeline_cpu.py#L561) calls `build_criterion(num_classes=1)` inside `_giou_loss(...)` on every invocation. Across the 8 tests in the class, the criterion gets rebuilt ~33 times. `build_criterion` reads YAML and constructs `GroundingDINOCriterion + HungarianMatcher` — non-trivial.
+
+**Why:** The 8-test class adds ~3 seconds of redundant setup to the CPU integration suite. Not flake-inducing, just wasteful.
+
+**Fix:** Hoist criterion to a class-scoped pytest fixture and pass it into `_giou_loss`:
+```python
+@pytest.fixture(scope="class")
+def criterion(self):
+    return build_criterion(num_classes=1)
+
+@staticmethod
+def _giou_loss(criterion, pred_box, gt_box):
+    ...
+```
+
+**Depends on / blocked by:** None.
+
+**Surfaced:** `/review` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
+
+---
+
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
