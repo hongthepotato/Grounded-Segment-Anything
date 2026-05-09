@@ -509,22 +509,55 @@ Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all 
 
 ---
 
-### 38. fp16-safe clamp threshold in `ml_engine/utils/box_ops.py`
 
-**Priority:** P3 (latent, currently shielded by criterion's fp16/fp32 dtype mix).
+### 41. `torch.cdist` not implemented for fp16 on either CPU or CUDA — HungarianMatcher fragile if called outside autocast
 
-**What:** [ml_engine/utils/box_ops.py](ml_engine/utils/box_ops.py) uses `union.clamp(min=1e-12)` and `enclosing.clamp(min=1e-12)`. `1e-12` underflows to 0 in fp16, making the clamp a no-op under fp16 autocast. Surfaced by adversarial review during `/ship` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
+**Priority:** P3 (production AMP works because the criterion runs inside autocast, which auto-casts cdist to fp32; fragile only if a future caller invokes the matcher outside autocast with fp16 inputs).
 
-**Why:** Currently masked because `loss_boxes` and `HungarianMatcher.forward` mix fp16 pred boxes with fp32 target boxes from the dataloader; PyTorch promotes the IoU computation to fp32 where 1e-12 is representable. A fully-fp16 pipeline (e.g., someone calls `.half()` on targets) would re-expose 0/0 NaN risk on degenerate / underflowed-width predicted boxes.
+**What:** [HungarianMatcher.forward](ml_engine/training/losses.py#L137) calls `cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)`. `torch.cdist` is NOT implemented for `Half` (fp16) on **either** CPU or CUDA in PyTorch 2.6 (`RuntimeError: "cdist" not implemented for 'Half'` / `"cdist_cuda" not implemented for 'Half'`). Production AMP works only because [training_manager.py:196](ml_engine/training/training_manager.py#L196) wraps the entire criterion call in `torch.amp.autocast(device_type, dtype=fp16)`, and `cdist` is on autocast's "fp32-only" list — autocast intercepts the call and casts inputs to fp32 before dispatch.
 
-**Tradeoff investigated and rejected:** Bumping the threshold to `1e-6` is fp16-safe but reintroduces the exact bias the PR was fixing for area<1e-6 boxes (microscopic crack-scale defects). Two unit tests in `tests/unit/test_losses.py::TestLocalBoxIoU` (`test_self_match_iou_exactly_one_for_microscopic_box`, `test_self_match_giou_exactly_one_across_box_sizes` at side=1e-4) directly fail with that threshold.
+**Surfaced:** While writing AMP integration tests for issue #86 (`tests/integration/test_ml_pipeline_cpu.py::TestBuildCriterionAMPMicroscopicBoxes`). Initial direct-fp16-pred test crashed on both CPU and CUDA paths.
 
-**Better fix candidates:**
-- `union.clamp(min=torch.finfo(union.dtype).tiny)` — dtype-aware: fp32→1.18e-38 (effectively 0 floor, perfect), fp16→6.10e-5 (acceptable; biases boxes with area<6e-5 in fp16 only, which already underflow upstream anyway), fp64→2.2e-308.
-- Promote dtype explicitly: `iou = (inter.float() / union.float().clamp(min=1e-12)).to(inter.dtype)`. Keeps fp32 computation regardless of caller dtype.
+**Why it matters now:** Production training is fine. The fragility is: any new code path that calls the matcher outside autocast with fp16 inputs (e.g., a custom evaluation loop, a test-time fp16 inference path, or a refactor that pulls the criterion call outside the autocast block) crashes with an opaque cdist error. Easy to hit, hard to diagnose without this context.
 
-**Pros of fixing:** True dtype-agnostic correctness for all-fp16 callers.
-**Cons:** Two extra lines + a unit test parametrized over fp16/fp32. Low payoff because no current caller is fully fp16.
+**Fix candidates:**
+- Defensively cast inside the matcher: `out_bbox = out_bbox.float() if out_bbox.dtype == torch.float16 else out_bbox` (and same for `tgt_bbox`) before the `cdist` call. Costs nothing in the autocast-wrapped path (autocast already casts), makes the matcher robust outside autocast.
+- Or: explicit `with torch.cuda.amp.autocast(enabled=False):` around the cdist call to force fp32 regardless of caller context.
+- Skip — leave it tied to autocast, and just document the constraint in the matcher's docstring.
+
+**Verification once fixed:** Add a unit test that calls `HungarianMatcher` with fp16 `out_bbox` outside any autocast context and asserts it returns valid indices.
+
+**Depends on / blocked by:** None — independent matcher hardening.
+
+---
+
+### 42. fp32-promote inputs inside `box_iou` / `generalized_box_iou` to eliminate fp16-clamp tradeoffs
+
+**Priority:** P3 (latent — production paths hit fp32 throughout via mixed-dtype promotion + torchvision upcast; only matters if a future caller invokes box_iou with fully-fp16 inputs).
+
+**What:** [ml_engine/utils/box_ops.py](ml_engine/utils/box_ops.py) currently uses `clamp(min=torch.finfo(t.dtype).tiny)` (issue #86 fix). On the all-fp16 path this introduces a tradeoff that the prior `1e-12` literal didn't have: the `enclosing` denominator in `generalized_box_iou` lands in fp16 (computed directly from boxes via min/max, NOT via torchvision `box_area`), where `finfo(fp16).tiny == 6.10e-5` clobbers valid sub-tiny enclosing areas. Empirical: a 1e-3-side distinct-pair has fp64-truth GIoU = -0.944 → fp16 with new clamp = -0.570 (40% off), vs fp16 with old `1e-12` clamp = -0.934 (1% off — fp16 noise only).
+
+The principled fix is fp32 promotion inside the function:
+
+```python
+def box_iou(boxes1, boxes2):
+    in_dtype = boxes1.dtype
+    boxes1, boxes2 = boxes1.float(), boxes2.float()
+    # ... existing math in fp32 ...
+    return iou.to(in_dtype), union.to(in_dtype)
+```
+
+This eliminates BOTH the fp16 NaN risk (degenerate boxes) AND the fp16 small-box distortion (non-degenerate sub-tiny areas). It also matches what [evaluator.py:464](ml_engine/evaluation/evaluator.py#L464) already does manually via an upstream `.float()` cast.
+
+**Surfaced:** Adversarial review of issue #86 PR (2026-05-09). Tests `tests/unit/test_losses.py::TestBoxOpsDtypeSafety::test_distinct_pair_giou_normal_boxes_close_to_truth` cover normal-sized boxes (where the clamp is a no-op for all dtypes) but intentionally don't cover small-fp16 distinct pairs, since the current code distorts them. Once #42 is fixed, add a `test_distinct_pair_giou_small_boxes_close_to_truth` to lock that in.
+
+**Why it matters now:** Production training is shielded structurally. The risk surfaces only if (a) torchvision drops its `box_area` fp16/bf16 upcast, or (b) someone refactors a code path to hand fully-fp16 tensors directly into box_iou. Either of those would silently regress small-object detection accuracy. fp32 promotion makes this impossible.
+
+**Tradeoffs:**
+- Pro: Removes ALL dtype concerns from box_ops. The function becomes precision-correct regardless of caller.
+- Pro: Tests stop having to think about dtype-specific distortion paths.
+- Con: ~5-10% memory bump on the IoU intermediates if any fully-fp16 caller exists today (probably none — the upcast is happening anyway, just inside torchvision). Negligible vs. model weights.
+- Con: Output dtype changes if we cast back to input dtype — currently the IoU output is always fp32 (because of the torchvision upcast). Casting back to input dtype is a separate API decision.
 
 **Depends on / blocked by:** None.
 
@@ -589,3 +622,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#37** Pin NaN-handling contract in NaN-predictions test ✅ — Renamed `test_nan_predictions_produce_non_finite_or_raise` → `test_nan_predictions_propagate_to_loss`, dropped the `try/except (ValueError, RuntimeError): pass` dual-accept, tightened `not isfinite` → `isnan` (excludes ±Inf). Verified live behavior: SegmentationLoss propagates NaN through to loss output, which is what AMP `GradScaler.step()` expects so it can detect bad steps and skip the optimizer update. Sibling P2 cases A/B (`test_sam_lora.py:587`, `test_validators.py:1016`) fixed in the same commit; 6 lower-impact dual-accept sites filed as #40. Shipped 2026-05-08.
 - **#39** Class-scoped `build_criterion` fixture for GIoU invariant tests ✅ — `TestBuildCriterionGIoUInvariants` now uses `@pytest.fixture(scope="class") def criterion`; `_giou_loss` takes the fixture as its first argument; the seven test methods inject it. `build_criterion` invocation count drops from ~33 to 1 (verified via patched call counter). ~3s shaved off the CPU integration suite. Shipped v0.1.17, 2026-05-08.
 - **#36** Test determinism — seed `_gdino_outputs` / `_gdino_targets` helpers ✅ — Module-level `@pytest.fixture(autouse=True) def _seed_torch_rng` calls `torch.manual_seed(0)` before every test in `tests/integration/test_ml_pipeline_cpu.py`. Boundary-condition failures on the ~10 helper-consuming tests now reproduce on rerun. Verified: 5 simulated runs return identical loss values; empirical pytest probe asserts seed-0 first-draw value (`0.4962565899`) inside a real test body. `test_giou_loss_in_valid_range` reseeds itself to 0, no behavior change. 2348 tests still pass. Shipped v0.1.18, 2026-05-09.
+- **#38** Dtype-aware clamp threshold in `ml_engine/utils/box_ops.py` ✅ — Replaced literal `clamp(min=1e-12)` with `clamp(min=torch.finfo(t.dtype).tiny)` in both `box_iou` and `generalized_box_iou`. Floor adapts: 1.18e-38 fp32, 6.10e-5 fp16, 2.22e-308 fp64. Prevents 0/0 NaN on degenerate boxes in any precision. New `TestBoxOpsDtypeSafety` covers fp16/bf16/fp32/fp64 self-IoU/GIoU=1, distinct-pair GIoU close to fp64 truth at normal scale, no NaN/Inf on degenerate boxes, plus a regression-canary that fails loudly if `torchvision.ops.box_area` ever stops upcasting fp16/bf16 → fp32. Adversarial review during ship surfaced a small-fp16-box GIoU distortion on the all-fp16 path (filed as #42); production paths are shielded structurally. Shipped v0.1.19, 2026-05-09.
