@@ -72,6 +72,15 @@ def _gdino_targets(batch: int = 1, num_gt: int = 2, num_tokens: int = 256) -> Li
     ]
 
 
+@pytest.fixture(autouse=True)
+def _seed_torch_rng() -> None:
+    # _gdino_outputs / _gdino_targets call torch.rand without an explicit
+    # generator. Without this seed, boundary-condition failures don't reproduce
+    # on rerun. Seeded per-test so each test starts from the same RNG state
+    # regardless of execution order. See issue #85 / TODO #36.
+    torch.manual_seed(0)
+
+
 @pytest.fixture(scope="module")
 def mock_dm() -> MagicMock:
     dm = MagicMock()

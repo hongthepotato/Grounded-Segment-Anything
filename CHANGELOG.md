@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.18] — 2026-05-09
+
+### Tests
+
+- **Determinism for `_gdino_outputs` / `_gdino_targets` (closes #85)** — Added a module-level `@pytest.fixture(autouse=True) def _seed_torch_rng` to `tests/integration/test_ml_pipeline_cpu.py` that calls `torch.manual_seed(0)` before every test in the module. Previously, the helpers used unseeded `torch.rand`, so loss values varied run-to-run and any boundary-condition failure on the ~10 affected tests (`TestBuildCriterionBasics::*`, `TestBuildCriterionBounds::*`, `TestBuildCriterionPerfectDetection::test_near_zero_ce_on_low_confidence_zero_token_labels`) could not be reproduced on rerun. Verified by capturing identical loss values across 5 simulated runs and by an empirical probe asserting the seed-0 first-draw value (`0.4962565899`) inside a real pytest test body. `test_giou_loss_in_valid_range` reseeds itself with the same value 0, so no behavior change. Full suite remains 2348 passed.
+
 ## [0.1.17] — 2026-05-08
 
 ### Tests

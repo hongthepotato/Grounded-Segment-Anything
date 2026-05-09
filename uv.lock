@@ -498,7 +498,7 @@ wheels = [
 
 [[package]]
 name = "grounded-segment-anything"
-version = "0.1.16"
+version = "0.1.18"
 source = { editable = "." }
 dependencies = [
     { name = "addict" },
