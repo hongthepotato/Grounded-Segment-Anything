@@ -509,27 +509,6 @@ Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all 
 
 ---
 
-### 36. Test determinism — seed `_gdino_outputs` / `_gdino_targets` helpers
-
-**Priority:** P2.
-
-**What:** [tests/integration/test_ml_pipeline_cpu.py](tests/integration/test_ml_pipeline_cpu.py#L57-L72) defines `_gdino_outputs` and `_gdino_targets` helpers that call `torch.rand(...)` without seeding. Roughly 6 existing tests in that file consume those helpers (`TestBuildCriterionBasics::test_returns_non_empty_dict`, `test_main_loss_keys_present`, `test_gradient_flows_through_losses`, `test_multi_class_produces_finite_losses`, `TestBuildCriterionBounds::*`, `TestBuildCriterionPerfectDetection::test_near_zero_ce_on_low_confidence_zero_token_labels`).
-
-**Why:** Tests are technically non-deterministic. Failures involving boundary conditions (e.g. `class_error` exactly at 0 or 100, GIoU near ±1) won't reproduce on rerun. No flake observed yet, but the surface is real — surfaced by the testing specialist during `/review` of `integration-tests/ml-pipeline-cpu` (2026-05-08).
-
-**Fix (one of):**
-- `@pytest.fixture(autouse=True) def _seed_rng(): torch.manual_seed(0)` at module top, OR
-- Pass `generator=torch.Generator().manual_seed(N)` into `torch.rand(...)` calls inside both helpers, OR
-- Add `torch.manual_seed(0)` as the first line of each helper.
-
-**Pros:** Eliminates the entire class of "won't reproduce on rerun" flakes from these helpers in ~2 lines.
-
-**Cons:** Touches 6+ existing tests' implicit randomness profile. Low risk because none of those tests assert on specific random values.
-
-**Depends on / blocked by:** None.
-
----
-
 ### 38. fp16-safe clamp threshold in `ml_engine/utils/box_ops.py`
 
 **Priority:** P3 (latent, currently shielded by criterion's fp16/fp32 dtype mix).
@@ -609,3 +588,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#25** `CharacteristicSchemaIntegrity` tests cover only 5 of 9 characteristics + `alpha_corf` typo ✅ — All 4 `@pytest.mark.parametrize` decorators in `TestCharacteristicSchemaIntegrity` now use `_ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())` (derived from production dict, auto-updates when new characteristics are added). `alpha_corf` → `alpha_coef` typo corrected in `semi_transparent/low/RandomFog`. 36 tests pass (up from 20). Shipped 2026-05-06.
 - **#37** Pin NaN-handling contract in NaN-predictions test ✅ — Renamed `test_nan_predictions_produce_non_finite_or_raise` → `test_nan_predictions_propagate_to_loss`, dropped the `try/except (ValueError, RuntimeError): pass` dual-accept, tightened `not isfinite` → `isnan` (excludes ±Inf). Verified live behavior: SegmentationLoss propagates NaN through to loss output, which is what AMP `GradScaler.step()` expects so it can detect bad steps and skip the optimizer update. Sibling P2 cases A/B (`test_sam_lora.py:587`, `test_validators.py:1016`) fixed in the same commit; 6 lower-impact dual-accept sites filed as #40. Shipped 2026-05-08.
 - **#39** Class-scoped `build_criterion` fixture for GIoU invariant tests ✅ — `TestBuildCriterionGIoUInvariants` now uses `@pytest.fixture(scope="class") def criterion`; `_giou_loss` takes the fixture as its first argument; the seven test methods inject it. `build_criterion` invocation count drops from ~33 to 1 (verified via patched call counter). ~3s shaved off the CPU integration suite. Shipped v0.1.17, 2026-05-08.
+- **#36** Test determinism — seed `_gdino_outputs` / `_gdino_targets` helpers ✅ — Module-level `@pytest.fixture(autouse=True) def _seed_torch_rng` calls `torch.manual_seed(0)` before every test in `tests/integration/test_ml_pipeline_cpu.py`. Boundary-condition failures on the ~10 helper-consuming tests now reproduce on rerun. Verified: 5 simulated runs return identical loss values; empirical pytest probe asserts seed-0 first-draw value (`0.4962565899`) inside a real test body. `test_giou_loss_in_valid_range` reseeds itself to 0, no behavior change. 2348 tests still pass. Shipped v0.1.18, 2026-05-09.
