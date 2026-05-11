@@ -622,36 +622,26 @@ class TestLocalGeneralizedBoxIoU(unittest.TestCase):
 class TestBoxOpsDtypeSafety(unittest.TestCase):
     """Dtype-safety regression coverage for ``box_iou`` / ``generalized_box_iou``.
 
-    ``box_ops`` uses ``clamp(min=torch.finfo(t.dtype).tiny)`` so the denominator
-    floor adapts to whatever precision the union ends up in. Closes issue #86 /
-    TODO #38 — the prior ``1e-12`` literal underflowed to 0 in fp16, which
-    would have silently disabled the 0/0 guard if the union ever landed in
-    fp16.
+    Issue #91 (closes TODO #42) promotes fp16/bf16 inputs to fp32 at function
+    entry, then runs all IoU/GIoU math in fp32 (or fp64 for fp64 inputs). The
+    ``clamp(min=torch.finfo(t.dtype).tiny)`` final guard now fires only on
+    genuinely zero-area boxes, where its floor (1.18e-38 fp32 / 2.22e-308 fp64)
+    turns ``0/0`` into ``0/tiny == 0`` so callers see IoU = 0 instead of NaN.
 
-    What this fix actually buys you, by call path:
+    Output dtype contract:
 
-    * **fp32 / fp64 inputs**: strict no-op. Floor (1.18e-38 / 2.22e-308) is so
-      small no realistic box area touches it. Clean.
-    * **All-fp16 / all-bf16 inputs, degenerate (zero-area)**: the new clamp
-      prevents NaN where ``1e-12`` would have. Win.
-    * **All-fp16 inputs, non-degenerate small (area near fp16's normal range
-      ~6e-5)**: the new clamp clobbers valid sub-tiny areas in the
-      ``enclosing`` denominator of ``generalized_box_iou`` (which is computed
-      directly from boxes, not via the torchvision upcast that protects
-      ``union``). This produces a small-fp16-box GIoU distortion, e.g. ~40%
-      off truth at side=1e-3, vs ~1% off under the prior ``1e-12`` clamp.
-      **Tracked as TODO #42** — the principled fix is fp32 promotion inside
-      ``box_iou`` / ``generalized_box_iou``.
-    * **Production AMP**: never hits the small-fp16 path. ``torchvision.box_area``
-      upcasts fp16/bf16 → fp32 (locked in by the canary below); mixed
-      low-precision-pred + fp32-target promotes everything to fp32; AMP
-      autocast doesn't cast element-wise ops, so the inputs the criterion
-      sees (fp32 boxes from the dataloader) stay fp32.
+    * fp16 / bf16 input → fp32 output (matches the pre-#91 de-facto behavior
+      via torchvision's incidental upcast — see canary below).
+    * fp32 input → fp32 output.
+    * fp64 input → fp64 output (preserved, never downcast).
 
-    Output dtype is intentionally NOT asserted on `box_iou` / `generalized_box_iou`
-    output: ``torchvision.ops.box_area`` upcasts fp16/bf16 → fp32 today, so a
-    per-input-dtype assertion on the IoU output would fail even though the
-    math is correct.
+    Pre-#91 history (kept for context): #86 introduced the dtype-aware clamp
+    (``finfo(t.dtype).tiny`` instead of literal ``1e-12``) to prevent fp16 NaN
+    on degenerate boxes. The adversarial review during the #86 ship caught that
+    this distorted small *non-degenerate* fp16 boxes by ~40% on the
+    ``enclosing`` denominator (which the union-side torchvision upcast didn't
+    protect). #91's fp32 promotion eliminates that distortion — verified in
+    ``test_distinct_pair_giou_small_boxes_match_fp64_on_same_coords``.
     """
 
     @staticmethod
@@ -687,11 +677,11 @@ class TestBoxOpsDtypeSafety(unittest.TestCase):
         """Non-self distinct pair, normal-sized boxes, GIoU close to fp64 truth.
 
         This is what self-pair tests can't catch: with self-pairs,
-        ``(enclosing - union) == 0`` so the GIoU enclosing-clamp distortion is
-        multiplied by 0 and disappears. With a distinct pair we exercise the
-        enclosing path directly, and at normal scale (~10% of frame) the
-        clamp is a no-op for all dtypes, so they should match fp64 truth
-        within their respective precision budgets.
+        ``(enclosing - union) == 0`` so the GIoU enclosing term drops out.
+        With a distinct pair we exercise the enclosing path directly. At
+        normal scale (~10% of frame) the math is no-op-clamp territory for
+        all dtypes, so they should match fp64 truth within their respective
+        precision budgets.
         """
         truth = generalized_box_iou(
             self._xyxy(0.4, 0.4, 0.1, 0.1, torch.float64),
@@ -703,6 +693,97 @@ class TestBoxOpsDtypeSafety(unittest.TestCase):
                 b = self._xyxy(0.6, 0.6, 0.1, 0.1, dtype)
                 g = generalized_box_iou(a, b).item()
                 self.assertAlmostEqual(g, truth, places=places)
+
+    def test_distinct_pair_giou_small_boxes_match_fp64_on_same_coords(self) -> None:
+        """Small-box (side=1e-3) distinct-pair: low-precision input through
+        the fp32 promotion path should match fp64 result on the same
+        already-quantized coords to within fp32 arithmetic noise.
+
+        This is the test that was impossible before #91. Under the old
+        ``finfo(fp16).tiny`` clamp, the ``enclosing`` denominator in
+        ``generalized_box_iou`` ran in fp16, where the 6.10e-5 floor
+        clobbered the true ~3.7e-5 enclosing area and distorted GIoU 40%
+        off truth (-0.570 vs -0.944). After fp32 promotion the math runs
+        in fp32 where the floor (1.18e-38) is a true no-op; the only
+        remaining error is the caller's choice of fp16/bf16 input
+        quantization, which we factor out by comparing against fp64
+        computed FROM THE SAME quantized coords.
+        """
+        for dtype in (torch.float16, torch.bfloat16):
+            with self.subTest(dtype=str(dtype)):
+                # Build low-precision boxes near coord 0.5 with side=1e-3.
+                # bf16 resolution at coord 0.5 is ~4e-3 so the boxes may round
+                # to a degenerate point — skip those cases (the assertion in
+                # generalized_box_iou will reject them, which is correct).
+                a = self._xyxy(0.495, 0.495, 1e-3, 1e-3, dtype)
+                b = self._xyxy(0.500, 0.500, 1e-3, 1e-3, dtype)
+                # Same already-quantized coords, cast up to fp64 — gives the
+                # representational ceiling for those input values.
+                a64, b64 = a.double(), b.double()
+                # Both must be non-degenerate or both must be degenerate.
+                try:
+                    g_truth = generalized_box_iou(a64, b64).item()
+                except AssertionError:
+                    # Coords rounded to degenerate after dtype quantization;
+                    # this is an input issue, not something our function should fix.
+                    continue
+                g_low = generalized_box_iou(a, b).item()
+                # fp32 arithmetic noise floor for IoU/GIoU is ~1e-6. The
+                # important assertion is "match the same-coords fp64 result,"
+                # not "match the original-truth fp64 result" — the latter
+                # would force us to debug fp16 input quantization, which is
+                # the caller's problem.
+                self.assertAlmostEqual(
+                    g_low,
+                    g_truth,
+                    places=5,
+                    msg=(
+                        f"{dtype}: GIoU = {g_low:+.6f}, fp64-from-same-coords = "
+                        f"{g_truth:+.6f}. Pre-#91 this gap was ~40% on fp16 because the "
+                        f"enclosing clamp clobbered valid sub-tiny areas."
+                    ),
+                )
+
+    def test_output_dtype_contract(self) -> None:
+        """fp16/bf16/fp32 → fp32 output, fp64 → fp64 output (preserved).
+
+        This locks in the #91 dtype contract: low-precision inputs are
+        promoted to at least fp32 internally; fp64 in either argument is
+        preserved end-to-end. Mixed-dtype calls promote to the wider of
+        ``{fp32-lifted-low-precision, other_input_dtype}`` — so
+        ``box_iou(fp16, fp64) → fp64`` rather than silently downcasting
+        the fp64 box. Anyone changing ``_LOW_PRECISION`` or the promotion
+        logic in box_ops.py should think twice.
+        """
+        # (boxes1.dtype, boxes2.dtype, expected output dtype)
+        cases = [
+            # Homogeneous-dtype callers.
+            (torch.float16, torch.float16, torch.float32),
+            (torch.bfloat16, torch.bfloat16, torch.float32),
+            (torch.float32, torch.float32, torch.float32),
+            (torch.float64, torch.float64, torch.float64),
+            # Mixed-dtype callers: fp64 in either position must be preserved.
+            (torch.float16, torch.float64, torch.float64),
+            (torch.float64, torch.float16, torch.float64),
+            (torch.bfloat16, torch.float64, torch.float64),
+            (torch.float64, torch.bfloat16, torch.float64),
+            # Mixed low+normal precision — both lift to fp32.
+            (torch.float16, torch.float32, torch.float32),
+            (torch.float32, torch.float16, torch.float32),
+            (torch.bfloat16, torch.float32, torch.float32),
+        ]
+        for d1, d2, expected in cases:
+            with self.subTest(boxes1=str(d1), boxes2=str(d2)):
+                a = self._xyxy(0.4, 0.4, 0.1, 0.1, d1)
+                b = self._xyxy(0.6, 0.6, 0.1, 0.1, d2)
+                iou, _ = box_iou(a, b)
+                giou = generalized_box_iou(a, b)
+                self.assertEqual(
+                    iou.dtype, expected, msg=f"({d1}, {d2}): IoU {iou.dtype}, expected {expected}"
+                )
+                self.assertEqual(
+                    giou.dtype, expected, msg=f"({d1}, {d2}): GIoU {giou.dtype}, expected {expected}"
+                )
 
     def test_zero_area_point_box_no_nan_inf_across_dtypes(self) -> None:
         """Degenerate point box (area=0) → no NaN/Inf in IoU or GIoU in any
@@ -720,16 +801,17 @@ class TestBoxOpsDtypeSafety(unittest.TestCase):
                 self.assertFalse(torch.isinf(giou).any().item(), msg=f"{dtype}: GIoU Inf")
 
     def test_torchvision_box_area_upcasts_low_precision(self) -> None:
-        """Regression-canary: ``torchvision.ops.box_area`` upcasts fp16 AND
-        bf16 inputs to fp32.
+        """Canary: ``torchvision.ops.box_area`` upcasts fp16 AND bf16 → fp32.
 
-        This is the load-bearing structural shield protecting the ``union``
-        denominator on the all-low-precision path. If torchvision ever drops
-        this upcast, ``box_iou(low_pred, low_pred)`` would compute its union
-        in fp16/bf16, and the dtype-aware ``clamp(min=finfo(t.dtype).tiny)``
-        becomes the only thing between us and NaN on degenerate boxes. We
-        want a loud test failure here rather than a silent regression in
-        production AMP training. (bf16 is the production AMP default.)
+        Post-#91 this is mostly defense in depth — our own ``_LOW_PRECISION``
+        promotion at the top of box_iou/generalized_box_iou handles the
+        common cases. But it's still load-bearing for one path: when only ONE
+        side of the call is low-precision and the OTHER side is fp32
+        (e.g., the caller hand-mixes ``fp16_pred`` with ``fp32_target``).
+        Our promotion picks fp32 as the common target, and ``box_area`` of
+        the fp16 side relies on torchvision's upcast to land in fp32. If
+        torchvision ever drops this upcast, that case regresses to fp16
+        area, re-exposing the small-box GIoU distortion #91 fixed.
         """
         from torchvision.ops.boxes import box_area
 
