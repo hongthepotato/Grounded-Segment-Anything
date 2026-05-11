@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.20] — 2026-05-11
+
+### Changed
+
+- **fp32-promote low-precision inputs inside `box_iou` and `generalized_box_iou` (closes #91)** — `ml_engine/utils/box_ops.py` now lifts fp16 and bf16 inputs to fp32 at function entry instead of relying on `torchvision.box_area`'s incidental upcast plus the `clamp(min=finfo.tiny)` floor. Eliminates the 40%-off-truth small-fp16-box GIoU distortion that #86's dtype-aware clamp introduced via the `enclosing` denominator path. fp32's `tiny` (1.18e-38) makes the final clamp a true no-op for any realistic box; the clamp now serves only as a final safety net on degenerate inputs. Output dtype is preserved end-to-end: fp16/bf16/fp32 inputs return fp32, fp64 inputs return fp64. Mixed-dtype callers (e.g., `box_iou(fp16_pred, fp64_target)`) promote to the wider common type via `torch.promote_types`, so fp64 inputs are NEVER silently downcast to fp32 — a contract violation caught by pre-landing adversarial review on the initial draft and fixed before ship.
+
+### Tests
+
+- **`TestBoxOpsDtypeSafety` covers the full 4×4 dtype matrix** — 16 dtype-pair combinations in `test_output_dtype_contract` lock in the post-#91 dtype contract (low-precision lifts to fp32, fp64 preserved in either argument position, fp32+fp64 keeps fp64 via PyTorch native promotion). New `test_distinct_pair_giou_small_boxes_match_fp64_on_same_coords` is the assertion that was impossible before #91 — it confirms low-precision input through the fp32 path matches fp64 result on the same already-quantized coords at 1e-5 tolerance (vs the pre-#91 40% gap).
+
 ## [0.1.19] — 2026-05-09
 
 ### Changed

@@ -708,25 +708,20 @@ class TestBoxOpsDtypeSafety(unittest.TestCase):
         remaining error is the caller's choice of fp16/bf16 input
         quantization, which we factor out by comparing against fp64
         computed FROM THE SAME quantized coords.
+
+        Note on chosen coords: centres 0.495/0.500 with side 1e-3 stay
+        non-degenerate in both fp16 (~5e-4 resolution at 0.5) and bf16
+        (~4e-3 resolution at 0.5) — verified empirically. The assertion
+        in generalized_box_iou never fires here.
         """
         for dtype in (torch.float16, torch.bfloat16):
             with self.subTest(dtype=str(dtype)):
-                # Build low-precision boxes near coord 0.5 with side=1e-3.
-                # bf16 resolution at coord 0.5 is ~4e-3 so the boxes may round
-                # to a degenerate point — skip those cases (the assertion in
-                # generalized_box_iou will reject them, which is correct).
                 a = self._xyxy(0.495, 0.495, 1e-3, 1e-3, dtype)
                 b = self._xyxy(0.500, 0.500, 1e-3, 1e-3, dtype)
                 # Same already-quantized coords, cast up to fp64 — gives the
                 # representational ceiling for those input values.
                 a64, b64 = a.double(), b.double()
-                # Both must be non-degenerate or both must be degenerate.
-                try:
-                    g_truth = generalized_box_iou(a64, b64).item()
-                except AssertionError:
-                    # Coords rounded to degenerate after dtype quantization;
-                    # this is an input issue, not something our function should fix.
-                    continue
+                g_truth = generalized_box_iou(a64, b64).item()
                 g_low = generalized_box_iou(a, b).item()
                 # fp32 arithmetic noise floor for IoU/GIoU is ~1e-6. The
                 # important assertion is "match the same-coords fp64 result,"
@@ -755,22 +750,33 @@ class TestBoxOpsDtypeSafety(unittest.TestCase):
         the fp64 box. Anyone changing ``_LOW_PRECISION`` or the promotion
         logic in box_ops.py should think twice.
         """
-        # (boxes1.dtype, boxes2.dtype, expected output dtype)
+        # All 16 combinations of {fp16, bf16, fp32, fp64} × {fp16, bf16, fp32, fp64}.
+        # The matrix locks in the full contract: anyone refactoring _promote_target
+        # (or replacing it with `.float()`) will fail loudly on at least one row.
         cases = [
             # Homogeneous-dtype callers.
             (torch.float16, torch.float16, torch.float32),
             (torch.bfloat16, torch.bfloat16, torch.float32),
             (torch.float32, torch.float32, torch.float32),
             (torch.float64, torch.float64, torch.float64),
-            # Mixed-dtype callers: fp64 in either position must be preserved.
+            # Two low-precision dtypes mixed — both lift to fp32 via _promote_target.
+            (torch.float16, torch.bfloat16, torch.float32),
+            (torch.bfloat16, torch.float16, torch.float32),
+            # Low-precision + fp32 — our promotion picks fp32 as the common target.
+            (torch.float16, torch.float32, torch.float32),
+            (torch.float32, torch.float16, torch.float32),
+            (torch.bfloat16, torch.float32, torch.float32),
+            (torch.float32, torch.bfloat16, torch.float32),
+            # Low-precision + fp64 — our promotion picks fp64 (preserves fp64).
             (torch.float16, torch.float64, torch.float64),
             (torch.float64, torch.float16, torch.float64),
             (torch.bfloat16, torch.float64, torch.float64),
             (torch.float64, torch.bfloat16, torch.float64),
-            # Mixed low+normal precision — both lift to fp32.
-            (torch.float16, torch.float32, torch.float32),
-            (torch.float32, torch.float16, torch.float32),
-            (torch.bfloat16, torch.float32, torch.float32),
+            # fp32 + fp64 — our promotion check is False (neither is low-precision),
+            # so PyTorch native promotion handles it. Locks in that we don't
+            # accidentally downcast fp64 here.
+            (torch.float32, torch.float64, torch.float64),
+            (torch.float64, torch.float32, torch.float64),
         ]
         for d1, d2, expected in cases:
             with self.subTest(boxes1=str(d1), boxes2=str(d2)):

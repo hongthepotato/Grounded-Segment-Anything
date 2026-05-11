@@ -531,37 +531,6 @@ Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all 
 
 ---
 
-### 42. fp32-promote inputs inside `box_iou` / `generalized_box_iou` to eliminate fp16-clamp tradeoffs
-
-**Priority:** P3 (latent — production paths hit fp32 throughout via mixed-dtype promotion + torchvision upcast; only matters if a future caller invokes box_iou with fully-fp16 inputs).
-
-**What:** [ml_engine/utils/box_ops.py](ml_engine/utils/box_ops.py) currently uses `clamp(min=torch.finfo(t.dtype).tiny)` (issue #86 fix). On the all-fp16 path this introduces a tradeoff that the prior `1e-12` literal didn't have: the `enclosing` denominator in `generalized_box_iou` lands in fp16 (computed directly from boxes via min/max, NOT via torchvision `box_area`), where `finfo(fp16).tiny == 6.10e-5` clobbers valid sub-tiny enclosing areas. Empirical: a 1e-3-side distinct-pair has fp64-truth GIoU = -0.944 → fp16 with new clamp = -0.570 (40% off), vs fp16 with old `1e-12` clamp = -0.934 (1% off — fp16 noise only).
-
-The principled fix is fp32 promotion inside the function:
-
-```python
-def box_iou(boxes1, boxes2):
-    in_dtype = boxes1.dtype
-    boxes1, boxes2 = boxes1.float(), boxes2.float()
-    # ... existing math in fp32 ...
-    return iou.to(in_dtype), union.to(in_dtype)
-```
-
-This eliminates BOTH the fp16 NaN risk (degenerate boxes) AND the fp16 small-box distortion (non-degenerate sub-tiny areas). It also matches what [evaluator.py:464](ml_engine/evaluation/evaluator.py#L464) already does manually via an upstream `.float()` cast.
-
-**Surfaced:** Adversarial review of issue #86 PR (2026-05-09). Tests `tests/unit/test_losses.py::TestBoxOpsDtypeSafety::test_distinct_pair_giou_normal_boxes_close_to_truth` cover normal-sized boxes (where the clamp is a no-op for all dtypes) but intentionally don't cover small-fp16 distinct pairs, since the current code distorts them. Once #42 is fixed, add a `test_distinct_pair_giou_small_boxes_close_to_truth` to lock that in.
-
-**Why it matters now:** Production training is shielded structurally. The risk surfaces only if (a) torchvision drops its `box_area` fp16/bf16 upcast, or (b) someone refactors a code path to hand fully-fp16 tensors directly into box_iou. Either of those would silently regress small-object detection accuracy. fp32 promotion makes this impossible.
-
-**Tradeoffs:**
-- Pro: Removes ALL dtype concerns from box_ops. The function becomes precision-correct regardless of caller.
-- Pro: Tests stop having to think about dtype-specific distortion paths.
-- Con: ~5-10% memory bump on the IoU intermediates if any fully-fp16 caller exists today (probably none — the upcast is happening anyway, just inside torchvision). Negligible vs. model weights.
-- Con: Output dtype changes if we cast back to input dtype — currently the IoU output is always fp32 (because of the torchvision upcast). Casting back to input dtype is a separate API decision.
-
-**Depends on / blocked by:** None.
-
----
 
 ### 40. Pin loose `pytest.raises` contracts across the test suite (dual-acceptance audit)
 
@@ -623,3 +592,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#39** Class-scoped `build_criterion` fixture for GIoU invariant tests ✅ — `TestBuildCriterionGIoUInvariants` now uses `@pytest.fixture(scope="class") def criterion`; `_giou_loss` takes the fixture as its first argument; the seven test methods inject it. `build_criterion` invocation count drops from ~33 to 1 (verified via patched call counter). ~3s shaved off the CPU integration suite. Shipped v0.1.17, 2026-05-08.
 - **#36** Test determinism — seed `_gdino_outputs` / `_gdino_targets` helpers ✅ — Module-level `@pytest.fixture(autouse=True) def _seed_torch_rng` calls `torch.manual_seed(0)` before every test in `tests/integration/test_ml_pipeline_cpu.py`. Boundary-condition failures on the ~10 helper-consuming tests now reproduce on rerun. Verified: 5 simulated runs return identical loss values; empirical pytest probe asserts seed-0 first-draw value (`0.4962565899`) inside a real test body. `test_giou_loss_in_valid_range` reseeds itself to 0, no behavior change. 2348 tests still pass. Shipped v0.1.18, 2026-05-09.
 - **#38** Dtype-aware clamp threshold in `ml_engine/utils/box_ops.py` ✅ — Replaced literal `clamp(min=1e-12)` with `clamp(min=torch.finfo(t.dtype).tiny)` in both `box_iou` and `generalized_box_iou`. Floor adapts: 1.18e-38 fp32, 6.10e-5 fp16, 2.22e-308 fp64. Prevents 0/0 NaN on degenerate boxes in any precision. New `TestBoxOpsDtypeSafety` covers fp16/bf16/fp32/fp64 self-IoU/GIoU=1, distinct-pair GIoU close to fp64 truth at normal scale, no NaN/Inf on degenerate boxes, plus a regression-canary that fails loudly if `torchvision.ops.box_area` ever stops upcasting fp16/bf16 → fp32. Adversarial review during ship surfaced a small-fp16-box GIoU distortion on the all-fp16 path (filed as #42); production paths are shielded structurally. Shipped v0.1.19, 2026-05-09.
+- **#42** fp32-promote inputs inside `box_iou` / `generalized_box_iou` ✅ — `_LOW_PRECISION = (fp16, bf16)` + `_promote_target` helper using `torch.promote_types` lifts low-precision inputs to fp32 (or fp64 if the other input is fp64) at function entry. Eliminates the 40%-off-truth small-fp16-box GIoU distortion #38's dtype-aware clamp introduced via the `enclosing` denominator. Dtype contract: fp16/bf16/fp32 → fp32 output, fp64 → fp64 preserved, mixed-dtype callers (e.g., `box_iou(fp16, fp64)`) promote to wider common type — `torch.promote_types`-based helper prevents silent fp64 downcast (caught by pre-landing adversarial review on the initial draft). New `test_distinct_pair_giou_small_boxes_match_fp64_on_same_coords` is the assertion that was impossible pre-#42 (matches fp64 result on same already-quantized coords at 1e-5 tolerance). `test_output_dtype_contract` extended to the full 4×4 dtype matrix (16 pairs) locking in the contract. Shipped v0.1.20, 2026-05-11.
