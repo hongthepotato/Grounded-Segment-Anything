@@ -9,17 +9,42 @@ gradient signal and inference-time IoU thresholds on small objects, with no
 upper-bound guard from the degeneracy assertion (which uses ``>=``, allowing
 zero-area "point" boxes).
 
-Fix: bare division, with ``clamp(min=1e-12)`` as defense in depth. The clamp
-threshold is many orders of magnitude smaller than any realistic normalized
-area (a 1px box in a 4K image is ~6e-8) so it is a strict no-op for live
-inputs and only activates for genuinely degenerate boxes — preventing 0/0
-without distorting valid IoU values the way ``+ 1e-6`` did.
+Fix: bare division, with ``clamp(min=torch.finfo(t.dtype).tiny)`` as defense
+in depth. ``finfo(...).tiny`` is the smallest positive normal value for the
+tensor's dtype: 1.18e-38 in fp32, 6.10e-5 in fp16, 2.22e-308 in fp64. This
+floors the denominator at "the smallest non-zero value this dtype can hold"
+without distorting valid IoU values — strictly a no-op for any non-degenerate
+box, and the only effect on a degenerate (zero-area) box is to turn ``0 / 0``
+into ``0 / tiny == 0`` so callers see IoU = 0 instead of NaN.
 
-fp16 caveat: ``1e-12`` underflows to 0 in fp16, making the clamp a no-op
-there. In practice the criterion mixes fp16 pred boxes with fp32 target
-boxes from the dataloader, which promotes the IoU computation to fp32
-(making the clamp effective). A fully-fp16 pipeline (uncommon) would
-re-expose 0/0 NaN risk on degenerate boxes; tracked in TODOS #39.
+In current PyTorch + torchvision, the fp16/bf16 NaN path is also shielded
+structurally:
+
+* ``torchvision.ops.box_area`` upcasts fp16/bf16 → fp32 internally, so
+  ``area1`` is fp32 even if ``boxes1`` is low-precision. ``union = area1
+  + area2 - inter`` then mixes fp32 + low-precision → fp32 by promotion,
+  so the union (and thus the union clamp) lands in fp32 regardless of
+  input. Locked in by a regression-canary in
+  ``tests/unit/test_losses.py::TestBoxOpsDtypeSafety``.
+* ``torch.amp.autocast(fp16/bf16)`` casts matmul/conv-class ops only, not
+  the element-wise ``max``/``clamp``/``+``/``*``/``/`` used here.
+* The criterion mixes low-precision model predictions with fp32 dataloader
+  targets, which promotes everything to fp32 anyway.
+
+**Caveat — small-fp16-box GIoU distortion.** The ``enclosing`` denominator
+in ``generalized_box_iou`` is computed directly from the input boxes
+(``min``/``max``/``-``), NOT through ``box_area``. So on the all-fp16 path
+its dtype is fp16, not fp32. ``finfo(fp16).tiny == 6.10e-5`` is large
+enough to clobber valid sub-tiny enclosing areas — e.g., a 1e-3-side
+distinct-pair gives an enclosing area of ~3.7e-5, which the clamp lifts
+to 6.10e-5, distorting GIoU ~40% off truth. The prior ``1e-12`` literal
+underflowed to 0 in fp16 and was a no-op there, so it actually gave
+correct values for this case (~1% off, dominated by fp16 representation
+noise) at the cost of NaN on degenerate boxes. The trade is intentional:
+production paths never hit this case (mixed-dtype + box_area upcast →
+fp32 throughout), and the dtype-aware clamp prevents NaN where the prior
+clamp couldn't. The principled fix — fp32 promotion inside box_iou /
+generalized_box_iou — is tracked as TODO #42.
 
 Use these in place of ``groundingdino.util.box_ops.box_iou`` /
 ``generalized_box_iou`` everywhere in ``ml_engine/``. The vendored
@@ -33,8 +58,6 @@ from typing import Tuple
 
 import torch
 from torchvision.ops.boxes import box_area
-
-DENOM_EPS = 1e-12
 
 
 def box_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -52,7 +75,7 @@ def box_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> Tuple[torch.Tensor, t
     inter = wh[:, :, 0] * wh[:, :, 1]
 
     union = area1[:, None] + area2 - inter
-    iou = inter / union.clamp(min=DENOM_EPS)
+    iou = inter / union.clamp(min=torch.finfo(union.dtype).tiny)
     return iou, union
 
 
@@ -68,4 +91,4 @@ def generalized_box_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Ten
     wh = (rb - lt).clamp(min=0)
     enclosing = wh[:, :, 0] * wh[:, :, 1]
 
-    return iou - (enclosing - union) / enclosing.clamp(min=DENOM_EPS)
+    return iou - (enclosing - union) / enclosing.clamp(min=torch.finfo(enclosing.dtype).tiny)

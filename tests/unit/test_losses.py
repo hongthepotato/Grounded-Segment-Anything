@@ -619,5 +619,133 @@ class TestLocalGeneralizedBoxIoU(unittest.TestCase):
         self.assertEqual(giou.shape, (3, 5))
 
 
+class TestBoxOpsDtypeSafety(unittest.TestCase):
+    """Dtype-safety regression coverage for ``box_iou`` / ``generalized_box_iou``.
+
+    ``box_ops`` uses ``clamp(min=torch.finfo(t.dtype).tiny)`` so the denominator
+    floor adapts to whatever precision the union ends up in. Closes issue #86 /
+    TODO #38 — the prior ``1e-12`` literal underflowed to 0 in fp16, which
+    would have silently disabled the 0/0 guard if the union ever landed in
+    fp16.
+
+    What this fix actually buys you, by call path:
+
+    * **fp32 / fp64 inputs**: strict no-op. Floor (1.18e-38 / 2.22e-308) is so
+      small no realistic box area touches it. Clean.
+    * **All-fp16 / all-bf16 inputs, degenerate (zero-area)**: the new clamp
+      prevents NaN where ``1e-12`` would have. Win.
+    * **All-fp16 inputs, non-degenerate small (area near fp16's normal range
+      ~6e-5)**: the new clamp clobbers valid sub-tiny areas in the
+      ``enclosing`` denominator of ``generalized_box_iou`` (which is computed
+      directly from boxes, not via the torchvision upcast that protects
+      ``union``). This produces a small-fp16-box GIoU distortion, e.g. ~40%
+      off truth at side=1e-3, vs ~1% off under the prior ``1e-12`` clamp.
+      **Tracked as TODO #42** — the principled fix is fp32 promotion inside
+      ``box_iou`` / ``generalized_box_iou``.
+    * **Production AMP**: never hits the small-fp16 path. ``torchvision.box_area``
+      upcasts fp16/bf16 → fp32 (locked in by the canary below); mixed
+      low-precision-pred + fp32-target promotes everything to fp32; AMP
+      autocast doesn't cast element-wise ops, so the inputs the criterion
+      sees (fp32 boxes from the dataloader) stay fp32.
+
+    Output dtype is intentionally NOT asserted on `box_iou` / `generalized_box_iou`
+    output: ``torchvision.ops.box_area`` upcasts fp16/bf16 → fp32 today, so a
+    per-input-dtype assertion on the IoU output would fail even though the
+    math is correct.
+    """
+
+    @staticmethod
+    def _xyxy(cx: float, cy: float, w: float, h: float, dtype: torch.dtype) -> torch.Tensor:
+        return torch.tensor([[cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]], dtype=dtype)
+
+    # Mantissa precision: fp16 ~3 decimals, bf16 ~2 (worse than fp16!), fp32 ~7,
+    # fp64 ~15. bf16 is the production AMP default in training_manager.
+    _DTYPES_PLACES = [
+        (torch.float16, 3),
+        (torch.bfloat16, 2),
+        (torch.float32, 6),
+        (torch.float64, 12),
+    ]
+
+    def test_self_iou_one_across_dtypes(self) -> None:
+        """Self-IoU == 1.0 for a normal box in fp16, bf16, fp32, fp64."""
+        for dtype, places in self._DTYPES_PLACES:
+            with self.subTest(dtype=str(dtype)):
+                box = self._xyxy(0.5, 0.5, 0.1, 0.1, dtype=dtype)
+                iou, _ = box_iou(box, box)
+                self.assertAlmostEqual(iou.item(), 1.0, places=places)
+
+    def test_self_giou_one_across_dtypes(self) -> None:
+        """Self-GIoU == 1.0 for a normal box in fp16, bf16, fp32, fp64."""
+        for dtype, places in self._DTYPES_PLACES:
+            with self.subTest(dtype=str(dtype)):
+                box = self._xyxy(0.5, 0.5, 0.1, 0.1, dtype=dtype)
+                giou = generalized_box_iou(box, box)
+                self.assertAlmostEqual(giou.item(), 1.0, places=places)
+
+    def test_distinct_pair_giou_normal_boxes_close_to_truth(self) -> None:
+        """Non-self distinct pair, normal-sized boxes, GIoU close to fp64 truth.
+
+        This is what self-pair tests can't catch: with self-pairs,
+        ``(enclosing - union) == 0`` so the GIoU enclosing-clamp distortion is
+        multiplied by 0 and disappears. With a distinct pair we exercise the
+        enclosing path directly, and at normal scale (~10% of frame) the
+        clamp is a no-op for all dtypes, so they should match fp64 truth
+        within their respective precision budgets.
+        """
+        truth = generalized_box_iou(
+            self._xyxy(0.4, 0.4, 0.1, 0.1, torch.float64),
+            self._xyxy(0.6, 0.6, 0.1, 0.1, torch.float64),
+        ).item()
+        for dtype, places in self._DTYPES_PLACES:
+            with self.subTest(dtype=str(dtype)):
+                a = self._xyxy(0.4, 0.4, 0.1, 0.1, dtype)
+                b = self._xyxy(0.6, 0.6, 0.1, 0.1, dtype)
+                g = generalized_box_iou(a, b).item()
+                self.assertAlmostEqual(g, truth, places=places)
+
+    def test_zero_area_point_box_no_nan_inf_across_dtypes(self) -> None:
+        """Degenerate point box (area=0) → no NaN/Inf in IoU or GIoU in any
+        input precision. This is the primary win of the dtype-aware clamp:
+        ``1e-12`` underflows to 0 in fp16/bf16 and the resulting ``0/0``
+        produces NaN on the all-low-precision path; the new clamp prevents it."""
+        for dtype in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
+            with self.subTest(dtype=str(dtype)):
+                point = torch.tensor([[0.5, 0.5, 0.5, 0.5]], dtype=dtype)
+                iou, _ = box_iou(point, point)
+                self.assertFalse(torch.isnan(iou).any().item(), msg=f"{dtype}: IoU NaN")
+                self.assertFalse(torch.isinf(iou).any().item(), msg=f"{dtype}: IoU Inf")
+                giou = generalized_box_iou(point, point)
+                self.assertFalse(torch.isnan(giou).any().item(), msg=f"{dtype}: GIoU NaN")
+                self.assertFalse(torch.isinf(giou).any().item(), msg=f"{dtype}: GIoU Inf")
+
+    def test_torchvision_box_area_upcasts_low_precision(self) -> None:
+        """Regression-canary: ``torchvision.ops.box_area`` upcasts fp16 AND
+        bf16 inputs to fp32.
+
+        This is the load-bearing structural shield protecting the ``union``
+        denominator on the all-low-precision path. If torchvision ever drops
+        this upcast, ``box_iou(low_pred, low_pred)`` would compute its union
+        in fp16/bf16, and the dtype-aware ``clamp(min=finfo(t.dtype).tiny)``
+        becomes the only thing between us and NaN on degenerate boxes. We
+        want a loud test failure here rather than a silent regression in
+        production AMP training. (bf16 is the production AMP default.)
+        """
+        from torchvision.ops.boxes import box_area
+
+        for dtype in (torch.float16, torch.bfloat16):
+            with self.subTest(dtype=str(dtype)):
+                b = torch.tensor([[0.45, 0.45, 0.55, 0.55]], dtype=dtype)
+                self.assertEqual(
+                    box_area(b).dtype,
+                    torch.float32,
+                    msg=(
+                        f"torchvision.ops.box_area no longer upcasts {dtype} → fp32. "
+                        f"Audit ml_engine/utils/box_ops.py and confirm the dtype-aware "
+                        f"clamp still floors the denominator correctly under {dtype}."
+                    ),
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

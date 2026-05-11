@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.19] — 2026-05-09
+
+### Changed
+
+- **Dtype-aware denominator clamp in `ml_engine/utils/box_ops.py` (closes #86)** — `box_iou` and `generalized_box_iou` now use `clamp(min=torch.finfo(t.dtype).tiny)` instead of the literal `1e-12`. The floor adapts to the union's dtype: 1.18e-38 in fp32 (no-op for any realistic box area), 6.10e-5 in fp16, 2.22e-308 in fp64. The original `1e-12` underflowed to 0 in fp16 and silently disabled the 0/0 guard if the union ever landed in fp16; the new clamp prevents NaN on degenerate boxes in any precision. **Tradeoff:** on the all-fp16 path with non-degenerate small boxes (area < ~6e-5), the new clamp clobbers valid sub-tiny values in `generalized_box_iou`'s `enclosing` denominator, distorting GIoU by ~40% for a 1e-3-side distinct-pair (vs ~1% under the old clamp). Production paths never hit this — `torchvision.box_area` upcasts fp16/bf16 → fp32, mixed-dtype promotion forces fp32, and AMP autocast doesn't cast element-wise ops — but the principled fix is fp32 promotion inside `box_iou`/`generalized_box_iou`, tracked as TODO #42.
+
+### Tests
+
+- **`TestBoxOpsDtypeSafety` rebuild for issue #86** — Replaced earlier draft tests after adversarial review found most were placebos (self-pair masking made GIoU enclosing-clamp distortion vanish; CPU autocast wrapper had no effect on element-wise ops). New coverage: dtype matrix expanded to include bf16 (the production AMP default in `training_manager.py`), plus a new `test_distinct_pair_giou_normal_boxes_close_to_truth` that exercises the `enclosing` path on non-self pairs at normal scale and asserts each dtype matches fp64 truth within its precision budget. Self-IoU/GIoU=1 tests now run under fp16/bf16/fp32/fp64. The torchvision `box_area` upcast canary (`test_torchvision_box_area_upcasts_low_precision`) now covers both fp16 and bf16 — fails loudly if torchvision ever drops the load-bearing structural shield.
+
 ## [0.1.18] — 2026-05-09
 
 ### Tests
