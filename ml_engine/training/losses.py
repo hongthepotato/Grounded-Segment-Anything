@@ -599,6 +599,22 @@ class SegmentationLoss(nn.Module):
                 "Multimask [B,N,K,H,W] must be reduced before passing to SegmentationLoss."
             )
         target_masks = targets["masks"]
+        if pred_masks.shape[:2] != target_masks.shape[:2]:
+            # SegmentationLoss expects index-aligned masks: pred[b, n] pairs with
+            # target[b, n]. In the SAM trainer that alignment comes from prompting
+            # SAM with GT boxes (so prompt i → mask i). The pred↔target [B, N]
+            # axis is enforced here. Without this check the downstream
+            # `view(b*n, -1)` raises a torch shape error whose message is brittle
+            # across PyTorch versions (e.g. "shape '[3, -1]' is invalid for input
+            # of size 128"); the explicit check pins a stable contract message.
+            # Note: valid_mask shape vs target_masks shape is NOT validated here.
+            # Production callers (model_trainers/sam.py) construct valid_mask
+            # from the same source as masks (`labels != -1`), so the two are
+            # guaranteed aligned in the only realistic call path.
+            raise ValueError(
+                f"pred_masks and target masks must have matching [B, N] dimensions; "
+                f"got pred_masks {tuple(pred_masks.shape)}, target masks {tuple(target_masks.shape)}"
+            )
         valid_mask = targets.get(
             "valid_mask",
             torch.ones(target_masks.shape[:2], dtype=torch.bool, device=target_masks.device),

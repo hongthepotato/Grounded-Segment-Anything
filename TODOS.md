@@ -532,36 +532,6 @@ Affected rules: `changes_size`, `multiple_objects`, and `distance=close` at all 
 ---
 
 
-### 40. Pin loose `pytest.raises` contracts across the test suite (dual-acceptance audit)
-
-**Priority:** P3 (P2 cases A/B already fixed inline; remaining 6 are lower-impact but same disease).
-
-**What:** A grep audit done while filing #37 found 8 dual-acceptance test sites — tests whose assertion accepts two distinct outcomes, masking regression in either direction. Two were fixed inline (see "Audit context" below). Six remain. Each accepts a loose pair like `(RuntimeError, ValueError)` or even bare `pytest.raises(Exception)`, which catches `AssertionError` from broken test setup and lets the contract drift silently between explicit validation and incidental torch/dict errors.
-
-**The six remaining sites:**
-
-1. [tests/integration/test_ml_pipeline_cpu.py:327](tests/integration/test_ml_pipeline_cpu.py#L327) — `pytest.raises((RuntimeError, ValueError))` on batch-size mismatch in `SegmentationLoss`. Today only `RuntimeError` fires (torch reshape). Pin to `RuntimeError` with a `match`, OR add an explicit `ValueError` check in `losses.py` and pin to that.
-
-2. [tests/integration/test_ml_pipeline_cpu.py:385](tests/integration/test_ml_pipeline_cpu.py#L385) — `pytest.raises((RuntimeError, AssertionError))` on (M, 3) boxes. Assertion vs torch op are very different bug classes; sibling `test_missing_token_labels_raises` already pins `AssertionError` with a match. Match that.
-
-3. [tests/integration/test_ml_pipeline_cpu.py:540](tests/integration/test_ml_pipeline_cpu.py#L540) — `pytest.raises((KeyError, ValueError))` on missing `class_mapping`. Today `KeyError` (native dict access) fires. Pin to that, OR add explicit `ValueError` validation in `build_teacher_training_config` and pin to that.
-
-4. [tests/unit/ml_engine/test_sam_lora.py:533](tests/unit/ml_engine/test_sam_lora.py#L533) — `pytest.raises((RuntimeError, ValueError))` on spatial H/W mismatch. Today only `RuntimeError` fires (no explicit spatial check in `losses.py`). Pin to `RuntimeError` with `match`, OR add explicit check.
-
-5. `tests/contract/test_redis_store_invariants.py` (~line 244) — bare `pytest.raises(Exception)` while injecting a specific `RuntimeError`. Pin to the injected type.
-
-6. [tests/unit/ml_engine/data/test_validators.py:337](tests/unit/ml_engine/data/test_validators.py#L337) — bare `pytest.raises(Exception)` for `compute_bbox_from_mask([[]])`. Investigate the actual exception pycocotools throws, pin to that specific type with a `match`.
-
-**Why:** A loose `pytest.raises((RuntimeError, ValueError))` accepts a regression where the explicit `raise ValueError("clear message")` is removed and torch's vague `RuntimeError: shape ... is invalid` takes over. Users go from a helpful error to a torch internal one with no test signal. `pytest.raises(Exception)` is even worse — it accepts `AssertionError` from a broken test setup. The pattern is consistent: when the test author wasn't sure which exception fires, they accepted both rather than running the code once and pinning.
-
-**Audit context:** Done as a sweep after `/review` flagged TODO #37 (the parent of this disease). Eight sites total found across `tests/`. Two P2 cases already fixed inline on `integration-tests/ml-pipeline-cpu` (2026-05-08): `tests/unit/ml_engine/test_sam_lora.py:587` (sibling integration test had the right pin: `match=r"iou_predictions must be shape \[B, N\]"`) and `tests/unit/ml_engine/data/test_validators.py:1016-1032` (explicit "either succeeds or raises clear error" comment + redundant `(ValueError, Exception)` catch — verified live behavior succeeds gracefully, pinned to that).
-
-**Fix recipe per site:** (a) run the test with the loose `pytest.raises` removed to see which exception actually fires today; (b) decide whether that's the contract you want; (c) pin with `pytest.raises(SpecificType, match=r"distinguishing-phrase")`. If the contract should be a typed exception that doesn't exist yet, add the explicit `raise` in the source first.
-
-**Depends on / blocked by:** None. Each site is independent.
-
----
-
 ## Completed
 
 One-line stubs for items that have shipped. Long-form context (what shipped,
@@ -593,3 +563,4 @@ Item numbers are stable so commit messages and PR descriptions referencing
 - **#36** Test determinism — seed `_gdino_outputs` / `_gdino_targets` helpers ✅ — Module-level `@pytest.fixture(autouse=True) def _seed_torch_rng` calls `torch.manual_seed(0)` before every test in `tests/integration/test_ml_pipeline_cpu.py`. Boundary-condition failures on the ~10 helper-consuming tests now reproduce on rerun. Verified: 5 simulated runs return identical loss values; empirical pytest probe asserts seed-0 first-draw value (`0.4962565899`) inside a real test body. `test_giou_loss_in_valid_range` reseeds itself to 0, no behavior change. 2348 tests still pass. Shipped v0.1.18, 2026-05-09.
 - **#38** Dtype-aware clamp threshold in `ml_engine/utils/box_ops.py` ✅ — Replaced literal `clamp(min=1e-12)` with `clamp(min=torch.finfo(t.dtype).tiny)` in both `box_iou` and `generalized_box_iou`. Floor adapts: 1.18e-38 fp32, 6.10e-5 fp16, 2.22e-308 fp64. Prevents 0/0 NaN on degenerate boxes in any precision. New `TestBoxOpsDtypeSafety` covers fp16/bf16/fp32/fp64 self-IoU/GIoU=1, distinct-pair GIoU close to fp64 truth at normal scale, no NaN/Inf on degenerate boxes, plus a regression-canary that fails loudly if `torchvision.ops.box_area` ever stops upcasting fp16/bf16 → fp32. Adversarial review during ship surfaced a small-fp16-box GIoU distortion on the all-fp16 path (filed as #42); production paths are shielded structurally. Shipped v0.1.19, 2026-05-09.
 - **#42** fp32-promote inputs inside `box_iou` / `generalized_box_iou` ✅ — `_LOW_PRECISION = (fp16, bf16)` + `_promote_target` helper using `torch.promote_types` lifts low-precision inputs to fp32 (or fp64 if the other input is fp64) at function entry. Eliminates the 40%-off-truth small-fp16-box GIoU distortion #38's dtype-aware clamp introduced via the `enclosing` denominator. Dtype contract: fp16/bf16/fp32 → fp32 output, fp64 → fp64 preserved, mixed-dtype callers (e.g., `box_iou(fp16, fp64)`) promote to wider common type — `torch.promote_types`-based helper prevents silent fp64 downcast (caught by pre-landing adversarial review on the initial draft). New `test_distinct_pair_giou_small_boxes_match_fp64_on_same_coords` is the assertion that was impossible pre-#42 (matches fp64 result on same already-quantized coords at 1e-5 tolerance). `test_output_dtype_contract` extended to the full 4×4 dtype matrix (16 pairs) locking in the contract. Shipped v0.1.20, 2026-05-11.
+- **#40** Pin loose `pytest.raises` contracts across the test suite ✅ — Replaced 7 multi-exception or `Exception`-bare catches with specific exception types + `match=` regex pins. Sites: `SegmentationLoss` batch mismatch (ValueError), GroundingDINO box-shape (RuntimeError from `torch.cdist`), missing `class_mapping` (KeyError), SAM spatial mismatch (ValueError from BCE), Redis pipeline failure (RuntimeError), empty-polygon validation (ValueError), matmul dtype mismatch (RuntimeError). Two source-level fixes enable cleaner pins: `SegmentationLoss.forward` now raises a typed `ValueError` on pred↔target [B,N] disagreement (replaces brittle torch `view(b*n,-1)` error), and `_normalize_to_rle` rejects empty polygons with a typed `ValueError` (replaces pycocotools' base `Exception`). Final grep returns zero matches for `pytest.raises((` or `pytest.raises(Exception)` in `tests/`. 2355 tests + 36 subtests still pass. Shipped v0.1.21, 2026-05-11.

@@ -443,7 +443,13 @@ def _normalize_to_rle(segmentation: Any, height: int, width: int) -> dict:
         Compressed RLE dict with bytes counts
     """
     if isinstance(segmentation, list):
-        # Polygon format -> convert to compressed RLE
+        # Polygon format -> convert to compressed RLE.
+        # Reject empty polygon lists (`[]`) or polygons containing empty arrays
+        # (`[[]]`) before calling pycocotools — its `frPyObjects` raises base
+        # `Exception("input type is not supported.")` for these, which masks
+        # the actual contract violation behind a generic exception.
+        if not segmentation or any(not p for p in segmentation):
+            raise ValueError("polygon segmentation must be a non-empty list of non-empty coordinate arrays")
         rles = mask_utils.frPyObjects(segmentation, height, width)
         return mask_utils.merge(rles)
 

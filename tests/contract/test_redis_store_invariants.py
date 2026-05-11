@@ -241,7 +241,10 @@ class TestPipelinedTransactionFailureDoesNotCorruptState:
             return _FailingPipeline(real_pipeline(*args, **kwargs))
 
         with patch.object(fake_redis, "pipeline", _patched_pipeline):
-            with pytest.raises(Exception):
+            # _FailingPipeline.execute() raises this exact RuntimeError mid-pipeline.
+            # store.update_job should propagate it (not swallow or rewrap), which
+            # is what enables the post-failure consistency assertions below.
+            with pytest.raises(RuntimeError, match=r"Simulated Redis failure mid-pipeline"):
                 store.update_job(job.id, status=JobStatus.COMPLETED)
 
         # After the failure: the job should NOT simultaneously be in running AND

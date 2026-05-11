@@ -332,9 +332,14 @@ class TestComputeBboxFromMask:
         assert bbox[1] + bbox[3] <= 480
 
     def test_empty_polygon_raises_error(self):
-        """Empty polygon should raise an exception."""
-        # pycocotools raises Exception for invalid input types
-        with pytest.raises(Exception):
+        """Empty polygon should raise a specific ValueError.
+
+        Pre-fix, ``mask_utils.frPyObjects([[]], ...)`` raised base
+        ``Exception("input type is not supported.")`` from pycocotools, which
+        is unpinnable. ``_normalize_to_rle`` now rejects empty polygon lists
+        upstream with a stable ValueError, so the test pins that contract.
+        """
+        with pytest.raises(ValueError, match=r"polygon segmentation must be a non-empty list of non-empty"):
             compute_bbox_from_mask([[]], height=480, width=640)
 
     # -------------------------------------------------------------------------

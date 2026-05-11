@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.21] — 2026-05-11
+
+### Tests
+
+- **Pin loose `pytest.raises` contracts across the suite (closes #87)** — Replaced 7 multi-exception or `Exception`-bare catches with specific exception types plus `match=` regex patterns. Each pin now names the exact contract the test exercises: `SegmentationLoss` batch-size mismatch (ValueError), GroundingDINO box-shape contract (RuntimeError from `torch.cdist`), missing `class_mapping` key (KeyError), SAM spatial-mismatch (ValueError from BCE), Redis pipeline-failure propagation (RuntimeError), empty-polygon validation (ValueError), and matmul dtype-mismatch (RuntimeError). Loose `(A, B)` tuples and bare `pytest.raises(Exception)` would let either of two distinct outcomes silently pass — the pinned form fails loudly if the contract drifts, catching regressions in either direction.
+
+### Changed
+
+- **`SegmentationLoss.forward` now raises `ValueError` with a stable message** when `pred_masks.shape[:2] != target_masks.shape[:2]`. Previously the same shape mismatch surfaced as a downstream `torch.view(b*n, -1)` `RuntimeError` whose message varies across PyTorch versions ("shape '[3, -1]' is invalid for input of size 128"). The explicit check pins the [B, N] alignment contract upstream so the test can pin a typed exception with a stable regex.
+- **`_normalize_to_rle` in `ml_engine/data/validators.py` now rejects empty polygon lists** (`[]`, `[[]]`, etc.) with a stable `ValueError` before pycocotools' `frPyObjects` raises base `Exception("input type is not supported.")`. Same motivation as above — a typed exception with a useful message instead of a bare `Exception` the test can't pin.
+
 ## [0.1.20] — 2026-05-11
 
 ### Changed
