@@ -131,8 +131,8 @@ def test_crop_characteristics_crash_without_bboxes(rgb_image: np.ndarray) -> Non
     are passed. This documents a hard API constraint — callers of changes_size or
     multiple_objects MUST provide bboxes.
 
-    The transform runs with p=0.8 at high intensity, so we loop up to 10 times
-    to guarantee it fires at least once (P(all misses) = 0.2^10 < 1e-6).
+    p-values at high intensity: changes_size=0.8, multiple_objects=0.4.
+    Loop 30 times so P(all misses) < 3e-7 even for the weaker p=0.4 case.
 
     If this test starts FAILING (no exception raised), the underlying behavior
     changed and the 'always pass bbox' constraint in Scenario 1 needs re-evaluation.
@@ -140,14 +140,14 @@ def test_crop_characteristics_crash_without_bboxes(rgb_image: np.ndarray) -> Non
     for characteristic in _CROP_CHARACTERISTICS:
         pipeline = _pipeline_for(characteristic, "high")
         raised = False
-        for _ in range(10):
+        for _ in range(30):
             try:
                 pipeline(image=rgb_image)
             except KeyError:
                 raised = True
                 break
         assert raised, (
-            f"{characteristic}: RandomSizedBBoxSafeCrop never raised KeyError in 10 "
+            f"{characteristic}: RandomSizedBBoxSafeCrop never raised KeyError in 30 "
             "calls without bboxes — API constraint may have changed"
         )
 
