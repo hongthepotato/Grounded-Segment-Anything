@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.22] — 2026-05-12
+
+### Tests
+
+- **`TestEnvironmentSchemaIntegrity` — schema integrity tests for all 12 environment rules (closes #64)** — Mirrors `TestCharacteristicSchemaIntegrity` and adds 36 parametrized tests covering every entry in `ENVIRONMENT_RULES`: (1) all three intensities (`low`/`medium`/`high`) are present, (2) each intensity has at least one transform, and (3) every transform carries a `p` parameter. Without the `p` guard, `_keep_higher_p` would KeyError at runtime if any environment rule transform overlapped with a characteristic transform — a crash mode the previous suite couldn't catch. All 36 new cases pass against the current rule definitions.
+
 ## [0.1.21] — 2026-05-11
 
 ### Tests
