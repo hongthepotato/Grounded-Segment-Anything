@@ -340,7 +340,9 @@ class TestSegmentationLossErrors:
         criterion = SegmentationLoss()
         preds = {"pred_masks": torch.rand(2, 1, 8, 8)}
         tgts = {"masks": torch.rand(3, 1, 8, 8), "valid_mask": torch.ones(3, 1, dtype=torch.bool)}
-        with pytest.raises((RuntimeError, ValueError)):
+        with pytest.raises(
+            ValueError, match=r"pred_masks and target masks must have matching \[B, N\] dimensions"
+        ):
             criterion(preds, tgts)
 
     def test_wrong_iou_predictions_shape_raises(self) -> None:
@@ -389,7 +391,12 @@ class TestBuildCriterionBasics:
             criterion(_gdino_outputs(), bad_targets)
 
     def test_boxes_wrong_shape_raises(self) -> None:
-        """(M, 3) boxes instead of (M, 4) — catches shape contract violations."""
+        """(M, 3) boxes instead of (M, 4) — catches shape contract violations.
+
+        Boxes with the wrong trailing dim flow into ``torch.cdist`` inside
+        ``HungarianMatcher``, which raises ``RuntimeError("X1 and X2 must
+        have the same number of columns. ...")``. Pin to that contract.
+        """
         criterion = build_criterion(num_classes=1)
         bad_targets = [
             {
@@ -398,7 +405,7 @@ class TestBuildCriterionBasics:
                 "token_labels": torch.zeros(2, 256),
             }
         ]
-        with pytest.raises((RuntimeError, AssertionError)):
+        with pytest.raises(RuntimeError, match=r"X1 and X2 must have the same number of columns"):
             criterion(_gdino_outputs(), bad_targets)
 
     def test_multi_class_produces_finite_losses(self) -> None:
@@ -553,7 +560,12 @@ class TestBuildTeacherTrainingConfig:
         dm = MagicMock()
         dm.get_dataset_info.return_value = {"num_classes": 1}  # no class_mapping
         dm.get_required_models.return_value = {"grounding_dino": "x.pt"}
-        with pytest.raises((KeyError, ValueError)):
+        # build_teacher_training_config does `dataset_info["class_mapping"]`
+        # inside its config dict literal — the natural KeyError surfaces the
+        # missing key by name. We pin the key name (the only stable thing in
+        # a Python KeyError repr) rather than adding defensive validation that
+        # would just duplicate the DataManager contract.
+        with pytest.raises(KeyError, match=r"class_mapping"):
             build_teacher_training_config(dm)
 
 

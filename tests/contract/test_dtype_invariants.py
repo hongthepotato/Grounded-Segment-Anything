@@ -91,8 +91,10 @@ class TestDtypePreservationThroughAutocast:
         model = tiny_attention_block  # fp32 params
         x_bf16 = torch.randn(2, 4, 16, dtype=torch.bfloat16)
 
-        with pytest.raises((RuntimeError, TypeError)):
-            # No autocast. fp32 weights + bf16 input → matmul error. Exact
-            # message varies by torch version; matching on exception type is
-            # enough — the key is that it raises instead of silently upcasting.
+        # PyTorch's matmul rejects mixed-dtype operands with
+        # ``RuntimeError("mat1 and mat2 must have the same dtype, but got
+        # BFloat16 and Float")``. Pinning to that string is precise; if a
+        # future torch reword keeps the spirit but drops one of the operand
+        # names, ``same dtype`` is the load-bearing fragment.
+        with pytest.raises(RuntimeError, match=r"same dtype"):
             _ = model(x_bf16)

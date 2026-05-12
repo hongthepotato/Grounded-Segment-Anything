@@ -521,7 +521,15 @@ class TestSegmentationLossEdgeCases:
         assert iou_preds.grad is not None and iou_preds.grad.abs().sum() > 0
 
     def test_spatial_mismatch_raises(self):
-        """Spatial size mismatch between pred_masks and target masks must raise."""
+        """Spatial size mismatch between pred_masks and target masks must raise.
+
+        Pred and target share [B, N] but disagree on H×W. After SegmentationLoss
+        flattens to [B*N, H*W], the BCE inside ``sigmoid_focal_loss`` raises
+        ``ValueError("Target size (..., 786432) must be the same as input size
+        (..., 196608)")``. Pin to that contract — anyone who refactors the
+        trainer to forget upscaling SAM's 256×256 decoder output to the input
+        resolution should get a loud, targeted failure here.
+        """
         from ml_engine.training.losses import SegmentationLoss
 
         B, N = 2, 3
@@ -530,7 +538,7 @@ class TestSegmentationLossEdgeCases:
             "masks": torch.randint(0, 2, (B, N, 512, 512)).float(),
             "valid_mask": torch.ones(B, N, dtype=torch.bool),
         }
-        with pytest.raises((RuntimeError, ValueError)):
+        with pytest.raises(ValueError, match=r"Target size .* must be the same as input size"):
             SegmentationLoss()(predictions, targets)
 
     def test_focal_zero_weight_removes_focal_from_total(self):
