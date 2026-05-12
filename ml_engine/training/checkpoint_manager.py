@@ -261,7 +261,10 @@ class CheckpointManager:
         elif checkpoint_path == "last":
             path = self.output_dir / "last.pth"
         else:
-            path = Path(checkpoint_path)
+            path = Path(checkpoint_path).resolve()
+            safe_root = self.output_dir.resolve()
+            if not path.is_relative_to(safe_root):
+                raise ValueError(f"Checkpoint path {path} is outside output_dir {safe_root}")
 
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {path}")
@@ -269,7 +272,7 @@ class CheckpointManager:
         logger.info(f"Loading checkpoint: {path}")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        checkpoint = torch.load(path, map_location=device)
+        checkpoint = torch.load(path, map_location=device, weights_only=True)
 
         # Load model (handle trainable-only)
         trainable_only = checkpoint.get("trainable_only", False)

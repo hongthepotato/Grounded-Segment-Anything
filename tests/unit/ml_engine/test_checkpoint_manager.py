@@ -368,8 +368,12 @@ class TestLoadCheckpoint:
         meta = manager.load_checkpoint(str(output_dir / "epoch_0000.pth"), _make_model())
         assert meta["epoch"] == 0
 
-    def test_raises_file_not_found(self, manager):
+    def test_raises_file_not_found(self, manager, output_dir):
         with pytest.raises(FileNotFoundError):
+            manager.load_checkpoint(str(output_dir / "no_such.pth"), _make_model())
+
+    def test_raises_on_path_traversal(self, manager):
+        with pytest.raises(ValueError, match="outside output_dir"):
             manager.load_checkpoint("/nonexistent/path.pth", _make_model())
 
     def test_restores_model_weights(self, manager, output_dir):
