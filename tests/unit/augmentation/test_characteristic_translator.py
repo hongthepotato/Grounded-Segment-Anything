@@ -535,6 +535,7 @@ class TestEnvironmentRulesCoverSelfReportedOptions:
 # ---------------------------------------------------------------------------
 
 _ALL_CHARACTERISTICS = list(CharacteristicTranslator.CHARACTERISTIC_RULES.keys())
+_ALL_ENVIRONMENT_RULES = list(CharacteristicTranslator.ENVIRONMENT_RULES.keys())
 
 
 class TestCharacteristicSchemaIntegrity:
@@ -578,6 +579,39 @@ class TestCharacteristicSchemaIntegrity:
         for intensity in ["low", "medium", "high"]:
             result = translator.translate_from_characteristics([characteristic], intensity=intensity)
             assert len(result["augmentations"]) > 0
+
+
+class TestEnvironmentSchemaIntegrity:
+    """All 12 environment rules: every intensity present, every transform has
+    a `p` parameter (so _keep_higher_p works), every range has sensible min<=max."""
+
+    @pytest.mark.parametrize("env_rule", _ALL_ENVIRONMENT_RULES)
+    def test_all_three_intensities_present(self, env_rule):
+        rule = CharacteristicTranslator.ENVIRONMENT_RULES[env_rule]
+        assert set(rule.intensity_ranges.keys()) >= {"low", "medium", "high"}
+
+    @pytest.mark.parametrize("env_rule", _ALL_ENVIRONMENT_RULES)
+    def test_every_intensity_has_at_least_one_transform(self, env_rule):
+        rule = CharacteristicTranslator.ENVIRONMENT_RULES[env_rule]
+        for intensity in ["low", "medium", "high"]:
+            transforms = rule.intensity_ranges[intensity]
+            assert len(transforms) > 0, (
+                f"{env_rule}/{intensity} has no transforms — translate "
+                f"would silently produce nothing for this combination."
+            )
+
+    @pytest.mark.parametrize("env_rule", _ALL_ENVIRONMENT_RULES)
+    def test_every_transform_has_probability(self, env_rule):
+        """Every transform's params must include `p` — _keep_higher_p
+        relies on it for dedup and crashes (KeyError) without."""
+        rule = CharacteristicTranslator.ENVIRONMENT_RULES[env_rule]
+        for intensity, transforms in rule.intensity_ranges.items():
+            for aug_name, params in transforms.items():
+                assert "p" in params, (
+                    f"{env_rule}/{intensity}/{aug_name} has no `p` parameter; "
+                    f"_keep_higher_p will KeyError if this transform overlaps with "
+                    f"another rule. Add p=RangeParameter.scalar(...)."
+                )
 
 
 # ---------------------------------------------------------------------------
