@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.23] — 2026-05-13
+
+### Fixed
+
+- **`CheckpointManager` early-stopping patience counter off-by-one** — `_check_early_stopping` was called after `save_checkpoint` wrote the file, meaning every checkpoint saw a stale patience counter. Counter now updates before the write so resumed training has accurate state.
+- **`CheckpointManager` ignoring `min_delta`** — the improvement threshold was hardcoded to `0.001` inside `_is_best` instead of reading from config. Both `_is_best` and `_check_early_stopping` now share the same configurable `self.min_delta` value read from `checkpointing.early_stopping.min_delta`.
+- **`CheckpointManager` patience counter not persisted across resume** — `patience_counter` was saved to the checkpoint dict but not restored on `load_checkpoint`. Resumed training now picks up the exact patience state from the interrupted run.
+- **`CheckpointManager` `should_stop` not persisted across resume** — early-stopping halt signal was never written to or read from checkpoints. A training loop that resumes from a stopped checkpoint now immediately observes `should_stop=True` without running extra epochs.
+- **`CheckpointManager` path traversal vulnerability** — `load_checkpoint` accepted arbitrary filesystem paths and called `torch.load` without bounds checking, enabling path traversal attacks on training clusters. Paths are now resolved and validated against `output_dir` before loading.
+- **`CheckpointManager` pickle RCE via `torch.load`** — deserialization used the default pickle backend, which can execute arbitrary code embedded in a malicious checkpoint file. Switched to `weights_only=True` throughout.
+
+### Tests
+
+- **`CheckpointManager` — 55-test suite covering all production code paths** — the module had zero tests; this PR adds unit tests for all 6 public methods and key private helpers, including checkpoint round-trip persistence for `patience_counter` and `should_stop`, path-traversal rejection, cleanup boundary behaviour, and all early-stopping modes.
+
 ## [0.1.22] — 2026-05-12
 
 ### Tests
