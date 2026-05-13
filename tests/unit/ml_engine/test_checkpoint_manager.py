@@ -196,7 +196,7 @@ class TestBug2EarlyStoppingIgnoresMinDelta:
 
 
 class TestBug3PatienceCounterNotPersisted:
-    def test_patience_counter_survives_checkpoint_round_trip(self, manager, output_dir):
+    def test_patience_counter_survives_checkpoint_round_trip(self, manager, output_dir, config_file):
         """
         After advancing patience_counter (non-improving epochs), saving a
         checkpoint and loading it into a fresh manager must restore the
@@ -207,14 +207,33 @@ class TestBug3PatienceCounterNotPersisted:
         _save(manager, epoch=3, val_loss=0.8)  # counter → 2
         saved_counter = manager.patience_counter
 
-        # Create a fresh manager and load the last checkpoint
-        fresh = CheckpointManager.__new__(CheckpointManager)
-        fresh.__dict__.update(manager.__dict__.copy())
-        fresh.patience_counter = 0  # simulate a brand-new manager instance
+        # Real second manager — no shared mutable state with the original.
+        fresh = CheckpointManager(str(output_dir), str(config_file), "val_loss", mode="min")
+        fresh.patience_counter = 0  # confirm it starts at 0 before loading
 
         fresh.load_checkpoint("last", _make_model())
         assert fresh.patience_counter == saved_counter, (
             f"patience_counter should be {saved_counter} after load, got {fresh.patience_counter}"
+        )
+
+    def test_should_stop_survives_checkpoint_round_trip(self, manager, output_dir, config_file):
+        """
+        When patience is exhausted (should_stop=True), saving a checkpoint and
+        loading it into a fresh manager must restore should_stop=True so the
+        training loop doesn't run an extra epoch after a resume.
+        """
+        _save(manager, epoch=1, val_loss=0.5)  # baseline
+        _save(manager, epoch=2, val_loss=0.8)  # counter → 1
+        _save(manager, epoch=3, val_loss=0.8)  # counter → 2
+        _save(manager, epoch=5, val_loss=0.8)  # counter → 3 = patience → should_stop=True
+        assert manager.should_stop is True
+
+        fresh = CheckpointManager(str(output_dir), str(config_file), "val_loss", mode="min")
+        assert fresh.should_stop is False  # starts fresh
+
+        fresh.load_checkpoint("last", _make_model())
+        assert fresh.should_stop is True, (
+            "should_stop must be True after loading a checkpoint where patience was exhausted"
         )
 
 
@@ -640,9 +659,15 @@ class TestCoverageGaps:
         assert (output_dir / "epoch_0005.pth").exists()
 
     def test_cleanup_handles_already_deleted_file(self, manager: CheckpointManager, output_dir: Path) -> None:
+        # max_keep=3; saves at epochs 0,5,10 fill the window. The epoch=15 save
+        # causes _cleanup to auto-delete epoch_0000. epoch_0005 is the next
+        # oldest and is still on disk at this point.
         for epoch in [0, 5, 10, 15]:
             _save(manager, epoch=epoch, val_loss=1.0 - epoch * 0.01)
-        oldest = output_dir / "epoch_0000.pth"
-        if oldest.exists():
-            oldest.unlink()
-        _save(manager, epoch=20, val_loss=0.5)  # _cleanup must not raise FileNotFoundError
+        # Manually delete epoch_0005 — _cleanup has NOT yet removed it, so this
+        # is the first file it will encounter when epoch=20 triggers cleanup.
+        next_oldest = output_dir / "epoch_0005.pth"
+        assert next_oldest.exists(), "epoch_0005 must exist before manual deletion"
+        next_oldest.unlink()
+        # _cleanup now encounters an already-gone file; must not raise FileNotFoundError.
+        _save(manager, epoch=20, val_loss=0.5)

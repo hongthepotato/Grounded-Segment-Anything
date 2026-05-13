@@ -149,6 +149,7 @@ class CheckpointManager:
         checkpoint["best_metric"] = self.best_metric
         checkpoint["best_epoch"] = self.best_epoch
         checkpoint["patience_counter"] = self.patience_counter
+        checkpoint["should_stop"] = self.should_stop
         saved_path = None
 
         # Save periodic checkpoint
@@ -315,6 +316,7 @@ class CheckpointManager:
         self.best_metric = checkpoint.get("best_metric", self.best_metric)
         self.best_epoch = checkpoint.get("best_epoch", -1)
         self.patience_counter = checkpoint.get("patience_counter", self.patience_counter)
+        self.should_stop = checkpoint.get("should_stop", self.should_stop)
 
         return checkpoint
 
