@@ -3,24 +3,20 @@ Unit tests for ml_engine.training.checkpoint_manager.CheckpointManager.
 
 All tests run on CPU with a tiny torch.nn.Linear — no GPU required.
 
-Bugs this file is designed to catch (and prove with red tests before fixing):
+Bugs caught and fixed in this file (tests verify the correct post-fix behaviour):
 
-  Bug 1 — patience_counter increments even on improvement epochs.
-    In save_checkpoint, _is_best() sets best_metric=current and patience_counter=0.
-    _check_early_stopping() then compares current < best_metric, which is
-    current < current → False, so patience_counter increments to 1.
-    Effective patience is therefore (patience - 1), not patience.
+  Bug 1 — patience_counter off-by-one on improvement epochs (FIXED).
+    _check_early_stopping now receives is_best directly from _is_best so it
+    never double-counts improvement epochs. patience_counter stays 0 after
+    an improving epoch.
 
-  Bug 2 — _check_early_stopping ignores min_delta.
-    _is_best uses min_delta=0.001 to gate improvement detection.
-    _check_early_stopping uses strict comparison (no delta), so a sub-threshold
-    improvement (e.g. 0.0005) prevents patience from incrementing even though
-    _is_best() returned False and no best.pth was written.
+  Bug 2 — early stopping ignored min_delta (FIXED).
+    _check_early_stopping now delegates to _is_best, which applies min_delta
+    consistently. Sub-threshold improvements correctly increment patience_counter.
 
-  Bug 3 — patience_counter not saved or restored in checkpoints.
-    load_checkpoint restores best_metric and best_epoch but leaves
-    patience_counter at whatever the current manager holds, making early
-    stopping state unreliable after a resume.
+  Bug 3 — patience_counter not persisted across checkpoint save/load (FIXED).
+    patience_counter is now written into the checkpoint dict and restored by
+    load_checkpoint, so early stopping state survives a training resume.
 """
 
 from __future__ import annotations
@@ -40,12 +36,29 @@ from ml_engine.training.checkpoint_manager import CheckpointManager
 # ---------------------------------------------------------------------------
 
 
+_DEFAULT_MIN_DELTA = 0.001
+
+
 def _make_model() -> nn.Linear:
     return nn.Linear(4, 2, bias=False)
 
 
 def _make_optimizer(model: nn.Module) -> torch.optim.SGD:
     return torch.optim.SGD(model.parameters(), lr=0.01)
+
+
+class _FakeScaler:
+    """Minimal GradScaler stand-in for tests that don't need real AMP scaling."""
+
+    def __init__(self, scale: float = 1024.0) -> None:
+        self._scale = scale
+        self._state: dict = {}
+
+    def state_dict(self) -> dict:
+        return {"scale": self._scale}
+
+    def load_state_dict(self, d: dict) -> None:
+        self._state = d
 
 
 @pytest.fixture
@@ -104,23 +117,13 @@ def _save(
 
 
 # ---------------------------------------------------------------------------
-# Bug 1 — patience_counter off-by-one on improvement epochs
-#
-# These tests assert the INTENDED behaviour.  With the current code they will
-# FAIL because _check_early_stopping increments patience_counter even when
-# _is_best() already reset it to 0.
+# Bug 1 — patience_counter off-by-one on improvement epochs (FIXED)
 # ---------------------------------------------------------------------------
 
 
 class TestBug1PatienceCounterOnImprovement:
     def test_patience_counter_stays_zero_after_improvement(self, manager):
-        """
-        After one improving epoch the patience counter must remain at 0.
-
-        BUG: _is_best sets patience_counter=0 then _check_early_stopping
-        increments it to 1 because it re-evaluates improvement against the
-        already-updated best_metric.
-        """
+        """After one improving epoch the patience counter must remain at 0."""
         _save(manager, epoch=1, val_loss=0.5)
         assert manager.patience_counter == 0, (
             "patience_counter should be 0 after an improving epoch; "
@@ -131,9 +134,6 @@ class TestBug1PatienceCounterOnImprovement:
         """
         With patience=3, should_stop must stay False until there are 3
         consecutive non-improving saves AFTER the baseline is established.
-
-        BUG: because every improvement silently burns one patience tick,
-        should_stop fires after only 2 non-improving epochs instead of 3.
         """
         _save(manager, epoch=1, val_loss=0.5)  # improvement — sets baseline
         _save(manager, epoch=2, val_loss=0.8)  # no improvement #1
@@ -163,12 +163,7 @@ class TestBug1PatienceCounterOnImprovement:
 
 
 # ---------------------------------------------------------------------------
-# Bug 2 — sub-threshold improvement prevents patience increment
-#          even though _is_best() returned False
-#
-# A delta smaller than min_delta (0.001) should NOT count as improvement in
-# either _is_best or early stopping.  Currently _check_early_stopping uses
-# a strict comparison so a tiny dip prevents patience from incrementing.
+# Bug 2 — _check_early_stopping ignored min_delta (FIXED)
 # ---------------------------------------------------------------------------
 
 
@@ -178,10 +173,6 @@ class TestBug2EarlyStoppingIgnoresMinDelta:
         A change smaller than min_delta (0.001) must not be treated as
         improvement.  Patience should increment exactly as if the metric
         had not changed at all.
-
-        BUG: _check_early_stopping compares strictly (no min_delta), so
-        val_loss 0.5 → 0.4995 (delta=0.0005 < 0.001) silently resets
-        the patience clock without saving a new best.pth.
         """
         _save(manager, epoch=1, val_loss=0.5)  # establishes best=0.5
         assert (manager.output_dir / "best.pth").exists()
@@ -200,7 +191,7 @@ class TestBug2EarlyStoppingIgnoresMinDelta:
 
 
 # ---------------------------------------------------------------------------
-# Bug 3 — patience_counter not persisted across checkpoint save/load
+# Bug 3 — patience_counter not persisted across checkpoint save/load (FIXED)
 # ---------------------------------------------------------------------------
 
 
@@ -210,9 +201,6 @@ class TestBug3PatienceCounterNotPersisted:
         After advancing patience_counter (non-improving epochs), saving a
         checkpoint and loading it into a fresh manager must restore the
         patience_counter so early stopping continues from the correct position.
-
-        BUG: patience_counter is not stored in the checkpoint dict, so after
-        load_checkpoint the counter silently resets to 0.
         """
         _save(manager, epoch=1, val_loss=0.5)  # improvement — sets baseline
         _save(manager, epoch=2, val_loss=0.8)  # counter → 1
@@ -372,9 +360,18 @@ class TestLoadCheckpoint:
         with pytest.raises(FileNotFoundError):
             manager.load_checkpoint(str(output_dir / "no_such.pth"), _make_model())
 
-    def test_raises_on_path_traversal(self, manager):
+    @pytest.mark.parametrize(
+        "bad_path",
+        [
+            "/nonexistent/path.pth",
+            "../../etc/passwd",
+        ],
+    )
+    def test_raises_on_path_traversal(self, manager, output_dir, bad_path):
+        # Both absolute out-of-bounds paths and dotdot-relative traversals must be rejected.
+        resolved = str(output_dir / bad_path) if not bad_path.startswith("/") else bad_path
         with pytest.raises(ValueError, match="outside output_dir"):
-            manager.load_checkpoint("/nonexistent/path.pth", _make_model())
+            manager.load_checkpoint(resolved, _make_model())
 
     def test_restores_model_weights(self, manager, output_dir):
         model = _make_model()
@@ -533,7 +530,7 @@ class TestCoverageGaps:
         out = tmp_path / "ckpts"
         out.mkdir()
         mgr = CheckpointManager(str(out), str(cfg), "val_loss", mode="min")
-        assert mgr.min_delta == 0.001
+        assert mgr.min_delta == _DEFAULT_MIN_DELTA
 
     # ------------------------------------------------------------------ #
     # save_checkpoint: optional components                                 #
@@ -559,13 +556,6 @@ class TestCoverageGaps:
         assert "scheduler_state_dict" in ckpt
 
     def test_save_includes_scaler_state(self, manager: CheckpointManager, output_dir: Path) -> None:
-        class _FakeScaler:
-            def state_dict(self) -> dict:
-                return {"scale": 1024.0, "growth_factor": 2.0}
-
-            def load_state_dict(self, d: dict) -> None:
-                self._loaded = d
-
         model = _make_model()
         opt = _make_optimizer(model)
         manager.save_checkpoint(
@@ -573,7 +563,7 @@ class TestCoverageGaps:
             model=model,
             optimizer=opt,
             metrics={"val_loss": 0.5, "epoch": 0.0},
-            scaler=_FakeScaler(),
+            scaler=_FakeScaler(scale=1024.0),
         )
         ckpt = torch.load(output_dir / "last.pth", map_location="cpu", weights_only=True)
         assert "scaler_state_dict" in ckpt
@@ -603,17 +593,7 @@ class TestCoverageGaps:
         assert scheduler2.get_last_lr() == expected_lr
 
     def test_load_restores_scaler_state(self, manager: CheckpointManager, output_dir: Path) -> None:
-        class _FakeScaler:
-            def __init__(self) -> None:
-                self._state: dict = {}
-
-            def state_dict(self) -> dict:
-                return {"scale": 2048.0}
-
-            def load_state_dict(self, d: dict) -> None:
-                self._state = d
-
-        scaler = _FakeScaler()
+        scaler = _FakeScaler(scale=2048.0)
         model = _make_model()
         opt = _make_optimizer(model)
         manager.save_checkpoint(
