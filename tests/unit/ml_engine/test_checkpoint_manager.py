@@ -489,3 +489,180 @@ class TestPathHelpers:
 
     def test_get_last_checkpoint_path(self, manager, output_dir):
         assert manager.get_last_checkpoint_path() == output_dir / "last.pth"
+
+
+class TestCoverageGaps:
+    """Tests for code paths not covered by the initial bug-fix test suite."""
+
+    # ------------------------------------------------------------------ #
+    # min_delta config fallbacks                                           #
+    # ------------------------------------------------------------------ #
+
+    def test_min_delta_from_top_level_config(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "cfg.yaml"
+        cfg.write_text(
+            textwrap.dedent("""\
+                checkpointing:
+                  save_interval: 1
+                  max_keep_checkpoints: 3
+                  save_trainable_only: false
+                  min_delta: 0.05
+                  early_stopping:
+                    enabled: true
+                    patience: 5
+            """)
+        )
+        out = tmp_path / "ckpts"
+        out.mkdir()
+        mgr = CheckpointManager(str(out), str(cfg), "val_loss", mode="min")
+        assert mgr.min_delta == 0.05
+
+    def test_min_delta_hardcoded_default(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "cfg.yaml"
+        cfg.write_text(
+            textwrap.dedent("""\
+                checkpointing:
+                  save_interval: 1
+                  max_keep_checkpoints: 3
+                  save_trainable_only: false
+                  early_stopping:
+                    enabled: true
+                    patience: 5
+            """)
+        )
+        out = tmp_path / "ckpts"
+        out.mkdir()
+        mgr = CheckpointManager(str(out), str(cfg), "val_loss", mode="min")
+        assert mgr.min_delta == 0.001
+
+    # ------------------------------------------------------------------ #
+    # save_checkpoint: optional components                                 #
+    # ------------------------------------------------------------------ #
+
+    def test_save_includes_extra_info(self, manager: CheckpointManager, output_dir: Path) -> None:
+        _save(manager, epoch=0, val_loss=0.5, extra_info={"run_id": "abc", "fold": 2})
+        ckpt = torch.load(output_dir / "last.pth", map_location="cpu", weights_only=True)
+        assert ckpt["extra_info"] == {"run_id": "abc", "fold": 2}
+
+    def test_save_includes_scheduler_state(self, manager: CheckpointManager, output_dir: Path) -> None:
+        model = _make_model()
+        opt = _make_optimizer(model)
+        scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=5, gamma=0.1)
+        manager.save_checkpoint(
+            epoch=0,
+            model=model,
+            optimizer=opt,
+            metrics={"val_loss": 0.5, "epoch": 0.0},
+            scheduler=scheduler,
+        )
+        ckpt = torch.load(output_dir / "last.pth", map_location="cpu", weights_only=True)
+        assert "scheduler_state_dict" in ckpt
+
+    def test_save_includes_scaler_state(self, manager: CheckpointManager, output_dir: Path) -> None:
+        class _FakeScaler:
+            def state_dict(self) -> dict:
+                return {"scale": 1024.0, "growth_factor": 2.0}
+
+            def load_state_dict(self, d: dict) -> None:
+                self._loaded = d
+
+        model = _make_model()
+        opt = _make_optimizer(model)
+        manager.save_checkpoint(
+            epoch=0,
+            model=model,
+            optimizer=opt,
+            metrics={"val_loss": 0.5, "epoch": 0.0},
+            scaler=_FakeScaler(),
+        )
+        ckpt = torch.load(output_dir / "last.pth", map_location="cpu", weights_only=True)
+        assert "scaler_state_dict" in ckpt
+        assert ckpt["scaler_state_dict"]["scale"] == 1024.0
+
+    # ------------------------------------------------------------------ #
+    # load_checkpoint: optional components                                 #
+    # ------------------------------------------------------------------ #
+
+    def test_load_restores_scheduler_state(self, manager: CheckpointManager, output_dir: Path) -> None:
+        model = _make_model()
+        opt = _make_optimizer(model)
+        scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=5, gamma=0.1)
+        scheduler.step()
+        expected_lr = scheduler.get_last_lr()
+        manager.save_checkpoint(
+            epoch=0,
+            model=model,
+            optimizer=opt,
+            metrics={"val_loss": 0.5, "epoch": 0.0},
+            scheduler=scheduler,
+        )
+        model2 = _make_model()
+        opt2 = _make_optimizer(model2)
+        scheduler2 = torch.optim.lr_scheduler.StepLR(opt2, step_size=5, gamma=0.1)
+        manager.load_checkpoint("last", model2, optimizer=opt2, scheduler=scheduler2)
+        assert scheduler2.get_last_lr() == expected_lr
+
+    def test_load_restores_scaler_state(self, manager: CheckpointManager, output_dir: Path) -> None:
+        class _FakeScaler:
+            def __init__(self) -> None:
+                self._state: dict = {}
+
+            def state_dict(self) -> dict:
+                return {"scale": 2048.0}
+
+            def load_state_dict(self, d: dict) -> None:
+                self._state = d
+
+        scaler = _FakeScaler()
+        model = _make_model()
+        opt = _make_optimizer(model)
+        manager.save_checkpoint(
+            epoch=0,
+            model=model,
+            optimizer=opt,
+            metrics={"val_loss": 0.5, "epoch": 0.0},
+            scaler=scaler,
+        )
+        loaded_scaler = _FakeScaler()
+        manager.load_checkpoint("last", _make_model(), scaler=loaded_scaler)
+        assert loaded_scaler._state == {"scale": 2048.0}
+
+    def test_load_skips_rng_when_flag_false(self, manager: CheckpointManager, output_dir: Path) -> None:
+        _save(manager, epoch=0, val_loss=0.5)
+        manager.load_checkpoint("last", _make_model(), load_rng_state=False)
+
+    def test_load_checkpoint_without_rng_state_key(
+        self, manager: CheckpointManager, output_dir: Path
+    ) -> None:
+        _save(manager, epoch=0, val_loss=0.5)
+        ckpt = torch.load(output_dir / "last.pth", map_location="cpu", weights_only=True)
+        del ckpt["rng_state"]
+        torch.save(ckpt, output_dir / "last.pth")
+        manager.load_checkpoint("last", _make_model())
+
+    def test_load_rng_exception_is_swallowed(self, manager: CheckpointManager, output_dir: Path) -> None:
+        _save(manager, epoch=0, val_loss=0.5)
+        ckpt = torch.load(output_dir / "last.pth", map_location="cpu", weights_only=True)
+        # Replace rng state with a zero-element tensor that set_rng_state will reject
+        ckpt["rng_state"]["python"] = torch.zeros(1, dtype=torch.uint8)
+        torch.save(ckpt, output_dir / "last.pth")
+        manager.load_checkpoint("last", _make_model())  # must not propagate the RuntimeError
+
+    # ------------------------------------------------------------------ #
+    # _cleanup edge cases                                                  #
+    # ------------------------------------------------------------------ #
+
+    def test_cleanup_noop_when_below_max_keep(self, manager: CheckpointManager, output_dir: Path) -> None:
+        _save(manager, epoch=0, val_loss=0.5)
+        _save(manager, epoch=5, val_loss=0.4)
+        # max_keep=3, history has 2 entries — nothing should be removed
+        assert (output_dir / "epoch_0000.pth").exists()
+        assert (output_dir / "epoch_0005.pth").exists()
+
+    def test_cleanup_handles_already_deleted_file(self, manager: CheckpointManager, output_dir: Path) -> None:
+        for epoch in [0, 5, 10, 15]:
+            _save(manager, epoch=epoch, val_loss=1.0 - epoch * 0.01)
+        oldest = output_dir / "epoch_0000.pth"
+        if oldest.exists():
+            oldest.unlink()
+        _save(manager, epoch=20, val_loss=0.5)  # _cleanup must not raise FileNotFoundError
