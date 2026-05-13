@@ -259,13 +259,13 @@ class TestSaveCheckpointFiles:
     def test_overwrites_best_pth_on_improvement(self, manager, output_dir):
         _save(manager, epoch=1, val_loss=0.5)
         _save(manager, epoch=2, val_loss=0.3)
-        ckpt = torch.load(output_dir / "best.pth", map_location="cpu")
+        ckpt = torch.load(output_dir / "best.pth", map_location="cpu", weights_only=True)
         assert ckpt["metrics"]["val_loss"] == pytest.approx(0.3)
 
     def test_does_not_overwrite_best_pth_when_worse(self, manager, output_dir):
         _save(manager, epoch=1, val_loss=0.3)
         _save(manager, epoch=2, val_loss=0.8)
-        ckpt = torch.load(output_dir / "best.pth", map_location="cpu")
+        ckpt = torch.load(output_dir / "best.pth", map_location="cpu", weights_only=True)
         assert ckpt["metrics"]["val_loss"] == pytest.approx(0.3)
 
 
@@ -331,7 +331,7 @@ class TestCleanup:
 
 
 class TestEarlyStoppingDisabled:
-    def test_disabled_early_stopping_never_sets_should_stop(self, tmp_path, config_file):
+    def test_disabled_early_stopping_never_sets_should_stop(self, tmp_path):
         cfg = tmp_path / "no_es.yaml"
         cfg.write_text(
             textwrap.dedent("""\
@@ -428,7 +428,7 @@ class TestLoadCheckpoint:
 
 
 class TestSaveTrainableOnly:
-    def test_saves_only_trainable_params(self, tmp_path, config_file):
+    def test_saves_only_trainable_params(self, tmp_path):
         cfg = tmp_path / "to.yaml"
         cfg.write_text(
             textwrap.dedent("""\
@@ -454,13 +454,13 @@ class TestSaveTrainableOnly:
         opt = torch.optim.SGD(filter(lambda p: p.requires_grad, combined.parameters()), lr=0.01)
         mgr.save_checkpoint(epoch=1, model=combined, optimizer=opt, metrics={"val_loss": 0.5, "epoch": 1.0})
 
-        ckpt = torch.load(out / "last.pth", map_location="cpu")
+        ckpt = torch.load(out / "last.pth", map_location="cpu", weights_only=True)
         assert ckpt["trainable_only"] is True
         saved_keys = set(ckpt["model_state_dict"].keys())
         # frozen layer (index 1) param must not appear
         assert not any(k.startswith("1.") for k in saved_keys)
 
-    def test_trainable_only_loads_without_error(self, tmp_path, config_file):
+    def test_trainable_only_loads_without_error(self, tmp_path):
         cfg = tmp_path / "to2.yaml"
         cfg.write_text(
             textwrap.dedent("""\
