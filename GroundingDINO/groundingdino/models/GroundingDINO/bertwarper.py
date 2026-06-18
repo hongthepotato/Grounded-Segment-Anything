@@ -26,7 +26,19 @@ class BertModelWarper(nn.Module):
 
         self.get_extended_attention_mask = bert_model.get_extended_attention_mask
         self.invert_attention_mask = bert_model.invert_attention_mask
-        self.get_head_mask = bert_model.get_head_mask
+        # get_head_mask was removed in transformers ≥5.x; provide a compatible fallback.
+        self.get_head_mask = getattr(bert_model, "get_head_mask", self._get_head_mask_fallback)
+
+    @staticmethod
+    def _get_head_mask_fallback(head_mask, num_hidden_layers: int, is_attention_chunked: bool = False):
+        if head_mask is None:
+            return [None] * num_hidden_layers
+        if head_mask.dim() == 1:
+            head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+            head_mask = head_mask.expand(num_hidden_layers, -1, -1, -1, -1)
+        elif head_mask.dim() == 2:
+            head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
+        return [head_mask[i] for i in range(num_hidden_layers)]
 
     def forward(
         self,
@@ -72,7 +84,7 @@ class BertModelWarper(nn.Module):
             if output_hidden_states is not None
             else self.config.output_hidden_states
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = return_dict if return_dict is not None else getattr(self.config, "return_dict", getattr(self.config, "use_return_dict", True))
 
         if self.config.is_decoder:
             use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -106,8 +118,9 @@ class BertModelWarper(nn.Module):
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
+        # transformers ≥5.x changed the 3rd arg from device → dtype; pass dtype explicitly.
         extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(
-            attention_mask, input_shape, device
+            attention_mask, input_shape, dtype=self.embeddings.word_embeddings.weight.dtype
         )
 
         # If a 2D or 3D attention mask is provided for the cross-attention
