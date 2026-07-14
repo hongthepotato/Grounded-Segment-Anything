@@ -118,8 +118,8 @@ class CheckpointManager:
             "model_state_dict": model_state,
             "optimizer_state_dict": optimizer.state_dict(),
             "metrics": metrics,
-            "best_metric": self.best_metric,
-            "best_epoch": self.best_epoch,
+            # best_metric / best_epoch are written after the _is_best update below
+            # (lines further down), so they reflect this epoch's decision.
             "timestamp": datetime.now().isoformat(),
             "trainable_only": self.save_trainable_only,
         }
@@ -143,8 +143,19 @@ class CheckpointManager:
         # files so every saved checkpoint captures the fully up-to-date
         # best_metric, best_epoch, and patience_counter (including the tick
         # that _check_early_stopping would add for this epoch).
-        is_best = self._is_best(metrics)
-        self._check_early_stopping(is_best)
+        #
+        # If the monitored metric is absent this epoch (e.g. validation skipped),
+        # treat it as neither an improvement nor a miss: do NOT consume a patience
+        # tick. _check_early_stopping now takes a plain bool, so guard here.
+        if self.monitor_metric in metrics:
+            is_best = self._is_best(metrics)
+            self._check_early_stopping(is_best)
+        else:
+            logger.warning(
+                "monitor_metric '%s' not in metrics — skipping best/early-stopping update this epoch",
+                self.monitor_metric,
+            )
+            is_best = False
 
         checkpoint["best_metric"] = self.best_metric
         checkpoint["best_epoch"] = self.best_epoch
@@ -263,9 +274,18 @@ class CheckpointManager:
             path = self.output_dir / "last.pth"
         else:
             path = Path(checkpoint_path).resolve()
-            safe_root = self.output_dir.resolve()
-            if not path.is_relative_to(safe_root):
-                raise ValueError(f"Checkpoint path {path} is outside output_dir {safe_root}")
+            # Path traversal is a RELATIVE-path concern: a relative checkpoint_path
+            # must not escape output_dir via `..`. Absolute paths come from
+            # application-controlled experiment directories (e.g. cross-experiment
+            # resume in Trainer._resume_from_checkpoint, which loads another
+            # experiment's <root>/<model>/best.pth) and are trusted. Confining
+            # absolute paths to output_dir would break that resume feature.
+            # RCE from a malicious checkpoint is defended separately by
+            # torch.load(weights_only=True) below.
+            if not Path(checkpoint_path).is_absolute():
+                safe_root = self.output_dir.resolve()
+                if not path.is_relative_to(safe_root):
+                    raise ValueError(f"Checkpoint path {path} is outside output_dir {safe_root}")
 
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {path}")

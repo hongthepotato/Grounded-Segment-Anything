@@ -17,6 +17,18 @@ Bugs caught and fixed in this file (tests verify the correct post-fix behaviour)
   Bug 3 — patience_counter not persisted across checkpoint save/load (FIXED).
     patience_counter is now written into the checkpoint dict and restored by
     load_checkpoint, so early stopping state survives a training resume.
+
+  Bug 4 — path-confinement broke cross-experiment resume (FIXED, review round 2).
+    load_checkpoint confined every path to output_dir, which rejected the
+    absolute path Trainer._resume_from_checkpoint builds for another
+    experiment. Now only RELATIVE paths are confined; absolute paths are
+    trusted (RCE is handled by torch.load(weights_only=True)).
+
+  Bug 5 — missing monitor_metric consumed a patience tick (FIXED, review round 2).
+    save_checkpoint now skips the best/early-stopping update when the monitored
+    metric is absent, so a metric-less epoch is neutral (no tick, no best write).
+
+Note: CUDA RNG save/restore paths are not exercised (CPU-only CI).
 """
 
 from __future__ import annotations
@@ -190,6 +202,34 @@ class TestBug2EarlyStoppingIgnoresMinDelta:
         )
 
 
+class TestMissingMonitorMetric:
+    """An epoch where the monitored metric is absent must be neutral: no best
+    update and no patience tick (matches pre-refactor behaviour)."""
+
+    def test_missing_metric_does_not_tick_patience(self, manager):
+        _save(manager, epoch=1, val_loss=0.5)  # baseline; counter=0
+        before = manager.patience_counter
+
+        m = _make_model()
+        manager.save_checkpoint(
+            epoch=2, model=m, optimizer=_make_optimizer(m), metrics={"epoch": 2.0}
+        )  # no "val_loss" key
+
+        assert manager.patience_counter == before, "a missing monitor_metric must not consume a patience tick"
+        assert manager.should_stop is False
+
+    def test_missing_metric_does_not_write_best(self, manager, output_dir):
+        _save(manager, epoch=1, val_loss=0.5)  # best.pth now holds epoch 1
+
+        m = _make_model()
+        manager.save_checkpoint(epoch=2, model=m, optimizer=_make_optimizer(m), metrics={"epoch": 2.0})
+        # best.pth must not be overwritten when the metric is absent: it still
+        # holds the baseline epoch (1), not the metric-less epoch (2). Assert on
+        # content rather than mtime so the check can't flake on coarse-timestamp FS.
+        ckpt = torch.load(output_dir / "best.pth", map_location="cpu", weights_only=True)
+        assert ckpt["epoch"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Bug 3 — patience_counter not persisted across checkpoint save/load (FIXED)
 # ---------------------------------------------------------------------------
@@ -301,6 +341,17 @@ class TestIsBest:
         mgr.best_metric = 0.9
         assert mgr._is_best({"mAP": 0.8}) is False
 
+    def test_max_mode_sub_threshold_improvement_not_best(self, output_dir, config_file):
+        """Max mode must also honour min_delta: a rise below min_delta is not best."""
+        mgr = CheckpointManager(str(output_dir), str(config_file), "mAP", mode="max")
+        mgr.best_metric = 0.8
+        assert mgr._is_best({"mAP": 0.8005}) is False  # delta 0.0005 < min_delta 0.001
+
+    def test_max_mode_above_threshold_improvement_is_best(self, output_dir, config_file):
+        mgr = CheckpointManager(str(output_dir), str(config_file), "mAP", mode="max")
+        mgr.best_metric = 0.8
+        assert mgr._is_best({"mAP": 0.802}) is True  # delta 0.002 > min_delta 0.001
+
     def test_missing_metric_returns_false(self, manager):
         assert manager._is_best({"other": 0.1}) is False
 
@@ -379,18 +430,34 @@ class TestLoadCheckpoint:
         with pytest.raises(FileNotFoundError):
             manager.load_checkpoint(str(output_dir / "no_such.pth"), _make_model())
 
-    @pytest.mark.parametrize(
-        "bad_path",
-        [
-            "/nonexistent/path.pth",
-            "../../etc/passwd",
-        ],
-    )
-    def test_raises_on_path_traversal(self, manager, output_dir, bad_path):
-        # Both absolute out-of-bounds paths and dotdot-relative traversals must be rejected.
-        resolved = str(output_dir / bad_path) if not bad_path.startswith("/") else bad_path
+    @pytest.mark.parametrize("bad_path", ["../../etc/passwd", "../outside.pth"])
+    def test_relative_traversal_rejected(self, manager, bad_path):
+        # A RELATIVE checkpoint path that escapes output_dir via `..` must be rejected.
         with pytest.raises(ValueError, match="outside output_dir"):
-            manager.load_checkpoint(resolved, _make_model())
+            manager.load_checkpoint(bad_path, _make_model())
+
+    def test_absolute_path_outside_output_dir_allowed(self, manager, tmp_path):
+        """Cross-experiment resume: an absolute path to ANOTHER experiment's
+        checkpoint is trusted, not confined to this manager's output_dir.
+
+        Regression guard: an earlier version confined every path to output_dir,
+        which broke Trainer._resume_from_checkpoint (it loads a different
+        experiment's <root>/<model>/best.pth).
+        """
+        other = tmp_path / "other_exp" / "grounding_dino"
+        other.mkdir(parents=True)
+        model = _make_model()
+        torch.save(
+            {
+                "epoch": 0,
+                "model_state_dict": model.state_dict(),
+                "metrics": {},
+                "trainable_only": False,
+            },
+            other / "best.pth",
+        )
+        meta = manager.load_checkpoint(str(other / "best.pth"), _make_model())
+        assert meta["epoch"] == 0
 
     def test_restores_model_weights(self, manager, output_dir):
         model = _make_model()
@@ -441,6 +508,22 @@ class TestLoadCheckpoint:
         meta = manager.load_checkpoint("last", _make_model())
         assert isinstance(meta, dict)
         assert "epoch" in meta and "metrics" in meta
+
+    def test_load_legacy_checkpoint_without_early_stopping_keys(self, manager, output_dir, config_file):
+        """Checkpoints saved before Bug 3 lack patience_counter/should_stop.
+        Loading one must fall back to the manager's current values, not crash."""
+        _save(manager, epoch=0, val_loss=0.5)
+        ckpt = torch.load(output_dir / "last.pth", map_location="cpu", weights_only=True)
+        del ckpt["patience_counter"]
+        del ckpt["should_stop"]
+        torch.save(ckpt, output_dir / "last.pth")
+
+        fresh = CheckpointManager(str(output_dir), str(config_file), "val_loss", mode="min")
+        fresh.patience_counter = 7  # sentinel — must be preserved when key is absent
+        fresh.should_stop = True
+        fresh.load_checkpoint("last", _make_model())
+        assert fresh.patience_counter == 7
+        assert fresh.should_stop is True
 
 
 class TestSaveTrainableOnly:
@@ -671,3 +754,10 @@ class TestCoverageGaps:
         next_oldest.unlink()
         # _cleanup now encounters an already-gone file; must not raise FileNotFoundError.
         _save(manager, epoch=20, val_loss=0.5)
+
+        # End state: the manually-deleted file stays gone, and the 3 most-recent
+        # periodic checkpoints survive (max_keep=3).
+        assert not (output_dir / "epoch_0005.pth").exists()
+        assert (output_dir / "epoch_0010.pth").exists()
+        assert (output_dir / "epoch_0015.pth").exists()
+        assert (output_dir / "epoch_0020.pth").exists()
