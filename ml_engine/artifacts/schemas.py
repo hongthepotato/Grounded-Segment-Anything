@@ -15,34 +15,47 @@ experiments/{experiment_name}/teachers/
       ├── adapter_model.json
       ├── best.pth
 """
-from dataclasses import dataclass, asdict
-from typing import Dict, Optional
-from pathlib import Path
+
 import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Dict, Optional
 
 
 @dataclass
 class BaseModelRef:
     """Reference to a base model"""
+
     checkpoint_path: str
     model_type: Optional[str] = None
     config_path: Optional[str] = None
     # sha256: Optional[str] = None
 
+
 @dataclass
 class CreateByInfo:
-    """Information about who created the artifact"""
+    """Information about who created the artifact.
+
+    job_id flows down from the JobHandler through Trainer/BaseModelTrainer
+    to save_adapters() — see ml_engine/jobs/handlers/base.py:JobHandler.run.
+    For experiment trials, the value is composed as `f"{job_id}/{trial_id}"`
+    in trial_runner.py so manifests can be traced back to both the parent
+    experiment job and the specific trial.
+    """
+
     job_id: str
     timestamp: str
+
 
 @dataclass
 class AdapterManifest:
     """Metadata for a single LoRA adapter"""
-    model_family: str           # sam | grounding_dino
-    base_model: BaseModelRef    # checkpoint path + model_type + optional sha256
+
+    model_family: str  # sam | grounding_dino
+    base_model: BaseModelRef  # checkpoint path + model_type + optional sha256
     peft_files: Dict[str, str]  # {"config": "adapter_config.json", "weights": "adapter_model.safetensors"}
-    created_by: CreateByInfo    # job_id + timestamp
-    checksums: Optional[Dict[str, str]] = None   # file -> sha256
+    created_by: CreateByInfo  # job_id + timestamp
+    checksums: Optional[Dict[str, str]] = None  # file -> sha256
 
     def save(self, path: Path) -> None:
         """Save the manifest to a JSON file"""
@@ -62,10 +75,15 @@ class AdapterManifest:
 @dataclass
 class BundleManifest:
     """Metadata for a complete teacher training job production"""
-    bundle_type: str                        # "teacher_training_output"
-    artifacts: Dict[str, str]               # model_name -> relative path (from where bundle.manifest.json is located) of the corresponding adapter.manifest.json
-    lineage: Dict[str, str]                 # "job_id"
-    merged_checkpoints: Optional[Dict[str, str]] = None      # model_naem -> relative path of merged model
+
+    bundle_type: str  # "teacher_training_output"
+    # model_name -> relative path (from where bundle.manifest.json lives) of
+    # the corresponding adapter.manifest.json.
+    artifacts: Dict[str, str]
+    # {"job_id": "..."} populated by Trainer._save_adapters from
+    # self.job_id (forwarded from the JobHandler). See CreateByInfo above.
+    lineage: Dict[str, str]  # "job_id"
+    merged_checkpoints: Optional[Dict[str, str]] = None  # model_naem -> relative path of merged model
 
     def save(self, path: Path) -> None:
         """Save the manifest to a JSON file"""

@@ -4,76 +4,77 @@ Shared fixtures for ml_engine.data unit tests.
 Provides mock COCO data structures for testing without external dependencies.
 """
 
-import pytest
-import tempfile
-import shutil
 import json
-import numpy as np
+import shutil
+import tempfile
 from pathlib import Path
-from PIL import Image
-from typing import Dict, Any, List
-import yaml
+from typing import Any, Dict, List
 
+import numpy as np
+import pytest
+import yaml
+from PIL import Image
 
 # =============================================================================
 # Basic COCO Data Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def valid_coco_data_combined() -> Dict[str, Any]:
     """
     Valid COCO data with both bounding boxes and segmentation masks.
-    
+
     This is the canonical test case - complete annotations.
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img_0.jpg', 'width': 640, 'height': 480},
-            {'id': 1, 'file_name': 'img_1.jpg', 'width': 800, 'height': 600},
-            {'id': 2, 'file_name': 'img_2.jpg', 'width': 1024, 'height': 768},
+        "images": [
+            {"id": 0, "file_name": "img_0.jpg", "width": 640, "height": 480},
+            {"id": 1, "file_name": "img_1.jpg", "width": 800, "height": 600},
+            {"id": 2, "file_name": "img_2.jpg", "width": 1024, "height": 768},
         ],
-        'annotations': [
+        "annotations": [
             {
-                'id': 0,
-                'image_id': 0,
-                'category_id': 0,
-                'bbox': [100, 100, 50, 50],  # [x, y, w, h]
-                'segmentation': [[100, 100, 150, 100, 150, 150, 100, 150]],
-                'area': 2500,
-                'iscrowd': 0
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [100, 100, 50, 50],  # [x, y, w, h]
+                "segmentation": [[100, 100, 150, 100, 150, 150, 100, 150]],
+                "area": 2500,
+                "iscrowd": 0,
             },
             {
-                'id': 1,
-                'image_id': 0,
-                'category_id': 1,
-                'bbox': [200, 200, 80, 60],
-                'segmentation': [[200, 200, 280, 200, 280, 260, 200, 260]],
-                'area': 4800,
-                'iscrowd': 0
+                "id": 1,
+                "image_id": 0,
+                "category_id": 1,
+                "bbox": [200, 200, 80, 60],
+                "segmentation": [[200, 200, 280, 200, 280, 260, 200, 260]],
+                "area": 4800,
+                "iscrowd": 0,
             },
             {
-                'id': 2,
-                'image_id': 1,
-                'category_id': 0,
-                'bbox': [50, 50, 100, 100],
-                'segmentation': [[50, 50, 150, 50, 150, 150, 50, 150]],
-                'area': 10000,
-                'iscrowd': 0
+                "id": 2,
+                "image_id": 1,
+                "category_id": 0,
+                "bbox": [50, 50, 100, 100],
+                "segmentation": [[50, 50, 150, 50, 150, 150, 50, 150]],
+                "area": 10000,
+                "iscrowd": 0,
             },
             {
-                'id': 3,
-                'image_id': 2,
-                'category_id': 1,
-                'bbox': [300, 200, 120, 80],
-                'segmentation': [[300, 200, 420, 200, 420, 280, 300, 280]],
-                'area': 9600,
-                'iscrowd': 0
+                "id": 3,
+                "image_id": 2,
+                "category_id": 1,
+                "bbox": [300, 200, 120, 80],
+                "segmentation": [[300, 200, 420, 200, 420, 280, 300, 280]],
+                "area": 9600,
+                "iscrowd": 0,
             },
         ],
-        'categories': [
-            {'id': 0, 'name': 'ear'},
-            {'id': 1, 'name': 'defect'},
-        ]
+        "categories": [
+            {"id": 0, "name": "ear"},
+            {"id": 1, "name": "defect"},
+        ],
     }
 
 
@@ -81,34 +82,34 @@ def valid_coco_data_combined() -> Dict[str, Any]:
 def valid_coco_data_boxes_only() -> Dict[str, Any]:
     """Valid COCO data with bounding boxes only (no segmentation)."""
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img_0.jpg', 'width': 640, 'height': 480},
-            {'id': 1, 'file_name': 'img_1.jpg', 'width': 800, 'height': 600},
+        "images": [
+            {"id": 0, "file_name": "img_0.jpg", "width": 640, "height": 480},
+            {"id": 1, "file_name": "img_1.jpg", "width": 800, "height": 600},
         ],
-        'annotations': [
+        "annotations": [
             {
-                'id': 0,
-                'image_id': 0,
-                'category_id': 0,
-                'bbox': [100, 100, 50, 50],
-                'segmentation': [],
-                'area': 2500,
-                'iscrowd': 0
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [100, 100, 50, 50],
+                "segmentation": [],
+                "area": 2500,
+                "iscrowd": 0,
             },
             {
-                'id': 1,
-                'image_id': 1,
-                'category_id': 1,
-                'bbox': [200, 150, 100, 80],
-                'segmentation': [],
-                'area': 8000,
-                'iscrowd': 0
+                "id": 1,
+                "image_id": 1,
+                "category_id": 1,
+                "bbox": [200, 150, 100, 80],
+                "segmentation": [],
+                "area": 8000,
+                "iscrowd": 0,
             },
         ],
-        'categories': [
-            {'id': 0, 'name': 'ear'},
-            {'id': 1, 'name': 'defect'},
-        ]
+        "categories": [
+            {"id": 0, "name": "ear"},
+            {"id": 1, "name": "defect"},
+        ],
     }
 
 
@@ -116,36 +117,36 @@ def valid_coco_data_boxes_only() -> Dict[str, Any]:
 def valid_coco_data_masks_only() -> Dict[str, Any]:
     """
     Valid COCO data with segmentation masks only (no bbox).
-    
+
     Bbox should be auto-generated by normalize_coco_annotations.
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img_0.jpg', 'width': 640, 'height': 480},
-            {'id': 1, 'file_name': 'img_1.jpg', 'width': 800, 'height': 600},
+        "images": [
+            {"id": 0, "file_name": "img_0.jpg", "width": 640, "height": 480},
+            {"id": 1, "file_name": "img_1.jpg", "width": 800, "height": 600},
         ],
-        'annotations': [
+        "annotations": [
             {
-                'id': 0,
-                'image_id': 0,
-                'category_id': 0,
-                'bbox': [],
-                'segmentation': [[100, 100, 150, 100, 150, 150, 100, 150]],
-                'iscrowd': 0
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [],
+                "segmentation": [[100, 100, 150, 100, 150, 150, 100, 150]],
+                "iscrowd": 0,
             },
             {
-                'id': 1,
-                'image_id': 1,
-                'category_id': 1,
-                'bbox': [],
-                'segmentation': [[200, 200, 300, 200, 300, 280, 200, 280]],
-                'iscrowd': 0
+                "id": 1,
+                "image_id": 1,
+                "category_id": 1,
+                "bbox": [],
+                "segmentation": [[200, 200, 300, 200, 300, 280, 200, 280]],
+                "iscrowd": 0,
             },
         ],
-        'categories': [
-            {'id': 0, 'name': 'ear'},
-            {'id': 1, 'name': 'defect'},
-        ]
+        "categories": [
+            {"id": 0, "name": "ear"},
+            {"id": 1, "name": "defect"},
+        ],
     }
 
 
@@ -153,31 +154,31 @@ def valid_coco_data_masks_only() -> Dict[str, Any]:
 def valid_coco_data_sparse_ids() -> Dict[str, Any]:
     """COCO data with non-sequential (sparse) category IDs."""
     return {
-        'images': [
-            {'id': 5, 'file_name': 'img_5.jpg', 'width': 640, 'height': 480},
+        "images": [
+            {"id": 5, "file_name": "img_5.jpg", "width": 640, "height": 480},
         ],
-        'annotations': [
+        "annotations": [
             {
-                'id': 10,
-                'image_id': 5,
-                'category_id': 1,  # Not starting from 0
-                'bbox': [100, 100, 50, 50],
-                'segmentation': [[100, 100, 150, 100, 150, 150, 100, 150]],
-                'area': 2500,
+                "id": 10,
+                "image_id": 5,
+                "category_id": 1,  # Not starting from 0
+                "bbox": [100, 100, 50, 50],
+                "segmentation": [[100, 100, 150, 100, 150, 150, 100, 150]],
+                "area": 2500,
             },
             {
-                'id': 11,
-                'image_id': 5,
-                'category_id': 90,  # Sparse ID like COCO-80
-                'bbox': [200, 200, 60, 60],
-                'segmentation': [[200, 200, 260, 200, 260, 260, 200, 260]],
-                'area': 3600,
+                "id": 11,
+                "image_id": 5,
+                "category_id": 90,  # Sparse ID like COCO-80
+                "bbox": [200, 200, 60, 60],
+                "segmentation": [[200, 200, 260, 200, 260, 260, 200, 260]],
+                "area": 3600,
             },
         ],
-        'categories': [
-            {'id': 1, 'name': 'person'},
-            {'id': 90, 'name': 'toothbrush'},
-        ]
+        "categories": [
+            {"id": 1, "name": "person"},
+            {"id": 90, "name": "toothbrush"},
+        ],
     }
 
 
@@ -185,14 +186,13 @@ def valid_coco_data_sparse_ids() -> Dict[str, Any]:
 # Invalid COCO Data Fixtures (for error handling tests)
 # =============================================================================
 
+
 @pytest.fixture
 def invalid_coco_missing_images() -> Dict[str, Any]:
     """COCO data missing 'images' key."""
     return {
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [0, 0, 10, 10]}
-        ],
-        'categories': [{'id': 0, 'name': 'cat'}]
+        "annotations": [{"id": 0, "image_id": 0, "category_id": 0, "bbox": [0, 0, 10, 10]}],
+        "categories": [{"id": 0, "name": "cat"}],
     }
 
 
@@ -200,8 +200,8 @@ def invalid_coco_missing_images() -> Dict[str, Any]:
 def invalid_coco_missing_annotations() -> Dict[str, Any]:
     """COCO data missing 'annotations' key."""
     return {
-        'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-        'categories': [{'id': 0, 'name': 'cat'}]
+        "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+        "categories": [{"id": 0, "name": "cat"}],
     }
 
 
@@ -209,10 +209,8 @@ def invalid_coco_missing_annotations() -> Dict[str, Any]:
 def invalid_coco_missing_categories() -> Dict[str, Any]:
     """COCO data missing 'categories' key."""
     return {
-        'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [0, 0, 10, 10]}
-        ]
+        "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+        "annotations": [{"id": 0, "image_id": 0, "category_id": 0, "bbox": [0, 0, 10, 10]}],
     }
 
 
@@ -220,11 +218,9 @@ def invalid_coco_missing_categories() -> Dict[str, Any]:
 def invalid_coco_empty_images() -> Dict[str, Any]:
     """COCO data with empty images list."""
     return {
-        'images': [],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [0, 0, 10, 10]}
-        ],
-        'categories': [{'id': 0, 'name': 'cat'}]
+        "images": [],
+        "annotations": [{"id": 0, "image_id": 0, "category_id": 0, "bbox": [0, 0, 10, 10]}],
+        "categories": [{"id": 0, "name": "cat"}],
     }
 
 
@@ -232,9 +228,9 @@ def invalid_coco_empty_images() -> Dict[str, Any]:
 def invalid_coco_empty_annotations() -> Dict[str, Any]:
     """COCO data with empty annotations list."""
     return {
-        'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-        'annotations': [],
-        'categories': [{'id': 0, 'name': 'cat'}]
+        "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+        "annotations": [],
+        "categories": [{"id": 0, "name": "cat"}],
     }
 
 
@@ -242,11 +238,9 @@ def invalid_coco_empty_annotations() -> Dict[str, Any]:
 def invalid_coco_negative_ids() -> Dict[str, Any]:
     """COCO data with negative IDs (invalid)."""
     return {
-        'images': [{'id': -1, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-        'annotations': [
-            {'id': -1, 'image_id': -1, 'category_id': -1, 'bbox': [0, 0, 10, 10]}
-        ],
-        'categories': [{'id': -1, 'name': 'cat'}]
+        "images": [{"id": -1, "file_name": "img.jpg", "width": 100, "height": 100}],
+        "annotations": [{"id": -1, "image_id": -1, "category_id": -1, "bbox": [0, 0, 10, 10]}],
+        "categories": [{"id": -1, "name": "cat"}],
     }
 
 
@@ -254,14 +248,12 @@ def invalid_coco_negative_ids() -> Dict[str, Any]:
 def invalid_coco_duplicate_category_ids() -> Dict[str, Any]:
     """COCO data with duplicate category IDs."""
     return {
-        'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [0, 0, 10, 10]}
+        "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+        "annotations": [{"id": 0, "image_id": 0, "category_id": 0, "bbox": [0, 0, 10, 10]}],
+        "categories": [
+            {"id": 0, "name": "cat"},
+            {"id": 0, "name": "dog"},  # Duplicate ID
         ],
-        'categories': [
-            {'id': 0, 'name': 'cat'},
-            {'id': 0, 'name': 'dog'},  # Duplicate ID
-        ]
     }
 
 
@@ -269,11 +261,11 @@ def invalid_coco_duplicate_category_ids() -> Dict[str, Any]:
 def invalid_coco_dangling_reference() -> Dict[str, Any]:
     """COCO data with annotation referencing non-existent image."""
     return {
-        'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-        'annotations': [
-            {'id': 0, 'image_id': 999, 'category_id': 0, 'bbox': [0, 0, 10, 10]}  # image_id 999 doesn't exist
+        "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+        "annotations": [
+            {"id": 0, "image_id": 999, "category_id": 0, "bbox": [0, 0, 10, 10]}  # image_id 999 doesn't exist
         ],
-        'categories': [{'id': 0, 'name': 'cat'}]
+        "categories": [{"id": 0, "name": "cat"}],
     }
 
 
@@ -281,17 +273,18 @@ def invalid_coco_dangling_reference() -> Dict[str, Any]:
 def invalid_coco_no_bbox_no_seg() -> Dict[str, Any]:
     """COCO data with annotation having neither bbox nor segmentation."""
     return {
-        'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0}  # No bbox or segmentation
+        "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+        "annotations": [
+            {"id": 0, "image_id": 0, "category_id": 0}  # No bbox or segmentation
         ],
-        'categories': [{'id': 0, 'name': 'cat'}]
+        "categories": [{"id": 0, "name": "cat"}],
     }
 
 
 # =============================================================================
 # Segmentation Format Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def polygon_segmentation() -> List[List[float]]:
@@ -303,10 +296,10 @@ def polygon_segmentation() -> List[List[float]]:
 def multi_polygon_segmentation() -> List[List[float]]:
     """
     Multiple polygons representing ONE object with disconnected visual parts.
-    
+
     In COCO format, multiple polygons in a single annotation = one object instance.
     Examples: person with spread arms, partially occluded object, ring shape.
-    
+
     This should produce ONE bbox encompassing all parts, not multiple bboxes.
     """
     return [
@@ -319,13 +312,13 @@ def multi_polygon_segmentation() -> List[List[float]]:
 def complex_polygon_segmentation() -> List[List[float]]:
     """Complex polygon with many points (like a star or irregular shape)."""
     # 8-point polygon
-    return [[100, 100, 150, 80, 200, 100, 220, 150,
-             200, 200, 150, 220, 100, 200, 80, 150]]
+    return [[100, 100, 150, 80, 200, 100, 220, 150, 200, 200, 150, 220, 100, 200, 80, 150]]
 
 
 # =============================================================================
 # Temporary Directory and File Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def temp_dir():
@@ -338,8 +331,8 @@ def temp_dir():
 @pytest.fixture
 def temp_coco_file(temp_dir, valid_coco_data_combined) -> Path:
     """Create a temporary COCO JSON file."""
-    file_path = temp_dir / 'annotations.json'
-    with open(file_path, 'w') as f:
+    file_path = temp_dir / "annotations.json"
+    with open(file_path, "w") as f:
         json.dump(valid_coco_data_combined, f)
     return file_path
 
@@ -348,16 +341,16 @@ def temp_coco_file(temp_dir, valid_coco_data_combined) -> Path:
 def temp_images_dir(temp_dir, valid_coco_data_combined) -> Path:
     """
     Create temporary directory with dummy images matching COCO data.
-    
+
     Returns path to directory containing images.
     """
-    images_dir = temp_dir / 'images'
+    images_dir = temp_dir / "images"
     images_dir.mkdir()
 
-    for img_info in valid_coco_data_combined['images']:
-        img_path = images_dir / img_info['file_name']
+    for img_info in valid_coco_data_combined["images"]:
+        img_path = images_dir / img_info["file_name"]
         # Create dummy image with correct dimensions
-        img = Image.new('RGB', (img_info['width'], img_info['height']), color='gray')
+        img = Image.new("RGB", (img_info["width"], img_info["height"]), color="gray")
         img.save(img_path)
 
     return images_dir
@@ -366,35 +359,35 @@ def temp_images_dir(temp_dir, valid_coco_data_combined) -> Path:
 @pytest.fixture
 def temp_preprocessing_config(temp_dir) -> Path:
     """Create temporary preprocessing config file."""
-    config_path = temp_dir / 'preprocessing.yaml'
+    config_path = temp_dir / "preprocessing.yaml"
     config = {
-        'preprocessing': {
-            'grounding_dino': {
-                'input_size': {'min_size': 800, 'max_size': 1333},
-                'normalization': {
-                    'mean': [0.485, 0.456, 0.406],
-                    'std': [0.229, 0.224, 0.225],
+        "preprocessing": {
+            "grounding_dino": {
+                "input_size": {"min_size": 800, "max_size": 1333},
+                "normalization": {
+                    "mean": [0.485, 0.456, 0.406],
+                    "std": [0.229, 0.224, 0.225],
                 },
             },
-            'sam': {
-                'input_size': {'height': 1024, 'width': 1024},
-                'normalization': {
-                    'mean': [123.675, 116.28, 103.53],
-                    'std': [58.395, 57.12, 57.375],
+            "sam": {
+                "input_size": {"height": 1024, "width": 1024},
+                "normalization": {
+                    "mean": [123.675, 116.28, 103.53],
+                    "std": [58.395, 57.12, 57.375],
                 },
-                'padding_value': 0,
-                'mask_output_size': 256,
+                "padding_value": 0,
+                "mask_output_size": 256,
             },
-            'yolo': {
-                'input_size': {'size': 640},
-                'normalization': {
-                    'mean': [0.0, 0.0, 0.0],
-                    'std': [1.0, 1.0, 1.0],
+            "yolo": {
+                "input_size": {"size": 640},
+                "normalization": {
+                    "mean": [0.0, 0.0, 0.0],
+                    "std": [1.0, 1.0, 1.0],
                 },
-            }
+            },
         }
     }
-    with open(config_path, 'w') as f:
+    with open(config_path, "w") as f:
         yaml.dump(config, f)
     return config_path
 
@@ -403,36 +396,41 @@ def temp_preprocessing_config(temp_dir) -> Path:
 # Image Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def sample_pil_image() -> Image.Image:
     """Create a sample PIL RGB image for testing."""
-    return Image.new('RGB', (640, 480), color='red')
+    return Image.new("RGB", (640, 480), color="red")
 
 
 @pytest.fixture
 def sample_pil_image_square() -> Image.Image:
     """Create a sample square PIL RGB image."""
-    return Image.new('RGB', (512, 512), color='blue')
+    return Image.new("RGB", (512, 512), color="blue")
 
 
 @pytest.fixture
 def sample_pil_image_tall() -> Image.Image:
     """Create a tall PIL RGB image (portrait orientation)."""
-    return Image.new('RGB', (480, 800), color='green')
+    return Image.new("RGB", (480, 800), color="green")
 
 
 # =============================================================================
 # Numpy Array Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def sample_boxes_coco() -> np.ndarray:
     """Sample bounding boxes in COCO format [x, y, w, h]."""
-    return np.array([
-        [100, 100, 50, 50],
-        [200, 150, 80, 60],
-        [300, 200, 100, 100],
-    ], dtype=np.float32)
+    return np.array(
+        [
+            [100, 100, 50, 50],
+            [200, 150, 80, 60],
+            [300, 200, 100, 100],
+        ],
+        dtype=np.float32,
+    )
 
 
 @pytest.fixture
@@ -462,15 +460,18 @@ def sample_labels() -> np.ndarray:
 # Mock Path Resolver Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def mock_image_path_resolver(temp_images_dir):
     """
     Create a mock image path resolver function.
-    
+
     Maps COCO file_name to actual filesystem path in temp directory.
     """
+
     def resolver(file_name: str) -> str:
         return str(temp_images_dir / file_name)
+
     return resolver
 
 
@@ -478,17 +479,15 @@ def mock_image_path_resolver(temp_images_dir):
 # Large Dataset Fixtures (for split testing)
 # =============================================================================
 
+
 @pytest.fixture
 def coco_data_for_splitting() -> Dict[str, Any]:
     """
     COCO data with enough images for meaningful split testing.
-    
+
     Contains 20 images with annotations across 3 categories.
     """
-    images = [
-        {'id': i, 'file_name': f'img_{i}.jpg', 'width': 640, 'height': 480}
-        for i in range(20)
-    ]
+    images = [{"id": i, "file_name": f"img_{i}.jpg", "width": 640, "height": 480} for i in range(20)]
 
     annotations = []
     ann_id = 0
@@ -497,32 +496,37 @@ def coco_data_for_splitting() -> Dict[str, Any]:
         num_anns = (i % 3) + 1
         for j in range(num_anns):
             cat_id = (i + j) % 3  # Cycle through categories
-            annotations.append({
-                'id': ann_id,
-                'image_id': i,
-                'category_id': cat_id,
-                'bbox': [50 * j, 50 * j, 50, 50],
-                'segmentation': [[50*j, 50*j, 50*j+50, 50*j, 50*j+50, 50*j+50, 50*j, 50*j+50]],
-                'area': 2500,
-            })
+            annotations.append(
+                {
+                    "id": ann_id,
+                    "image_id": i,
+                    "category_id": cat_id,
+                    "bbox": [50 * j, 50 * j, 50, 50],
+                    "segmentation": [
+                        [50 * j, 50 * j, 50 * j + 50, 50 * j, 50 * j + 50, 50 * j + 50, 50 * j, 50 * j + 50]
+                    ],
+                    "area": 2500,
+                }
+            )
             ann_id += 1
 
     categories = [
-        {'id': 0, 'name': 'class_a'},
-        {'id': 1, 'name': 'class_b'},
-        {'id': 2, 'name': 'class_c'},
+        {"id": 0, "name": "class_a"},
+        {"id": 1, "name": "class_b"},
+        {"id": 2, "name": "class_c"},
     ]
 
     return {
-        'images': images,
-        'annotations': annotations,
-        'categories': categories,
+        "images": images,
+        "annotations": annotations,
+        "categories": categories,
     }
 
 
 # =============================================================================
 # Weird but Valid COCO Data Fixtures
 # =============================================================================
+
 
 @pytest.fixture
 def weird_coco_minimal_fields() -> Dict[str, Any]:
@@ -531,15 +535,15 @@ def weird_coco_minimal_fields() -> Dict[str, Any]:
     Missing: area, iscrowd, file metadata, etc.
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480},
+        "images": [
+            {"id": 0, "file_name": "img.jpg", "width": 640, "height": 480},
         ],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [10, 10, 20, 20]},
+        "annotations": [
+            {"id": 0, "image_id": 0, "category_id": 0, "bbox": [10, 10, 20, 20]},
         ],
-        'categories': [
-            {'id': 0, 'name': 'cat'},
-        ]
+        "categories": [
+            {"id": 0, "name": "cat"},
+        ],
     }
 
 
@@ -549,34 +553,40 @@ def weird_coco_extra_fields() -> Dict[str, Any]:
     COCO with lots of extra/custom fields that should be ignored.
     """
     return {
-        'images': [
+        "images": [
             {
-                'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480,
-                'custom_field': 'should be ignored',
-                'camera_model': 'Canon EOS',
-                'timestamp': '2024-01-01',
+                "id": 0,
+                "file_name": "img.jpg",
+                "width": 640,
+                "height": 480,
+                "custom_field": "should be ignored",
+                "camera_model": "Canon EOS",
+                "timestamp": "2024-01-01",
             },
         ],
-        'annotations': [
+        "annotations": [
             {
-                'id': 0, 'image_id': 0, 'category_id': 0, 
-                'bbox': [10, 10, 20, 20],
-                'confidence': 0.95,  # Custom
-                'annotator': 'John Doe',  # Custom
-                'review_status': 'approved',  # Custom
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [10, 10, 20, 20],
+                "confidence": 0.95,  # Custom
+                "annotator": "John Doe",  # Custom
+                "review_status": "approved",  # Custom
             },
         ],
-        'categories': [
+        "categories": [
             {
-                'id': 0, 'name': 'cat',
-                'supercategory': 'animal',
-                'color': '#FF0000',
+                "id": 0,
+                "name": "cat",
+                "supercategory": "animal",
+                "color": "#FF0000",
             },
         ],
-        'info': {  # Extra top-level field
-            'description': 'Test dataset',
-            'version': '1.0',
-        }
+        "info": {  # Extra top-level field
+            "description": "Test dataset",
+            "version": "1.0",
+        },
     }
 
 
@@ -586,20 +596,20 @@ def weird_coco_unordered() -> Dict[str, Any]:
     COCO with non-sequential, unordered IDs.
     """
     return {
-        'images': [
-            {'id': 99, 'file_name': 'img_99.jpg', 'width': 640, 'height': 480},
-            {'id': 5, 'file_name': 'img_5.jpg', 'width': 640, 'height': 480},
-            {'id': 42, 'file_name': 'img_42.jpg', 'width': 640, 'height': 480},
+        "images": [
+            {"id": 99, "file_name": "img_99.jpg", "width": 640, "height": 480},
+            {"id": 5, "file_name": "img_5.jpg", "width": 640, "height": 480},
+            {"id": 42, "file_name": "img_42.jpg", "width": 640, "height": 480},
         ],
-        'annotations': [
-            {'id': 1000, 'image_id': 42, 'category_id': 2, 'bbox': [10, 10, 20, 20]},
-            {'id': 500, 'image_id': 5, 'category_id': 1, 'bbox': [30, 30, 20, 20]},
-            {'id': 750, 'image_id': 99, 'category_id': 2, 'bbox': [50, 50, 20, 20]},
+        "annotations": [
+            {"id": 1000, "image_id": 42, "category_id": 2, "bbox": [10, 10, 20, 20]},
+            {"id": 500, "image_id": 5, "category_id": 1, "bbox": [30, 30, 20, 20]},
+            {"id": 750, "image_id": 99, "category_id": 2, "bbox": [50, 50, 20, 20]},
         ],
-        'categories': [
-            {'id': 2, 'name': 'dog'},  # Reversed order
-            {'id': 1, 'name': 'cat'},
-        ]
+        "categories": [
+            {"id": 2, "name": "dog"},  # Reversed order
+            {"id": 1, "name": "cat"},
+        ],
     }
 
 
@@ -609,19 +619,19 @@ def weird_coco_special_char_names() -> Dict[str, Any]:
     COCO with special characters in category names.
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480},
+        "images": [
+            {"id": 0, "file_name": "img.jpg", "width": 640, "height": 480},
         ],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [10, 10, 20, 20]},
-            {'id': 1, 'image_id': 0, 'category_id': 1, 'bbox': [30, 30, 20, 20]},
-            {'id': 2, 'image_id': 0, 'category_id': 2, 'bbox': [50, 50, 20, 20]},
+        "annotations": [
+            {"id": 0, "image_id": 0, "category_id": 0, "bbox": [10, 10, 20, 20]},
+            {"id": 1, "image_id": 0, "category_id": 1, "bbox": [30, 30, 20, 20]},
+            {"id": 2, "image_id": 0, "category_id": 2, "bbox": [50, 50, 20, 20]},
         ],
-        'categories': [
-            {'id': 0, 'name': 'cat/dog'},  # Slash
-            {'id': 1, 'name': 'item #1'},  # Hash
-            {'id': 2, 'name': 'type (a)'},  # Parentheses
-        ]
+        "categories": [
+            {"id": 0, "name": "cat/dog"},  # Slash
+            {"id": 1, "name": "item #1"},  # Hash
+            {"id": 2, "name": "type (a)"},  # Parentheses
+        ],
     }
 
 
@@ -631,15 +641,15 @@ def weird_coco_huge_coordinates() -> Dict[str, Any]:
     COCO with very large coordinate values (high-res images).
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img.jpg', 'width': 8192, 'height': 6144},  # 8K image
+        "images": [
+            {"id": 0, "file_name": "img.jpg", "width": 8192, "height": 6144},  # 8K image
         ],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [5000.5, 3000.7, 500.2, 400.8]},
+        "annotations": [
+            {"id": 0, "image_id": 0, "category_id": 0, "bbox": [5000.5, 3000.7, 500.2, 400.8]},
         ],
-        'categories': [
-            {'id': 0, 'name': 'cat'},
-        ]
+        "categories": [
+            {"id": 0, "name": "cat"},
+        ],
     }
 
 
@@ -649,33 +659,33 @@ def weird_coco_mixed_segmentation_formats() -> Dict[str, Any]:
     COCO mixing polygon and potentially empty segmentations.
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480},
+        "images": [
+            {"id": 0, "file_name": "img.jpg", "width": 640, "height": 480},
         ],
-        'annotations': [
+        "annotations": [
             # Multi-polygon (object with holes)
             {
-                'id': 0, 
-                'image_id': 0, 
-                'category_id': 0,
-                'bbox': [10, 10, 50, 50],
-                'segmentation': [
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [10, 10, 50, 50],
+                "segmentation": [
                     [10, 10, 60, 10, 60, 60, 10, 60],  # Outer polygon
                     [20, 20, 50, 20, 50, 50, 20, 50],  # Inner hole
                 ],
             },
             # Very complex polygon (100 points)
             {
-                'id': 1,
-                'image_id': 0,
-                'category_id': 0,
-                'bbox': [100, 100, 100, 100],
-                'segmentation': [[i * 2 for i in range(200)]],  # 100 points
+                "id": 1,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [100, 100, 100, 100],
+                "segmentation": [[i * 2 for i in range(200)]],  # 100 points
             },
         ],
-        'categories': [
-            {'id': 0, 'name': 'cat'},
-        ]
+        "categories": [
+            {"id": 0, "name": "cat"},
+        ],
     }
 
 
@@ -685,17 +695,17 @@ def weird_coco_single_point_bbox() -> Dict[str, Any]:
     COCO with degenerate bboxes (single points or lines).
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480},
+        "images": [
+            {"id": 0, "file_name": "img.jpg", "width": 640, "height": 480},
         ],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [10.5, 10.5, 0.0, 0.0]},  # Point
-            {'id': 1, 'image_id': 0, 'category_id': 0, 'bbox': [20, 20, 50, 0]},  # Horizontal line
-            {'id': 2, 'image_id': 0, 'category_id': 0, 'bbox': [30, 30, 0, 50]},  # Vertical line
+        "annotations": [
+            {"id": 0, "image_id": 0, "category_id": 0, "bbox": [10.5, 10.5, 0.0, 0.0]},  # Point
+            {"id": 1, "image_id": 0, "category_id": 0, "bbox": [20, 20, 50, 0]},  # Horizontal line
+            {"id": 2, "image_id": 0, "category_id": 0, "bbox": [30, 30, 0, 50]},  # Vertical line
         ],
-        'categories': [
-            {'id': 0, 'name': 'cat'},
-        ]
+        "categories": [
+            {"id": 0, "name": "cat"},
+        ],
     }
 
 
@@ -705,18 +715,18 @@ def weird_coco_whitespace_in_names() -> Dict[str, Any]:
     COCO with various whitespace in category and file names.
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': '  img with spaces.jpg  ', 'width': 640, 'height': 480},
-            {'id': 1, 'file_name': 'img\twith\ttabs.jpg', 'width': 640, 'height': 480},
+        "images": [
+            {"id": 0, "file_name": "  img with spaces.jpg  ", "width": 640, "height": 480},
+            {"id": 1, "file_name": "img\twith\ttabs.jpg", "width": 640, "height": 480},
         ],
-        'annotations': [
-            {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [10, 10, 20, 20]},
-            {'id': 1, 'image_id': 1, 'category_id': 1, 'bbox': [30, 30, 20, 20]},
+        "annotations": [
+            {"id": 0, "image_id": 0, "category_id": 0, "bbox": [10, 10, 20, 20]},
+            {"id": 1, "image_id": 1, "category_id": 1, "bbox": [30, 30, 20, 20]},
         ],
-        'categories': [
-            {'id': 0, 'name': '  cat  '},  # Leading/trailing spaces
-            {'id': 1, 'name': 'dog\n'},  # Newline
-        ]
+        "categories": [
+            {"id": 0, "name": "  cat  "},  # Leading/trailing spaces
+            {"id": 1, "name": "dog\n"},  # Newline
+        ],
     }
 
 
@@ -726,21 +736,21 @@ def weird_coco_scientific_notation() -> Dict[str, Any]:
     COCO with scientific notation in numeric fields.
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img.jpg', 'width': 6.4e2, 'height': 4.8e2},
+        "images": [
+            {"id": 0, "file_name": "img.jpg", "width": 6.4e2, "height": 4.8e2},
         ],
-        'annotations': [
+        "annotations": [
             {
-                'id': 0, 
-                'image_id': 0, 
-                'category_id': 0, 
-                'bbox': [1e1, 1e1, 2e1, 2e1],
-                'area': 4e2,
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [1e1, 1e1, 2e1, 2e1],
+                "area": 4e2,
             },
         ],
-        'categories': [
-            {'id': 0, 'name': 'cat'},
-        ]
+        "categories": [
+            {"id": 0, "name": "cat"},
+        ],
     }
 
 
@@ -750,34 +760,34 @@ def weird_coco_null_fields() -> Dict[str, Any]:
     COCO with explicit null/None values in optional fields.
     """
     return {
-        'images': [
+        "images": [
             {
-                'id': 0, 
-                'file_name': 'img.jpg', 
-                'width': 640, 
-                'height': 480,
-                'license': None,
-                'coco_url': None,
-                'date_captured': None,
+                "id": 0,
+                "file_name": "img.jpg",
+                "width": 640,
+                "height": 480,
+                "license": None,
+                "coco_url": None,
+                "date_captured": None,
             },
         ],
-        'annotations': [
+        "annotations": [
             {
-                'id': 0, 
-                'image_id': 0, 
-                'category_id': 0, 
-                'bbox': [10, 10, 20, 20],
-                'area': None,
-                'iscrowd': None,
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [10, 10, 20, 20],
+                "area": None,
+                "iscrowd": None,
             },
         ],
-        'categories': [
+        "categories": [
             {
-                'id': 0, 
-                'name': 'cat',
-                'supercategory': None,
+                "id": 0,
+                "name": "cat",
+                "supercategory": None,
             },
-        ]
+        ],
     }
 
 
@@ -785,11 +795,12 @@ def weird_coco_null_fields() -> Dict[str, Any]:
 # Quality Warning Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def coco_data_with_quality_issues() -> Dict[str, Any]:
     """
     COCO data designed to trigger quality warnings.
-    
+
     Contains:
     - Images without annotations
     - Very small objects
@@ -797,44 +808,44 @@ def coco_data_with_quality_issues() -> Dict[str, Any]:
     - Class imbalance
     """
     return {
-        'images': [
-            {'id': 0, 'file_name': 'img_0.jpg', 'width': 1000, 'height': 1000},
-            {'id': 1, 'file_name': 'img_1.jpg', 'width': 1000, 'height': 1000},
-            {'id': 2, 'file_name': 'no_annotations.jpg', 'width': 1000, 'height': 1000},
+        "images": [
+            {"id": 0, "file_name": "img_0.jpg", "width": 1000, "height": 1000},
+            {"id": 1, "file_name": "img_1.jpg", "width": 1000, "height": 1000},
+            {"id": 2, "file_name": "no_annotations.jpg", "width": 1000, "height": 1000},
         ],
-        'annotations': [
+        "annotations": [
             # Very small object (< 1% of image area)
             {
-                'id': 0,
-                'image_id': 0,
-                'category_id': 0,
-                'bbox': [100, 100, 5, 5],  # 25 pixels, 0.0025% of 1M
-                'area': 25,
+                "id": 0,
+                "image_id": 0,
+                "category_id": 0,
+                "bbox": [100, 100, 5, 5],  # 25 pixels, 0.0025% of 1M
+                "area": 25,
             },
             # Very large object (> 80% of image area)
             {
-                'id': 1,
-                'image_id': 1,
-                'category_id': 0,
-                'bbox': [0, 0, 950, 900],  # 855,000 pixels, 85.5%
-                'area': 855000,
+                "id": 1,
+                "image_id": 1,
+                "category_id": 0,
+                "bbox": [0, 0, 950, 900],  # 855,000 pixels, 85.5%
+                "area": 855000,
             },
             # Many annotations for one class (imbalance)
-            {'id': 2, 'image_id': 0, 'category_id': 0, 'bbox': [200, 200, 50, 50], 'area': 2500},
-            {'id': 3, 'image_id': 0, 'category_id': 0, 'bbox': [300, 300, 50, 50], 'area': 2500},
-            {'id': 4, 'image_id': 0, 'category_id': 0, 'bbox': [400, 400, 50, 50], 'area': 2500},
-            {'id': 5, 'image_id': 0, 'category_id': 0, 'bbox': [500, 500, 50, 50], 'area': 2500},
-            {'id': 6, 'image_id': 0, 'category_id': 0, 'bbox': [600, 600, 50, 50], 'area': 2500},
-            {'id': 7, 'image_id': 0, 'category_id': 0, 'bbox': [700, 700, 50, 50], 'area': 2500},
-            {'id': 8, 'image_id': 0, 'category_id': 0, 'bbox': [800, 800, 50, 50], 'area': 2500},
-            {'id': 9, 'image_id': 0, 'category_id': 0, 'bbox': [100, 500, 50, 50], 'area': 2500},
-            {'id': 10, 'image_id': 0, 'category_id': 0, 'bbox': [200, 600, 50, 50], 'area': 2500},
-            {'id': 11, 'image_id': 0, 'category_id': 0, 'bbox': [300, 700, 50, 50], 'area': 2500},
+            {"id": 2, "image_id": 0, "category_id": 0, "bbox": [200, 200, 50, 50], "area": 2500},
+            {"id": 3, "image_id": 0, "category_id": 0, "bbox": [300, 300, 50, 50], "area": 2500},
+            {"id": 4, "image_id": 0, "category_id": 0, "bbox": [400, 400, 50, 50], "area": 2500},
+            {"id": 5, "image_id": 0, "category_id": 0, "bbox": [500, 500, 50, 50], "area": 2500},
+            {"id": 6, "image_id": 0, "category_id": 0, "bbox": [600, 600, 50, 50], "area": 2500},
+            {"id": 7, "image_id": 0, "category_id": 0, "bbox": [700, 700, 50, 50], "area": 2500},
+            {"id": 8, "image_id": 0, "category_id": 0, "bbox": [800, 800, 50, 50], "area": 2500},
+            {"id": 9, "image_id": 0, "category_id": 0, "bbox": [100, 500, 50, 50], "area": 2500},
+            {"id": 10, "image_id": 0, "category_id": 0, "bbox": [200, 600, 50, 50], "area": 2500},
+            {"id": 11, "image_id": 0, "category_id": 0, "bbox": [300, 700, 50, 50], "area": 2500},
             # Only 1 annotation for class 1 (imbalance trigger)
-            {'id': 12, 'image_id': 1, 'category_id': 1, 'bbox': [100, 100, 50, 50], 'area': 2500},
+            {"id": 12, "image_id": 1, "category_id": 1, "bbox": [100, 100, 50, 50], "area": 2500},
         ],
-        'categories': [
-            {'id': 0, 'name': 'common_class'},
-            {'id': 1, 'name': 'rare_class'},
-        ]
+        "categories": [
+            {"id": 0, "name": "common_class"},
+            {"id": 1, "name": "rare_class"},
+        ],
     }

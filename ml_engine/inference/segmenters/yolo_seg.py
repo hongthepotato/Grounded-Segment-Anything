@@ -30,7 +30,7 @@ class YOLOSegInference:
     def __init__(
         self,
         model_path: str,
-        device: str = 'cuda',
+        device: str = "cuda",
         conf: float = 0.5,
     ):
         from ultralytics import YOLO
@@ -65,7 +65,7 @@ class YOLOSegInference:
 
     def _parse_results(self, result) -> List[Dict]:
         """Extract structured detections from a single ultralytics Result."""
-        detections = []
+        detections: List[Dict] = []
 
         boxes = result.boxes
         masks = result.masks
@@ -83,12 +83,14 @@ class YOLOSegInference:
             if masks is not None and i < len(masks.xy):
                 polygon = masks.xy[i].tolist()
 
-            detections.append({
-                'class_id': class_id,
-                'class_name': names.get(class_id, str(class_id)),
-                'confidence': confidence,
-                'bbox': bbox,
-                'polygon': polygon,
-            })
+            detections.append(
+                {
+                    "class_id": class_id,
+                    "class_name": names.get(class_id, str(class_id)),
+                    "confidence": confidence,
+                    "bbox": bbox,
+                    "polygon": polygon,
+                }
+            )
 
         return detections

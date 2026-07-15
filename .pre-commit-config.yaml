@@ -1,0 +1,100 @@
+# Pre-commit hooks — run locally before every commit.
+#
+# Mirrors the CI lint job so `green locally = green in CI`. Install once per
+# machine after `uv sync --extra dev`:
+#
+#     uv run pre-commit install
+#
+# Then every `git commit` runs the hooks below on staged files. To check the
+# whole repo ad-hoc (without committing): `uv run pre-commit run --all-files`.
+#
+# Philosophy: block on NEW issues, don't mass-rewrite the existing baseline.
+# Ruff has ~3500 pre-existing findings (TODOS.md item 9 tracks the cleanup).
+# Pre-commit flags new violations as you touch files, encouraging per-file
+# cleanup as code churns through.
+
+repos:
+  # ===================================================================
+  # File hygiene — out-of-the-box hooks, no project deps needed
+  # ===================================================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Strip trailing whitespace (auto-fixes, re-stage, commit)
+      - id: trailing-whitespace
+        exclude: \.md$  # markdown uses trailing whitespace for hard line breaks
+
+      # Ensure every text file ends with exactly one newline
+      - id: end-of-file-fixer
+        exclude: \.svg$
+
+      # Valid YAML + TOML syntax
+      - id: check-yaml
+      - id: check-toml
+
+      # Block accidentally-committed large files (common footgun: model
+      # weights, dataset dumps). Threshold = 1MB.
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+
+      # Detect unresolved merge conflict markers (`<<<<<<<`) in files
+      - id: check-merge-conflict
+
+      # Catch accidentally-committed credentials. Earns its keep on its own.
+      - id: detect-private-key
+
+      # Catch `pdb.set_trace()`, `breakpoint()`, `ipdb` leftovers
+      - id: debug-statements
+
+      # Valid Python syntax (catches syntax errors before pytest collection)
+      - id: check-ast
+
+  # ===================================================================
+  # Project-pinned ruff + mypy via uv — exact same versions as CI
+  # ===================================================================
+  # Using `language: system` + `uv run --no-sync` (not pre-commit's own
+  # isolated env) so the hook binaries resolve from .venv, i.e. whatever
+  # ruff/mypy versions uv.lock pins. Prevents pre-commit and CI from
+  # drifting to different tool versions.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (no --fix; flags new violations on staged files)
+        entry: uv run --no-sync ruff check
+        language: system
+        types_or: [python, pyi]
+        # No --fix: the 3500-finding baseline would generate a massive
+        # auto-rewrite on first run. Per-file cleanup tracked in TODO #9.
+
+      - id: ruff-format-check
+        name: ruff format --check
+        entry: uv run --no-sync ruff format --check
+        language: system
+        types_or: [python, pyi]
+
+      - id: mypy
+        name: mypy (staged files only — silent on transitive imports)
+        # `--follow-imports=silent`: load imported modules so type-checking
+        # CAN see their definitions (precise inference), but do NOT report
+        # errors in those imported files. Without this, every PR touching
+        # core/ml_engine/api transitively pulls in the WHOLE module graph
+        # and fails on errors in files outside the PR's scope. That breaks
+        # incremental cleanup (TODOS item 6 / Path A): each per-directory
+        # PR would be blocked on errors in directories not yet cleaned.
+        # CI runs the full `mypy core ml_engine api` separately — the gate
+        # there sees the full picture; the pre-commit hook just protects
+        # the files THIS commit touches.
+        entry: uv run --no-sync mypy --ignore-missing-imports --follow-imports=silent
+        language: system
+        types_or: [python]
+        # Only check files under the three gated directories (same scope
+        # as the mypy step in ci.yml). Staged files in other dirs skip.
+        files: ^(core|ml_engine|api)/
+
+# Pre-commit's own self-update meta-hook: run `uv run pre-commit autoupdate`
+# every few months to bump the hook-repo revs above. Dependabot doesn't
+# track pre-commit repos by default.
+#
+# CI itself doesn't install pre-commit — the lint job runs ruff/mypy
+# directly via `uv run --no-sync`. Pre-commit is a developer-local
+# convenience layer; CI is the authoritative gate.

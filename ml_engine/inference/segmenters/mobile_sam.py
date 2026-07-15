@@ -7,7 +7,7 @@ Box-prompted segmentation using MobileSAM.
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List
 
 import numpy as np
 import torch
@@ -18,8 +18,11 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "deps" / "segment_anything"))
 sys.path.insert(0, str(project_root / "EfficientSAM"))
 
-from MobileSAM.setup_mobile_sam import setup_model as setup_mobile_sam
-from segment_anything import SamPredictor
+# E402 suppressed: these imports MUST come after the sys.path inserts above —
+# segment_anything and MobileSAM live in vendored / EfficientSAM/ subtrees
+# that aren't on sys.path until those inserts run.
+from MobileSAM.setup_mobile_sam import setup_model as setup_mobile_sam  # noqa: E402
+from segment_anything import SamPredictor  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +30,9 @@ logger = logging.getLogger(__name__)
 class MobileSAMSegmenter:
     """
     Segmenter using MobileSAM.
-    
+
     Generates segmentation masks from bounding box prompts.
-    
+
     Example:
         segmenter = MobileSAMSegmenter(
             checkpoint_path="data/models/pretrained/mobile_sam.pt",
@@ -38,14 +41,10 @@ class MobileSAMSegmenter:
         masks = segmenter.segment(image_rgb, boxes_xyxy)
     """
 
-    def __init__(
-        self,
-        checkpoint_path: str = "data/models/pretrained/mobile_sam.pt",
-        device: str = "cuda"
-    ):
+    def __init__(self, checkpoint_path: str = "data/models/pretrained/mobile_sam.pt", device: str = "cuda"):
         """
         Initialize MobileSAM segmenter.
-        
+
         Args:
             checkpoint_path: Path to MobileSAM checkpoint
             device: Device for inference ("cuda" or "cpu")
@@ -53,7 +52,11 @@ class MobileSAMSegmenter:
         self.checkpoint_path = checkpoint_path
         self.device = torch.device(device)
 
-        self._predictor: Optional[SamPredictor] = None
+        # Lazy-loaded SamPredictor. Annotated Any (not Optional[SamPredictor])
+        # because every consumer is gated by _load_model() — the None state
+        # is a transient init detail, and this avoids the union-attr noise
+        # at every `self._predictor.set_image(...)` call.
+        self._predictor: Any = None
 
     def _load_model(self) -> None:
         """Load model lazily on first use."""
@@ -69,18 +72,14 @@ class MobileSAMSegmenter:
         self._predictor = SamPredictor(mobile_sam)
         logger.info("MobileSAM loaded successfully")
 
-    def segment(
-        self,
-        image: np.ndarray,
-        boxes: np.ndarray
-    ) -> List[np.ndarray]:
+    def segment(self, image: np.ndarray, boxes: np.ndarray) -> List[np.ndarray]:
         """
         Generate segmentation masks for detected boxes.
-        
+
         Args:
             image: RGB image
             boxes: Array of boxes in xyxy format, shape (N, 4)
-            
+
         Returns:
             List of binary masks, one per box
         """
@@ -95,10 +94,7 @@ class MobileSAMSegmenter:
         masks = []
         for box in boxes:
             # Predict mask for this box
-            mask_predictions, scores, _ = self._predictor.predict(
-                box=box,
-                multimask_output=True
-            )
+            mask_predictions, scores, _ = self._predictor.predict(box=box, multimask_output=True)
             # Select best mask (highest score)
             best_idx = np.argmax(scores)
             masks.append(mask_predictions[best_idx])

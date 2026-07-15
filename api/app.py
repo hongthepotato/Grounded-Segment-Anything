@@ -10,7 +10,7 @@ This module provides:
 Usage:
     # Start server
     uvicorn api.app:app --host 0.0.0.0 --port 8080 --reload
-    
+
     # Or programmatically
     import uvicorn
     from api.app import app
@@ -20,19 +20,24 @@ Usage:
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
 
-from api.routes.jobs import router as jobs_router, queue_router
-from api.routes.websocket import router as websocket_router
-from api.routes.exports import router as exports_router
-from api.schemas import success_response, error_response
+from api.routes.agent import resume_orphaned_coordinators
+from api.routes.agent import router as agent_router
+from api.routes.agent import ws_router as agent_ws_router
 from api.routes.autolabel import router as autolabel_router
 from api.routes.distillation import router as distillation_router
-from ml_engine.jobs import get_job_manager
+from api.routes.exports import router as exports_router
+from api.routes.jobs import queue_router
+from api.routes.jobs import router as jobs_router
+from api.routes.websocket import router as websocket_router
+from api.schemas import error_response, success_response
 from core.logging_config import configure_logging, get_logger
+from ml_engine.agent.redis_clients import close_async_redis_client
+from ml_engine.jobs import close_async_job_managers, get_async_job_manager
 
 # Configure logging at module load time (before FastAPI starts)
 # This ensures all loggers are properly configured
@@ -45,7 +50,7 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
-    
+
     Handles startup and shutdown:
     - Startup: Initialize JobManager, verify Redis connection
     - Shutdown: Close Redis connections
@@ -56,13 +61,17 @@ async def lifespan(app: FastAPI):
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
     try:
-        manager = get_job_manager(redis_url)
+        manager = get_async_job_manager(redis_url)
         logger.info("Connected to Redis at %s", redis_url)
 
         # Cleanup stale workers on startup
-        removed = manager.cleanup_stale_workers(timeout_seconds=120)
+        removed = await manager.cleanup_stale_workers(timeout_seconds=120)
         if removed > 0:
             logger.info("Removed %d stale workers", removed)
+
+        # Re-launch Coordinator tasks for any runs that were in-progress when
+        # the previous API process died. Safe to call even on a fresh Redis.
+        await resume_orphaned_coordinators()
 
     except Exception as e:
         logger.error("Failed to connect to Redis: %s", e)
@@ -72,8 +81,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down Training Job Manager API...")
-    manager = get_job_manager(redis_url)
-    manager.close()
+    await close_async_job_managers()
+    await close_async_redis_client()
     logger.info("Shutdown complete")
 
 
@@ -143,21 +152,21 @@ app.include_router(websocket_router)
 app.include_router(exports_router)
 app.include_router(autolabel_router)
 app.include_router(distillation_router)
+app.include_router(agent_router)
+app.include_router(agent_ws_router)
 
 
 # =============================================================================
 # Exception Handlers - Wrap all errors in unified response format
 # =============================================================================
 
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Handle HTTP exceptions with unified response format."""
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_response(
-            error=str(exc.detail),
-            code=exc.status_code
-        )
+        content=error_response(error=str(exc.detail), code=exc.status_code),
     )
 
 
@@ -172,13 +181,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
     error_msg = "Validation failed: " + "; ".join(error_messages)
 
-    return JSONResponse(
-        status_code=422,
-        content=error_response(
-            error=error_msg,
-            code=422
-        )
-    )
+    return JSONResponse(status_code=422, content=error_response(error=error_msg, code=422))
 
 
 @app.exception_handler(Exception)
@@ -187,10 +190,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     logger.error("Unexpected error: %s", exc, exc_info=True)
     return JSONResponse(
         status_code=500,
-        content=error_response(
-            error=f"Internal server error: {str(exc)}",
-            code=500
-        )
+        content=error_response(error=f"Internal server error: {str(exc)}", code=500),
     )
 
 
@@ -198,33 +198,28 @@ async def general_exception_handler(request: Request, exc: Exception):
 # Health and Root Endpoints
 # =============================================================================
 
+
 @app.get("/health", tags=["health"])
 async def health_check():
     """
     Health check endpoint.
-    
+
     Returns:
         {"code": 200, "status": "succeed", "data": {"health": "ok", "redis": "connected"}}
     """
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
     try:
-        manager = get_job_manager(redis_url)
+        manager = get_async_job_manager(redis_url)
         # Quick Redis check
-        manager.get_queue_length()
+        await manager.get_queue_length()
         return JSONResponse(
-            status_code=200,
-            content=success_response(
-                data={"health": "ok", "redis": "connected"}
-            )
+            status_code=200, content=success_response(data={"health": "ok", "redis": "connected"})
         )
     except Exception as e:
         return JSONResponse(
             status_code=503,
-            content=error_response(
-                error=f"Service unhealthy: Redis error - {str(e)}",
-                code=503
-            )
+            content=error_response(error=f"Service unhealthy: Redis error - {str(e)}", code=503),
         )
 
 
@@ -238,9 +233,9 @@ async def root():
                 "name": "Training Job Manager API",
                 "version": "1.0.0",
                 "docs": "/docs",
-                "health": "/health"
+                "health": "/health",
             }
-        )
+        ),
     )
 
 
@@ -251,10 +246,4 @@ if __name__ == "__main__":
     host = os.environ.get("API_HOST", "0.0.0.0")
     port = int(os.environ.get("API_PORT", "8080"))
 
-    uvicorn.run(
-        "api.app:app",
-        host=host,
-        port=port,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run("api.app:app", host=host, port=port, reload=True, log_level="info")

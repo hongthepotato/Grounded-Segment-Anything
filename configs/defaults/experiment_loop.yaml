@@ -1,0 +1,72 @@
+# AutoResearch experiment loop defaults
+# Budget, mutable HPO keys, and metric config.
+# All values here can be overridden in job_config["experiment"].
+
+experiment:
+  max_trials: 20
+  epochs_per_trial: 5       # validated: 3 was too few for LoRA convergence
+  max_wall_time_seconds: null  # null = no wall-time limit
+  metric_name: val_mAP50    # direct detection quality (not proxy loss)
+  metric_mode: max           # "min" or "max"
+  # Stage 4: LLM-guided HPO. Set use_llm_propose=true to enable.
+  # Falls back to SimpleMutator automatically on LLM errors or timeout.
+  use_llm_propose: false
+  llm_provider: anthropic    # "anthropic" | "openai"
+  llm_model: null            # null = use ANTHROPIC_MODEL / OPENAI_MODEL env var
+  llm_timeout: 30.0          # seconds before falling back to SimpleMutator
+  llm_base_url: null         # OpenAI-compatible endpoint (e.g., https://api.deepseek.com)
+  llm_api_key_env: null      # env var name for API key (e.g., DEEPSEEK_API_KEY)
+
+# Keys the experiment loop is allowed to mutate.
+# Paths must match the merged config produced by build_teacher_training_config():
+#   - Training-loop keys are at the TOP LEVEL (config['epochs'], not config['training']['epochs'])
+#     because build_teacher_training_config spreads shared_config['training'] to the top level.
+#   - Model-specific keys are at config['models']['<name>']['<key>'].
+#   - training_dynamics keys are at config['training_dynamics']['<key>'].
+# Schema: {dotted_key: {type: int|float|bool|choice|list, min?, max?, choices?, log_scale?}}
+# Keys NOT listed here are immutable by default.
+mutable_keys:
+  # --- Shared training loop (top-level in merged config) ---
+  "batch_size":               {type: int,    min: 1,    max: 32}
+  "epochs":                   {type: int,    min: 1,    max: 100}
+  "optimizer":                {type: choice, choices: ["AdamW", "SGD"]}
+  "weight_decay":             {type: float,  min: 0.0,  max: 0.1}
+  "warmup_epochs":            {type: int,    min: 0,    max: 20}
+
+  # --- GroundingDINO LoRA (config['models']['grounding_dino']['lora']) ---
+  "models.grounding_dino.lora.r":            {type: int,   min: 2,    max: 128}
+  "models.grounding_dino.lora.lora_alpha":   {type: int,   min: 4,    max: 256}
+  "models.grounding_dino.lora.lora_dropout": {type: float, min: 0.0,  max: 0.5}
+  "models.grounding_dino.lora.bias":         {type: choice, choices: ["none", "all", "lora_only"]}
+  "models.grounding_dino.freeze_backbone":   {type: bool}
+  "models.grounding_dino.freeze_bbox_embed": {type: bool}
+  "models.grounding_dino.learning_rate":     {type: float, min: 1.0e-6, max: 1.0e-2, log_scale: true}
+  "models.grounding_dino.momentum":          {type: float, min: 0.8,  max: 0.99}
+
+  # --- SAM LoRA (config['models']['sam']['lora']) ---
+  "models.sam.lora.r":                       {type: int,   min: 2,    max: 128}
+  "models.sam.lora.lora_alpha":              {type: int,   min: 4,    max: 256}
+  "models.sam.lora.lora_dropout":            {type: float, min: 0.0,  max: 0.5}
+  "models.sam.learning_rate":                {type: float, min: 1.0e-6, max: 1.0e-2, log_scale: true}
+
+  # --- Training dynamics (config['training_dynamics']) ---
+  # These reach TrainingManager via Trainer._init_trainers injecting
+  # 'training_dynamics' into model_config. See trainer.py._init_trainers.
+  "training_dynamics.gradient_clipping.max_norm":           {type: float, min: 0.01, max: 10.0}
+  "training_dynamics.gradient_clipping.enabled":            {type: bool}
+  "training_dynamics.mixed_precision.enabled":              {type: bool}
+  "training_dynamics.normalization.freeze_bn_teacher":      {type: bool}
+  "training_dynamics.gradient_accumulation.steps":          {type: int, min: 1, max: 32}
+
+# Keys the experiment loop must NEVER mutate.
+# Changing these would alter model identity or break dataset compatibility.
+immutable_keys:
+  - "models.grounding_dino.model.base_checkpoint"
+  - "models.grounding_dino.model.config_path"
+  - "models.grounding_dino.bert_model_path"
+  - "models.sam.model.base_checkpoint"
+  - "models.sam.model.model_type"
+  - "num_classes"
+  - "class_names"
+  - "class_mapping"
+  - "checkpointing"

@@ -15,20 +15,20 @@ Everyone gets DATA from this manager.
 
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from core.config import load_json
 from core.constants import transform_image_path
 from ml_engine.data.inspection import (
-    inspect_dataset,
     detect_annotation_mode,
-    get_required_models_from_mode
+    get_required_models_from_mode,
+    inspect_dataset,
 )
 from ml_engine.data.validators import (
-    validate_coco_format,
+    check_data_quality,
     normalize_coco_annotations,
     split_dataset,
-    check_data_quality
+    validate_coco_format,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 class DataManager:
     """
     Central orchestrator for all DATA operations.
-    
+
     Two ways to create:
     1. DataManager.from_file(path, image_paths) - loads from disk, validates, normalizes
     2. DataManager(raw_data, image_path_map, ...) - direct construction for testing
@@ -49,7 +49,7 @@ class DataManager:
     - Split train/val/test (if needed)
     - Expose data through clean accessors
     - Resolve image paths from COCO file_name to actual filesystem paths
-    
+
     Example (production):
         >>> manager = DataManager.from_file(
         >>>     data_path='data/raw/annotations.json',
@@ -59,11 +59,11 @@ class DataManager:
         >>>     ],
         >>>     split_config={'train': 0.7, 'val': 0.2, 'test': 0.1}
         >>> )
-        >>> 
+        >>>
         >>> train_data = manager.get_split('train')
         >>> dataset_info = manager.get_dataset_info()
         >>> required_models = manager.get_required_models()
-    
+
     Example (testing):
         >>> manager = DataManager(
         >>>     raw_data=mock_coco_data,
@@ -78,11 +78,11 @@ class DataManager:
         image_path_map: Dict[str, str],
         original_annotation_mode: str,
         splits: Optional[Dict[str, Dict[str, Any]]] = None,
-        data_path: Optional[Path] = None
+        data_path: Optional[Path] = None,
     ):
         """
         Direct constructor - stores pre-processed data.
-        
+
         Args:
             raw_data: Normalized COCO data (already validated)
             image_path_map: Mapping from file_name to filesystem path
@@ -98,7 +98,7 @@ class DataManager:
         # Compute derived data (cheap operations only)
         self.dataset_info = inspect_dataset(raw_data)
         self.quality_report = check_data_quality(raw_data)
-        self.splits = splits if splits else {'all': raw_data}
+        self.splits = splits if splits else {"all": raw_data}
 
     @classmethod
     def from_file(
@@ -107,8 +107,8 @@ class DataManager:
         image_paths: List[str],
         split_config: Optional[Dict[str, float]] = None,
         stratify: bool = True,
-        random_seed: int = 42
-    ) -> 'DataManager':
+        random_seed: int = 42,
+    ) -> "DataManager":
         """
         Factory method - loads from disk with full validation.
 
@@ -117,7 +117,7 @@ class DataManager:
         - Annotation normalization
         - Image path resolution and validation
         - Dataset splitting
-        
+
         Args:
             data_path: Path to COCO JSON file
             image_paths: List of image paths from frontend
@@ -125,10 +125,10 @@ class DataManager:
                          If None, uses all data as single split
             stratify: Whether to use stratified splitting (default: True)
             random_seed: Random seed for splitting (default: 42)
-        
+
         Returns:
             Fully initialized DataManager
-        
+
         Raises:
             FileNotFoundError: If data file or images don't exist
             ValueError: If COCO format is invalid
@@ -170,17 +170,14 @@ class DataManager:
         splits = None
         if split_config:
             logger.info("Splitting dataset: %s", split_config)
-            splits = split_dataset(
-                raw_data,
-                splits=split_config,
-                stratify=stratify,
-                random_seed=random_seed
-            )
+            splits = split_dataset(raw_data, splits=split_config, stratify=stratify, random_seed=random_seed)
             for split_name, split_data in splits.items():
-                logger.info("  - %s: %d images, %d annotations",
-                          split_name,
-                          len(split_data['images']),
-                          len(split_data['annotations']))
+                logger.info(
+                    "  - %s: %d images, %d annotations",
+                    split_name,
+                    len(split_data["images"]),
+                    len(split_data["annotations"]),
+                )
 
         logger.info("=" * 60)
         logger.info("DataManager loaded successfully")
@@ -191,21 +188,21 @@ class DataManager:
             image_path_map=image_path_map,
             original_annotation_mode=original_mode,
             splits=splits,
-            data_path=data_path_obj
+            data_path=data_path_obj,
         )
 
     @staticmethod
     def _build_image_path_map(image_paths: List[str]) -> Dict[str, str]:
         """
         Build mapping from COCO file_name to actual filesystem path.
-        
+
         Frontend sends paths like: upload/2025/12/17/xxx.png
         COCO file_name contains:   upload/2025/12/17/xxx.png (same format)
         Actual filesystem path:    /srv/shared/images/upload/2025/12/17/xxx.png
-        
+
         Args:
             image_paths: List of image paths from frontend
-            
+
         Returns:
             Dictionary mapping COCO file_name to actual filesystem path
         """
@@ -216,17 +213,14 @@ class DataManager:
         return path_map
 
     @staticmethod
-    def _validate_image_paths_exist(
-        raw_data: Dict[str, Any],
-        image_path_map: Dict[str, str]
-    ) -> None:
+    def _validate_image_paths_exist(raw_data: Dict[str, Any], image_path_map: Dict[str, str]) -> None:
         """
         Validate that all COCO file_names resolve to existing files.
-        
+
         Raises:
             FileNotFoundError: If any image path cannot be resolved or doesn't exist
         """
-        annotated_filenames = {img['file_name'] for img in raw_data['images']}
+        annotated_filenames = {img["file_name"] for img in raw_data["images"]}
         missing_files = []
 
         for file_name in annotated_filenames:
@@ -253,10 +247,10 @@ class DataManager:
     def get_image_path(self, file_name: str) -> str:
         """
         Get actual filesystem path for a COCO file_name.
-        
+
         Args:
             file_name: The file_name from COCO annotation (e.g., upload/2025/12/16/xxx.jpeg)
-            
+
         Returns:
             Actual filesystem path (e.g., /srv/shared/images/upload/2025/12/16/xxx.jpeg)
         """
@@ -267,7 +261,7 @@ class DataManager:
     def get_dataset_info(self) -> Dict[str, Any]:
         """
         Get cached dataset inspection results.
-        
+
         Returns:
             Dictionary with:
                 - has_boxes: bool
@@ -286,11 +280,11 @@ class DataManager:
     def get_required_models(self) -> List[str]:
         """
         Get list of required models based on ORIGINAL annotation mode.
-        
+
         This uses the annotation mode captured BEFORE normalization to determine
         which teacher models should be loaded. This ensures model selection
         reflects user intent, not auto-generated data.
-        
+
         Returns:
             List of model names, e.g., ['grounding_dino', 'sam']
             - 'detection' mode -> ['grounding_dino']
@@ -302,7 +296,7 @@ class DataManager:
     def get_quality_report(self) -> Dict[str, Any]:
         """
         Get cached data quality report.
-        
+
         Returns:
             Dictionary with quality metrics and warnings
         """
@@ -311,13 +305,13 @@ class DataManager:
     def get_split(self, split_name: str) -> Dict[str, Any]:
         """
         Get a specific data split.
-        
+
         Args:
             split_name: Name of split ('train', 'val', 'test', or 'all')
-        
+
         Returns:
             COCO format dictionary for the split
-        
+
         Raises:
             ValueError: If split_name doesn't exist
         """
@@ -326,14 +320,15 @@ class DataManager:
             raise ValueError(f"Split '{split_name}' not found. Available: {available}")
         return self.splits[split_name]
 
-
     def __repr__(self) -> str:
         """String representation of DataManager."""
-        splits_info = ', '.join([f"{k}: {len(v['images'])}" for k, v in self.splits.items()])
+        splits_info = ", ".join([f"{k}: {len(v['images'])}" for k, v in self.splits.items()])
         path_info = f"data_path={self.data_path}, " if self.data_path else ""
-        return (f"DataManager(\n"
-                f"  {path_info}\n"
-                f"  annotation_mode={self.original_annotation_mode},\n"
-                f"  num_classes={self.dataset_info['num_classes']},\n"
-                f"  splits={{{splits_info}}}\n"
-                f")")
+        return (
+            f"DataManager(\n"
+            f"  {path_info}\n"
+            f"  annotation_mode={self.original_annotation_mode},\n"
+            f"  num_classes={self.dataset_info['num_classes']},\n"
+            f"  splits={{{splits_info}}}\n"
+            f")"
+        )

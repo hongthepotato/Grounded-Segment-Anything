@@ -1,0 +1,178 @@
+"""
+Unit tests for ml_engine.agent.skills.
+
+Tests Skill, SkillLoader, _parse_skill_file.
+Uses a temporary skills directory -- does not depend on configs/agent/skills/.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from ml_engine.agent.skills import Skill, SkillLoader, _parse_skill_file
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def skills_dir(tmp_path):
+    return tmp_path / "skills"
+
+
+@pytest.fixture
+def loader(skills_dir):
+    skills_dir.mkdir()
+    return SkillLoader(skills_dir=skills_dir)
+
+
+def write_skill(skills_dir: Path, name: str, content: str) -> Path:
+    p = skills_dir / f"{name}.md"
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+# ---------------------------------------------------------------------------
+# _parse_skill_file
+# ---------------------------------------------------------------------------
+
+
+class TestParseSkillFile:
+    r"""Tests parsing of the ---frontmatter---\n\nbody format into Skill objects."""
+
+    def test_parses_frontmatter_and_body(self):
+        r"""Test that frontmatter fields are parsed and body is extracted."""
+        raw = "---\ndescription: Train the teacher model\ntools: [dispatch_stage]\n---\n\nThis is the body."
+        skill = _parse_skill_file("teacher_training", raw)
+        assert skill.description == "Train the teacher model"
+        assert "dispatch_stage" in skill.tools
+        assert "This is the body." in skill.prompt
+
+    def test_no_frontmatter(self):
+        r"""If no frontmatter, entire content is body and other fields are default."""
+        raw = "Just a plain body with no frontmatter."
+        skill = _parse_skill_file("auto_label", raw)
+        assert skill.description == ""
+        assert skill.tools == []
+        assert "plain body" in skill.prompt
+
+    def test_empty_frontmatter(self):
+        r"""If frontmatter is empty, treat as no frontmatter."""
+        raw = "---\n---\n\nBody here."
+        skill = _parse_skill_file("stage", raw)
+        assert skill.description == ""
+        assert "Body here." in skill.prompt
+
+    def test_name_set_correctly(self):
+        r"""The skill name should be set to the provided name argument."""
+        raw = "---\ndescription: test\n---\nbody"
+        skill = _parse_skill_file("my_stage", raw)
+        assert skill.name == "my_stage"
+
+    def test_meta_contains_all_frontmatter_fields(self):
+        r"""All frontmatter fields should be in the meta dict, even if not used for description/tools."""
+        raw = "---\ndescription: X\ntools: [a, b]\ncustom_field: 42\n---\nbody"
+        skill = _parse_skill_file("s", raw)
+        assert skill.meta["custom_field"] == 42
+
+    def test_tools_defaults_to_empty_list(self):
+        r"""If tools field is missing in frontmatter, should default to empty list."""
+        raw = "---\ndescription: no tools here\n---\nbody"
+        skill = _parse_skill_file("s", raw)
+        assert skill.tools == []
+
+    def test_incomplete_frontmatter_fence(self):
+        r"""Only one --- delimiter: treat whole content as body."""
+        raw = "--- only one fence\nsome content"
+        skill = _parse_skill_file("s", raw)
+        assert skill.description == ""
+
+
+# ---------------------------------------------------------------------------
+# Skill.to_system_prompt
+# ---------------------------------------------------------------------------
+
+
+class TestSkillToSystemPrompt:
+    r"""Skill.to_system_prompt includes the stage name, description, and prompt body."""
+
+    def test_includes_stage_name(self):
+        r"""The system prompt should include the stage name as a header."""
+        skill = Skill(
+            name="teacher_training",
+            description="Train DINO",
+            tools=["dispatch_stage"],
+            meta={},
+            prompt="Use LoRA for fine-tuning.",
+        )
+        prompt = skill.to_system_prompt()
+        assert "teacher_training" in prompt
+
+    def test_includes_description(self):
+        r"""The system prompt should include the stage description."""
+        skill = Skill(name="s", description="Do X", tools=[], meta={}, prompt="body")
+        prompt = skill.to_system_prompt()
+        assert "Do X" in prompt
+
+    def test_includes_prompt_body(self):
+        r"""The system prompt should include the strategy prompt body."""
+        skill = Skill(name="s", description="", tools=[], meta={}, prompt="Focus on mAP50.")
+        prompt = skill.to_system_prompt()
+        assert "Focus on mAP50." in prompt
+
+
+# ---------------------------------------------------------------------------
+# SkillLoader.load
+# ---------------------------------------------------------------------------
+
+
+class TestSkillLoaderLoad:
+    r"""Tests loading of skill files from disk, caching behavior, and error handling."""
+
+    def test_loads_skill_from_file(self, loader, skills_dir):
+        r"""Test that a skill file can be loaded and parsed into a Skill object."""
+        write_skill(
+            skills_dir,
+            "teacher_training",
+            "---\ndescription: Teach\ntools: [dispatch_stage]\n---\nTrain the model.",
+        )
+        skill = loader.load("teacher_training")
+        assert skill.name == "teacher_training"
+        assert skill.description == "Teach"
+        assert "Train the model." in skill.prompt
+
+    def test_raises_file_not_found_for_unknown_stage(self, loader):
+        r"""If no skill file exists for the requested stage, should raise FileNotFoundError."""
+        with pytest.raises(FileNotFoundError, match="No skill file"):
+            loader.load("nonexistent_stage")
+
+    def test_cache_returns_same_object(self, loader, skills_dir):
+        r"""Loading the same stage multiple times should return the same Skill object from cache."""
+        write_skill(skills_dir, "auto_label", "---\ndescription: Label\n---\nbody")
+        skill1 = loader.load("auto_label")
+        skill2 = loader.load("auto_label")
+        assert skill1 is skill2
+
+    def test_available_lists_skill_names(self, loader, skills_dir):
+        r"""The available() method should return the names of all skill files in the directory."""
+        write_skill(skills_dir, "stage_a", "body a")
+        write_skill(skills_dir, "stage_b", "body b")
+        available = loader.available()
+        assert "stage_a" in available
+        assert "stage_b" in available
+
+    def test_available_empty_when_no_files(self, loader):
+        r"""If no skill files are present, available() should return an empty list."""
+        assert loader.available() == []
+
+    def test_loads_multiple_stages_independently(self, loader, skills_dir):
+        r"""Loading different stages should return different Skill objects with their own content."""
+        write_skill(skills_dir, "stage_x", "---\ndescription: X\n---\nX body")
+        write_skill(skills_dir, "stage_y", "---\ndescription: Y\n---\nY body")
+        sx = loader.load("stage_x")
+        sy = loader.load("stage_y")
+        assert sx.description == "X"
+        assert sy.description == "Y"

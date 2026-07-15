@@ -26,6 +26,7 @@ Usage:
     worker.run()  # Blocks until shutdown
 """
 
+import json
 import os
 import signal
 import socket
@@ -33,26 +34,32 @@ import time
 import traceback
 import uuid
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-from ml_engine.jobs.models import Job, JobStatus, JobProgress, WorkerInfo
+from ml_engine.jobs.models import Job, JobOutcome, JobProgress, JobStatus, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
-from ml_engine.jobs.subprocess_runner import TrainingSubprocess
 
-from core.logging_config import configure_logging, get_logger
+# Agent Stream key pattern -- mirrors ml_engine/agent/loop.py (no import to avoid circular dep).
+# E402 suppressed on the imports below: this constant is intentionally placed
+# between import groups to document the shadow-import relationship with
+# agent/loop.py at the source of definition. Reordering would lose that signal.
+_AGENT_STREAM_KEY = "agent:{run_id}:events"
+from core.logging_config import configure_logging, get_logger  # noqa: E402
+from ml_engine.jobs.subprocess_runner import TrainingSubprocess  # noqa: E402
+
 logger = get_logger(__name__)
 
 
 class TrainingWorker:
     """
     Worker that polls Redis queue and executes training jobs in subprocesses.
-    
+
     Key Features:
     - Training runs in isolated subprocess (not in worker process)
     - Cancel = kill subprocess = 100% reliable resource cleanup
     - Worker stays lightweight (only scheduling logic)
     - Heartbeat for worker health monitoring
-    
+
     Example:
         >>> worker = TrainingWorker(redis_url="redis://localhost:6379")
         >>> worker.run()  # Blocks until SIGTERM/SIGINT
@@ -71,7 +78,7 @@ class TrainingWorker:
         self,
         redis_url: str = "redis://localhost:6379",
         gpu_id: int = 0,
-        worker_id: Optional[str] = None
+        worker_id: Optional[str] = None,
     ):
         """
         Initialize worker.
@@ -95,10 +102,7 @@ class TrainingWorker:
 
         # Worker info
         self.worker_info = WorkerInfo(
-            id=self.worker_id,
-            gpu_id=gpu_id,
-            hostname=socket.gethostname(),
-            status="idle"
+            id=self.worker_id, gpu_id=gpu_id, hostname=socket.gethostname(), status="idle"
         )
 
         # Setup signal handlers
@@ -120,7 +124,7 @@ class TrainingWorker:
     def run(self):
         """
         Main worker loop.
-        
+
         Polls Redis queue for jobs and executes them in subprocesses.
         Blocks until shutdown signal received.
         """
@@ -192,19 +196,26 @@ class TrainingWorker:
             status=JobStatus.RUNNING,
             started_at=datetime.now(),
             worker_id=self.worker_id,
-            output_dir=job.output_dir
+            output_dir=job.output_dir,
         )
 
         # Update worker status
         self.store.update_worker_status(self.worker_id, "busy", job.id)
 
         # Publish job started event
-        self.store.publish_event(job.id, {
-            "type": "job_started",
-            "job_id": job.id,
-            "worker_id": self.worker_id,
-            "timestamp": datetime.now().isoformat()
-        })
+        self.store.publish_event(
+            job.id,
+            {
+                "type": "job_started",
+                "job_id": job.id,
+                "run_id": job.run_id,
+                "worker_id": self.worker_id,
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+
+        # Inject job_id so handlers (e.g. distillation) can use it for image naming
+        job.config["job_id"] = job.id
 
         # Create and start subprocess
         subprocess_runner = TrainingSubprocess(
@@ -212,7 +223,7 @@ class TrainingWorker:
             job_type=job.type,
             job_config=job.config,
             output_dir=job.output_dir,
-            gpu_id=self.gpu_id
+            gpu_id=self.gpu_id,
         )
         self.current_subprocess = subprocess_runner
 
@@ -223,7 +234,7 @@ class TrainingWorker:
             # Get result
             result = subprocess_runner.get_result()
             if result.success:
-                self._complete_job(job, result.output_dir)
+                self._complete_job(job, result)
             elif result.cancelled:
                 self._cancel_job(job)
             else:
@@ -249,11 +260,11 @@ class TrainingWorker:
     def _monitor_subprocess(self, job: Job, subprocess_runner: TrainingSubprocess):
         """
         Monitor running subprocess.
-        
+
         - Forward progress updates to Redis
         - Check for cancellation requests
         - Update heartbeat
-        
+
         Args:
             job: The job being executed
             subprocess_runner: The subprocess wrapper
@@ -304,7 +315,7 @@ class TrainingWorker:
     def _forward_progress(self, job_id: str, progress_info: Dict[str, Any]):
         """
         Forward progress update from subprocess to Redis.
-        
+
         Args:
             job_id: Job ID
             progress_info: Progress information from subprocess
@@ -316,40 +327,91 @@ class TrainingWorker:
             current_step=progress_info.get("current_step", 0),
             total_steps=progress_info.get("total_steps", 0),
             metrics=progress_info.get("metrics", progress_info.get("train_metrics", {})),
-            message=progress_info.get("message", "")
+            message=progress_info.get("message", ""),
         )
 
         # Update job progress in Redis
         self.store.update_job(job_id, progress=progress)
 
         # Publish progress event
-        self.store.publish_event(job_id, {
-            "type": "progress",
-            "job_id": job_id,
-            "progress": progress.to_dict(),
-            "timestamp": datetime.now().isoformat()
-        })
-
-        logger.debug("Progress: epoch %d/%d, step %d/%d",
-                    progress.current_epoch, progress.total_epochs,
-                    progress.current_step, progress.total_steps)
-
-    def _complete_job(self, job: Job, output_dir: Optional[str] = None):
-        """Mark job as completed."""
-        logger.info("Job %s completed successfully", job.id[:8])
-
-        self.store.update_job(
-            job.id,
-            status=JobStatus.COMPLETED,
-            finished_at=datetime.now()
+        self.store.publish_event(
+            job_id,
+            {
+                "type": "progress",
+                "job_id": job_id,
+                "progress": progress.to_dict(),
+                "timestamp": datetime.now().isoformat(),
+            },
         )
 
-        self.store.publish_event(job.id, {
+        logger.debug(
+            "Progress: epoch %d/%d, step %d/%d",
+            progress.current_epoch,
+            progress.total_epochs,
+            progress.current_step,
+            progress.total_steps,
+        )
+
+    def _publish_to_agent_stream(self, job: Job, event: Dict[str, Any]) -> None:
+        """
+        Forward a terminal job event to the pipeline-level agent Stream.
+
+        This is the bridge between the job layer (pub/sub on job:{id}:events)
+        and the agent layer (Redis Streams on agent:{run_id}:events). Without
+        this, the Coordinator's AgentLoop never learns that a job finished.
+
+        Only publishes when the agent Stream already exists (i.e., when a
+        Coordinator has been started for this run_id). Harmless no-op otherwise.
+        """
+        stream_key = _AGENT_STREAM_KEY.format(run_id=job.run_id)
+        try:
+            # Only publish if the stream already exists (coordinator is active)
+            if self.store.redis.exists(stream_key):
+                self.store.redis.xadd(stream_key, {"data": json.dumps(event)})
+                logger.debug("Forwarded %s to agent stream %s", event.get("type"), stream_key)
+        except Exception as e:
+            # Non-fatal -- job layer continues regardless of agent layer health
+            logger.warning("Failed to forward event to agent stream: %s", e)
+
+    def _complete_job(self, job: Job, result) -> None:
+        """Mark job as completed and persist structured outcome (incl. ros2_image_tag)."""
+        logger.info("Job %s completed successfully", job.id[:8])
+
+        outcome = JobOutcome.from_dict(result.outcome) if result.outcome else JobOutcome()
+        output_dir = result.output_dir or job.output_dir
+
+        update_kwargs: Dict[str, Any] = {
+            "status": JobStatus.COMPLETED,
+            "finished_at": datetime.now(),
+            "outcome": outcome.to_dict(),
+        }
+
+        # Persist ros2_image_tag written by container_builder to output_dir/image_tag.txt
+        if output_dir:
+            from pathlib import Path as _Path
+
+            tag_file = _Path(output_dir) / "image_tag.txt"
+            if tag_file.exists():
+                try:
+                    update_kwargs["ros2_image_tag"] = tag_file.read_text().strip()
+                    logger.info(
+                        "Persisted ros2_image_tag for job %s: %s", job.id[:8], update_kwargs["ros2_image_tag"]
+                    )
+                except Exception as e:
+                    logger.warning("Could not read image_tag.txt: %s", e)
+
+        self.store.update_job(job.id, **update_kwargs)
+
+        event = {
             "type": "job_completed",
             "job_id": job.id,
-            "output_dir": output_dir or job.output_dir,
-            "timestamp": datetime.now().isoformat()
-        })
+            "run_id": job.run_id,
+            "output_dir": output_dir,
+            "outcome": outcome.to_dict(),
+            "timestamp": datetime.now().isoformat(),
+        }
+        self.store.publish_event(job.id, event)
+        self._publish_to_agent_stream(job, event)
 
     def _cancel_job(self, job: Job):
         """Mark job as cancelled."""
@@ -358,14 +420,17 @@ class TrainingWorker:
         self.store.update_job(
             job.id,
             status=JobStatus.CANCELLED,
-            finished_at=datetime.now()
+            finished_at=datetime.now(),
         )
 
-        self.store.publish_event(job.id, {
+        event = {
             "type": "job_cancelled",
             "job_id": job.id,
-            "timestamp": datetime.now().isoformat()
-        })
+            "run_id": job.run_id,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self.store.publish_event(job.id, event)
+        self._publish_to_agent_stream(job, event)
 
     def _fail_job(self, job: Job, error_message: str):
         """Mark job as failed with error message."""
@@ -375,15 +440,18 @@ class TrainingWorker:
             job.id,
             status=JobStatus.FAILED,
             finished_at=datetime.now(),
-            error_message=error_message
+            error_message=error_message,
         )
 
-        self.store.publish_event(job.id, {
+        event = {
             "type": "job_failed",
             "job_id": job.id,
+            "run_id": job.run_id,
             "error": error_message,
-            "timestamp": datetime.now().isoformat()
-        })
+            "timestamp": datetime.now().isoformat(),
+        }
+        self.store.publish_event(job.id, event)
+        self._publish_to_agent_stream(job, event)
 
 
 def main():
@@ -392,20 +460,20 @@ def main():
     import multiprocessing as mp
 
     try:
-        mp.set_start_method('spawn', force=True)
+        mp.set_start_method("spawn", force=True)
     except RuntimeError:
         pass  # Already set
 
     parser = argparse.ArgumentParser(description="Training Worker")
-    parser.add_argument("--redis-url", default="redis://localhost:6379",
-                       help="Redis connection URL")
-    parser.add_argument("--gpu", type=int, default=0,
-                       help="GPU device ID")
-    parser.add_argument("--worker-id", default=None,
-                       help="Worker ID (auto-generated if not provided)")
-    parser.add_argument("--log-level", default="INFO",
-                       choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-                       help="Log level")
+    parser.add_argument("--redis-url", default="redis://localhost:6379", help="Redis connection URL")
+    parser.add_argument("--gpu", type=int, default=0, help="GPU device ID")
+    parser.add_argument("--worker-id", default=None, help="Worker ID (auto-generated if not provided)")
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level",
+    )
     args = parser.parse_args()
 
     # Setup logging using centralized configuration
@@ -414,11 +482,7 @@ def main():
     configure_logging()
 
     # Create and run worker
-    worker = TrainingWorker(
-        redis_url=args.redis_url,
-        gpu_id=args.gpu,
-        worker_id=args.worker_id
-    )
+    worker = TrainingWorker(redis_url=args.redis_url, gpu_id=args.gpu, worker_id=args.worker_id)
     worker.run()
 
 

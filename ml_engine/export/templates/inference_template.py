@@ -7,13 +7,13 @@ This script runs object detection using your fine-tuned Grounding DINO model.
 Usage:
     # Basic usage (uses default classes from training)
     python inference.py --image photo.jpg
-    
+
     # Custom text prompt
     python inference.py --image photo.jpg --text "dog . cat . person"
-    
+
     # Adjust confidence threshold
     python inference.py --image photo.jpg --threshold 0.5
-    
+
     # Process multiple images
     python inference.py --image_dir ./images --output_dir ./results
 
@@ -26,10 +26,11 @@ For more information, see README.md
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
+import numpy as np
 import torch
 from PIL import Image
-import numpy as np
 
 # Add GroundingDINO to path if needed
 SCRIPT_DIR = Path(__file__).parent
@@ -40,14 +41,14 @@ if GROUNDINGDINO_PATH.exists():
 
 def load_model(checkpoint_path: str, device: str = "cuda"):
     """Load the fine-tuned Grounding DINO model."""
-    from groundingdino.util.slconfig import SLConfig
     from groundingdino.models import build_model
+    from groundingdino.util.slconfig import SLConfig
 
     # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
 
     # Get class names from checkpoint
-    class_names = checkpoint.get('class_names', [])
+    class_names = checkpoint.get("class_names", [])
 
     # Build model from config
     config_path = SCRIPT_DIR / "GroundingDINO" / "groundingdino" / "config" / "GroundingDINO_SwinT_OGC.py"
@@ -66,11 +67,11 @@ def load_model(checkpoint_path: str, device: str = "cuda"):
         args.bert_base_uncased_path = str(bert_path)
 
     model = build_model(args)
-    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
     model = model.to(device)
     model.eval()
 
-    print(f"Model loaded successfully!")
+    print("Model loaded successfully!")
     print(f"Trained classes: {', '.join(class_names)}")
 
     return model, class_names
@@ -90,7 +91,7 @@ def predict(
     text_prompt: str,
     box_threshold: float = 0.3,
     text_threshold: float = 0.25,
-    device: str = "cuda"
+    device: str = "cuda",
 ):
     """Run inference and get predictions."""
     from groundingdino.util.inference import predict as gdino_predict
@@ -101,7 +102,7 @@ def predict(
         caption=text_prompt,
         box_threshold=box_threshold,
         text_threshold=text_threshold,
-        device=device
+        device=device,
     )
 
     return boxes, logits, phrases
@@ -112,17 +113,12 @@ def visualize_results(
     boxes: torch.Tensor,
     logits: torch.Tensor,
     phrases: list,
-    output_path: str = None
+    output_path: Optional[str] = None,
 ):
     """Visualize detection results on image."""
     from groundingdino.util.inference import annotate
 
-    annotated = annotate(
-        image_source=image_source,
-        boxes=boxes,
-        logits=logits,
-        phrases=phrases
-    )
+    annotated = annotate(image_source=image_source, boxes=boxes, logits=logits, phrases=phrases)
 
     # Convert BGR to RGB
     annotated_rgb = annotated[:, :, ::-1]
@@ -139,53 +135,41 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run Grounding DINO inference on images",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
-    parser.add_argument(
-        "--image", 
-        type=str, 
-        help="Path to input image"
-    )
-    parser.add_argument(
-        "--image_dir",
-        type=str,
-        help="Directory containing images to process"
-    )
+    parser.add_argument("--image", type=str, help="Path to input image")
+    parser.add_argument("--image_dir", type=str, help="Directory containing images to process")
     parser.add_argument(
         "--output_dir",
         type=str,
         default="./outputs",
-        help="Directory to save results (default: ./outputs)"
+        help="Directory to save results (default: ./outputs)",
     )
     parser.add_argument(
         "--text",
         type=str,
         default=None,
-        help="Text prompt (e.g., 'dog . cat . person'). If not provided, uses trained classes."
+        help="Text prompt (e.g., 'dog . cat . person'). If not provided, uses trained classes.",
     )
     parser.add_argument(
         "--threshold",
         type=float,
         default=0.3,
-        help="Confidence threshold for detections (default: 0.3)"
+        help="Confidence threshold for detections (default: 0.3)",
     )
     parser.add_argument(
         "--model",
         type=str,
         default="merged_model.pth",
-        help="Path to model checkpoint (default: merged_model.pth)"
+        help="Path to model checkpoint (default: merged_model.pth)",
     )
     parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device to run inference on (default: cuda if available)"
+        help="Device to run inference on (default: cuda if available)",
     )
-    parser.add_argument(
-        "--no_visualize",
-        action="store_true",
-        help="Skip visualization, only print results"
-    )
+    parser.add_argument("--no_visualize", action="store_true", help="Skip visualization, only print results")
 
     args = parser.parse_args()
 
@@ -237,7 +221,7 @@ def main():
 
     # Process each image
     for image_path in images:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Processing: {image_path}")
 
         try:
@@ -250,13 +234,13 @@ def main():
                 image_tensor=image_tensor,
                 text_prompt=text_prompt,
                 box_threshold=args.threshold,
-                device=args.device
+                device=args.device,
             )
 
             # Print results
             print(f"Found {len(boxes)} detections:")
             for i, (box, score, phrase) in enumerate(zip(boxes, logits, phrases)):
-                print(f"  [{i+1}] {phrase}: {score:.3f} at {box.tolist()}")
+                print(f"  [{i + 1}] {phrase}: {score:.3f} at {box.tolist()}")
 
             # Visualize
             if not args.no_visualize and len(boxes) > 0:
@@ -266,14 +250,14 @@ def main():
                     boxes=boxes,
                     logits=logits,
                     phrases=phrases,
-                    output_path=str(output_path)
+                    output_path=str(output_path),
                 )
 
         except Exception as e:
             print(f"Error processing {image_path}: {e}")
             continue
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Done! Results saved to: {output_dir}")
 
 

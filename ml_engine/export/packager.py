@@ -13,7 +13,7 @@ import shutil
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from torch import nn
 
@@ -30,7 +30,7 @@ def create_export_package(
     output_dir: Path,
     class_names: List[str],
     model_name: str = "grounding_dino",
-    training_info: Optional[Dict[str, Any]] = None
+    training_info: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
     Create a downloadable ZIP package with merged model weights and docs.
@@ -45,6 +45,19 @@ def create_export_package(
     Returns:
         Path to the created ZIP file
     """
+    # Validate class_names contain no embedded newlines/carriage returns.
+    # class_names.txt is newline-delimited, so a class name with '\n' would
+    # silently split into two entries on read-back — silent data corruption.
+    # Reject at the boundary instead of corrupting downstream artifacts.
+    for i, name in enumerate(class_names):
+        if "\n" in name or "\r" in name:
+            raise ValueError(
+                f"class_names[{i}]={name!r} contains a newline or carriage "
+                f"return character; class_names.txt is newline-delimited so "
+                f"embedded newlines would corrupt the round-trip. Strip or "
+                f"replace newlines in class names before calling."
+            )
+
     output_dir = Path(output_dir)
     exports_dir = output_dir / "exports"
     exports_dir.mkdir(parents=True, exist_ok=True)
@@ -54,56 +67,61 @@ def create_export_package(
         shutil.rmtree(package_dir)
     package_dir.mkdir(parents=True)
 
-    logger.info("Creating %s export package in: %s", model_name, package_dir)
+    try:
+        logger.info("Creating %s export package in: %s", model_name, package_dir)
 
-    logger.info("Step 1/4: Merging LoRA weights...")
-    merged_model = merge_lora_weights(model)
+        logger.info("Step 1/4: Merging LoRA weights...")
+        merged_model = merge_lora_weights(model)
 
-    model_path = package_dir / "merged_model.pth"
-    save_merged_model(
-        model=merged_model,
-        output_path=model_path,
-        class_names=class_names,
-        extra_metadata=training_info,
-        model_name=model_name,
-    )
+        model_path = package_dir / "merged_model.pth"
+        save_merged_model(
+            model=merged_model,
+            output_path=model_path,
+            class_names=class_names,
+            training_info=training_info,
+            model_name=model_name,
+        )
 
-    logger.info("Step 2/4: Adding inference script...")
-    template_name = f"{model_name}_inference_template.py"
-    inference_template = TEMPLATES_DIR / template_name
-    if not inference_template.exists():
-        inference_template = TEMPLATES_DIR / "inference_template.py"
-    if inference_template.exists():
-        shutil.copy(inference_template, package_dir / "inference.py")
-    else:
-        _create_minimal_inference_script(package_dir / "inference.py", model_name)
+        logger.info("Step 2/4: Adding inference script...")
+        template_name = f"{model_name}_inference_template.py"
+        inference_template = TEMPLATES_DIR / template_name
+        if not inference_template.exists():
+            inference_template = TEMPLATES_DIR / "inference_template.py"
+        if inference_template.exists():
+            shutil.copy(inference_template, package_dir / "inference.py")
+        else:
+            _create_minimal_inference_script(package_dir / "inference.py", model_name)
 
-    logger.info("Step 3/4: Generating README...")
-    _create_readme(
-        output_path=package_dir / "README.md",
-        class_names=class_names,
-        training_info=training_info,
-        model_name=model_name,
-    )
+        logger.info("Step 3/4: Generating README...")
+        _create_readme(
+            output_path=package_dir / "README.md",
+            class_names=class_names,
+            training_info=training_info,
+            model_name=model_name,
+        )
 
-    logger.info("Step 4/4: Saving class names...")
-    with open(package_dir / "class_names.txt", "w", encoding="utf-8") as f:
-        f.write("\n".join(class_names))
+        logger.info("Step 4/4: Saving class names...")
+        with open(package_dir / "class_names.txt", "w", encoding="utf-8") as f:
+            f.write("\n".join(class_names))
 
-    zip_path = exports_dir / f"{model_name}_package.zip"
-    logger.info("Creating ZIP archive: %s", zip_path)
+        zip_path = exports_dir / f"{model_name}_package.zip"
+        logger.info("Creating ZIP archive: %s", zip_path)
 
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for file_path in package_dir.rglob("*"):
-            if file_path.is_file():
-                arcname = file_path.relative_to(package_dir)
-                zipf.write(file_path, arcname)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for file_path in package_dir.rglob("*"):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(package_dir)
+                    zipf.write(file_path, arcname)
 
-    zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
-    logger.info("Export package created: %s (%.1f MB)", zip_path, zip_size_mb)
+        zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
+        logger.info("Export package created: %s (%.1f MB)", zip_path, zip_size_mb)
 
-    shutil.rmtree(package_dir)
-    return zip_path
+        return zip_path
+    finally:
+        try:
+            shutil.rmtree(package_dir)
+        except Exception:
+            logger.warning("Failed to clean up temp package dir: %s", package_dir)
 
 
 def _create_readme(
@@ -130,8 +148,11 @@ def _create_readme(
         "{num_classes}": str(len(class_names)),
         "{training_date}": training_info.get("training_date", "N/A"),
         "{epochs}": str(training_info.get("epochs", "N/A")),
-        "{map50}": f"{training_info.get('mAP50', 0):.1%}" if training_info.get('mAP50') else "N/A",
-        "{miou}": f"{training_info.get('mIoU', 0):.1%}" if training_info.get('mIoU') else "N/A",
+        # Use `is not None` instead of truthiness so a genuinely-zero metric
+        # (catastrophic training failure: mAP50=0.0) renders as "0.0%" instead
+        # of being silently misrepresented as "N/A". Same fix for mIoU.
+        "{map50}": (f"{training_info['mAP50']:.1%}" if training_info.get("mAP50") is not None else "N/A"),
+        "{miou}": (f"{training_info['mIoU']:.1%}" if training_info.get("mIoU") is not None else "N/A"),
         "{generation_date}": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 

@@ -8,31 +8,36 @@ This module defines:
 - JobType: Supported job types
 """
 
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from enum import Enum
-from typing import Dict, Any, Optional, List
+from __future__ import annotations
+
 import json
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, ClassVar, Dict, List, Optional
 
 
 class JobStatus(str, Enum):
     """Job lifecycle states."""
-    PENDING = "pending"          # In queue, waiting to be picked up
-    RUNNING = "running"          # Currently executing on a worker
-    COMPLETED = "completed"      # Finished successfully
-    FAILED = "failed"            # Error occurred during execution
-    CANCELLED = "cancelled"      # User cancelled, job stopped
-    CANCELLING = "cancelling"    # Cancel requested, waiting for graceful stop
+
+    PENDING = "pending"  # In queue, waiting to be picked up
+    RUNNING = "running"  # Currently executing on a worker
+    COMPLETED = "completed"  # Finished successfully
+    FAILED = "failed"  # Error occurred during execution
+    CANCELLED = "cancelled"  # User cancelled, job stopped
+    CANCELLING = "cancelling"  # Cancel requested, waiting for graceful stop
 
 
 class JobType(str, Enum):
     """Supported job types."""
+
     TEACHER_TRAINING = "teacher_training"
     STUDENT_DISTILLATION = "student_distillation"
     MODEL_OPTIMIZATION = "model_optimization"
     EVALUATION = "evaluation"
     AUTO_LABEL = "auto_label"
+    EXPERIMENT_LOOP = "experiment_loop"
 
 
 @dataclass
@@ -48,6 +53,7 @@ class JobProgress:
         metrics: Latest training/validation metrics
         message: Optional status message
     """
+
     current_epoch: int = 0
     total_epochs: int = 0
     current_step: int = 0
@@ -77,7 +83,7 @@ class JobProgress:
             current_step=data.get("current_step", 0),
             total_steps=data.get("total_steps", 0),
             metrics=data.get("metrics", {}),
-            message=data.get("message", "")
+            message=data.get("message", ""),
         )
 
     @property
@@ -99,12 +105,75 @@ class JobProgress:
 
 
 @dataclass
+class JobOutcome:
+    """
+    Structured result of a completed job.
+
+    Written to {output_dir}/outcome.json at job completion.
+    Included in the job_completed event so the Coordinator
+    can read metrics and artifact paths without touching the filesystem.
+
+    Attributes:
+        status: Terminal status ("completed", "failed", "cancelled")
+        metrics: Final validation metrics from training (e.g. val_mAP50)
+        artifacts: Paths to produced files, keyed by role (e.g. "checkpoint", "eval_report")
+        wall_time_seconds: Elapsed time from job start to finish
+        error_message: Set only when status is "failed"
+        extra: Handler-specific extension data serialized inline. Use sparingly —
+               only for fields a specific job type needs to forward to the coordinator
+               (e.g. experiment_result for experiment_loop jobs).
+    """
+
+    status: str = "completed"
+    metrics: Dict[str, float] = field(default_factory=dict)
+    artifacts: Dict[str, str] = field(default_factory=dict)
+    wall_time_seconds: float = 0.0
+    error_message: Optional[str] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    _KNOWN_KEYS: ClassVar[frozenset] = frozenset(
+        {"status", "metrics", "artifacts", "wall_time_seconds", "error_message"}
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization. Extra fields are merged inline."""
+        d = {
+            "status": self.status,
+            "metrics": self.metrics,
+            "artifacts": self.artifacts,
+            "wall_time_seconds": self.wall_time_seconds,
+            "error_message": self.error_message,
+        }
+        d.update(self.extra)
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "JobOutcome":
+        """Create from dictionary. Unknown keys are captured into extra."""
+        if not data:
+            return cls()
+        extra = {k: v for k, v in data.items() if k not in cls._KNOWN_KEYS}
+        return cls(
+            status=data.get("status", "completed"),
+            metrics=data.get("metrics", {}),
+            artifacts=data.get("artifacts", {}),
+            wall_time_seconds=float(data.get("wall_time_seconds", 0.0)),
+            error_message=data.get("error_message"),
+            extra=extra,
+        )
+
+
+@dataclass
 class Job:
     """
     Training job representation.
 
     Attributes:
         id: Unique job identifier (UUID)
+        run_id: Pipeline run identifier. For standalone jobs equals job.id.
+            When a Coordinator (Stage 1+) submits jobs as part of a pipeline,
+            all jobs in that pipeline share the same run_id. This is the key
+            the Coordinator uses to group jobs and route events.
         type: Job type (teacher_training, distillation, etc.)
         status: Current job status
         config: Training configuration dictionary
@@ -117,8 +186,14 @@ class Job:
         output_dir: Directory for job outputs (checkpoints, logs)
         priority: Job priority (higher = more urgent)
         tags: Optional tags for filtering/grouping
+        outcome: Structured result written at job completion (Stage 0+)
+        ros2_image_tag: Pushed image reference for the ROS2 inference container
+            built from this job's artifacts (set by container_builder; consumed
+            by the deploy-info endpoint and edge-device setup script).
     """
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    run_id: Optional[str] = None
     type: str = JobType.TEACHER_TRAINING.value
     status: JobStatus = JobStatus.PENDING
     config: Dict[str, Any] = field(default_factory=dict)
@@ -131,11 +206,20 @@ class Job:
     output_dir: Optional[str] = None
     priority: int = 0
     tags: List[str] = field(default_factory=list)
+    outcome: Optional[JobOutcome] = None
+    dispatch_event_id: Optional[str] = (
+        None  # Stream entry-id that enqueued this job; guards against duplicate dispatch on PEL recovery
+    )
+    ros2_image_tag: Optional[str] = None
 
     def __post_init__(self):
         """Set defaults after initialization."""
         if self.created_at is None:
             self.created_at = datetime.now()
+        # Standalone jobs are their own pipeline.
+        # The Coordinator overrides run_id when submitting pipeline jobs.
+        if self.run_id is None:
+            self.run_id = self.id
         # Note: output_dir is intentionally left as-is (None or user-provided base path)
         # The worker will build the full path with job-specific subdirectory
         # Convert status string to enum if needed
@@ -145,11 +229,12 @@ class Job:
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert to dictionary for Redis storage.
-        
+
         Handles datetime serialization and nested objects.
         """
         return {
             "id": self.id,
+            "run_id": self.run_id or self.id,
             "type": self.type,
             "status": self.status.value if isinstance(self.status, JobStatus) else self.status,
             "config": json.dumps(self.config),
@@ -162,20 +247,24 @@ class Job:
             "output_dir": self.output_dir or "",
             "priority": str(self.priority),
             "tags": json.dumps(self.tags),
+            "outcome": json.dumps(self.outcome.to_dict() if self.outcome else None),
+            "dispatch_event_id": self.dispatch_event_id or "",
+            "ros2_image_tag": self.ros2_image_tag or "",
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Job":
+    def from_dict(cls, data: Dict[str, Any]) -> Job:
         """
         Create Job from dictionary (Redis hash).
-        
+
         Handles deserialization of JSON fields and datetimes.
         """
         # Handle bytes from Redis
         if data and isinstance(list(data.values())[0], bytes):
-            data = {k.decode() if isinstance(k, bytes) else k: 
-                    v.decode() if isinstance(v, bytes) else v 
-                    for k, v in data.items()}
+            data = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in data.items()
+            }
 
         # Parse JSON fields
         config = data.get("config", "{}")
@@ -195,6 +284,13 @@ class Job:
         else:
             tags = tags_str or []
 
+        outcome_str = data.get("outcome", "null")
+        if isinstance(outcome_str, str):
+            outcome_data = json.loads(outcome_str) if outcome_str and outcome_str != "null" else None
+        else:
+            outcome_data = outcome_str
+        outcome = JobOutcome.from_dict(outcome_data) if outcome_data else None
+
         # Parse datetimes
         def parse_datetime(value: str) -> Optional[datetime]:
             if not value or value == "":
@@ -211,8 +307,10 @@ class Job:
         except (ValueError, TypeError):
             priority = 0
 
+        job_id = data.get("id", str(uuid.uuid4()))
         return cls(
-            id=data.get("id", str(uuid.uuid4())),
+            id=job_id,
+            run_id=data.get("run_id") or job_id,
             type=data.get("type", JobType.TEACHER_TRAINING.value),
             status=JobStatus(data.get("status", JobStatus.PENDING.value)),
             config=config,
@@ -225,17 +323,15 @@ class Job:
             output_dir=data.get("output_dir") or None,
             priority=priority,
             tags=tags,
+            outcome=outcome,
+            dispatch_event_id=data.get("dispatch_event_id") or None,
+            ros2_image_tag=data.get("ros2_image_tag") or None,
         )
 
     @property
     def is_terminal(self) -> bool:
         """Check if job is in a terminal state (won't change)."""
         return self.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]
-
-    @property
-    def is_active(self) -> bool:
-        """Check if job is currently active (running or cancelling)."""
-        return self.status in [JobStatus.RUNNING, JobStatus.CANCELLING]
 
     @property
     def duration_seconds(self) -> Optional[float]:
@@ -263,6 +359,7 @@ class WorkerInfo:
         last_heartbeat: Last heartbeat timestamp
         started_at: When worker started
     """
+
     id: str
     gpu_id: int = 0
     hostname: str = ""
@@ -273,9 +370,9 @@ class WorkerInfo:
 
     def __post_init__(self):
         if self.last_heartbeat is None:
-            self.last_heartbeat = datetime.now()
+            self.last_heartbeat = datetime.now(timezone.utc)
         if self.started_at is None:
-            self.started_at = datetime.now()
+            self.started_at = datetime.now(timezone.utc)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for Redis storage."""
@@ -294,9 +391,10 @@ class WorkerInfo:
         """Create from dictionary."""
         # Handle bytes from Redis
         if data and isinstance(list(data.values())[0], bytes):
-            data = {k.decode() if isinstance(k, bytes) else k: 
-                    v.decode() if isinstance(v, bytes) else v 
-                    for k, v in data.items()}
+            data = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in data.items()
+            }
 
         def parse_datetime(value: str) -> Optional[datetime]:
             if not value:

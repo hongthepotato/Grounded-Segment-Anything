@@ -9,10 +9,23 @@ training_dynamics:
     norm_type: 2.0       # L2 norm
     error_if_nonfinite: true  # Stop training if NaN/Inf gradients
   
-  # Mixed precision training (FP16)
+  # Gradient accumulation: accumulate N micro-batches before each optimizer step.
+  # Effective batch = batch_size × steps with zero extra VRAM cost.
+  # Set steps > 1 when GPU memory limits physical batch_size (e.g. steps: 8 → 8× effective batch).
+  gradient_accumulation:
+    steps: 1
+
+  # Mixed precision training (AMP)
+  #   dtype: "bfloat16" (preferred on Ampere+/Ada) or "float16" (older GPUs: V100, T4).
+  #   bfloat16 has FP32's exponent range, so small values (focal-loss epsilons,
+  #   gradients) don't underflow — no GradScaler needed.
+  #   The init_scale/growth_factor/backoff_factor/growth_interval fields below
+  #   apply ONLY when dtype == "float16". They are ignored for bfloat16.
   mixed_precision:
     enabled: true
     backend: "amp"       # PyTorch Automatic Mixed Precision
+    dtype: "bfloat16"    # "bfloat16" | "float16"
+    # --- float16-only GradScaler parameters (ignored when dtype: "bfloat16") ---
     init_scale: 65536    # 2^16, initial loss scaling
     growth_factor: 2.0   # Scale multiplier when no overflow
     backoff_factor: 0.5  # Scale divisor when overflow detected

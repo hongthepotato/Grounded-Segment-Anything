@@ -12,19 +12,25 @@ Architecture:
     Worker Process (long-lived)
     └── TrainingSubprocess (short-lived, isolated)
         └── TeacherTrainer (GPU, DataLoaders, etc.)
-    
+
     Cancel job = kill subprocess = OS frees all resources automatically
 
 Usage:
     from ml_engine.jobs import JobManager, Job, JobStatus
-    
+
     manager = JobManager(redis_url="redis://localhost:6379")
     job = manager.submit_job(job_type="teacher_training", config={...})
     status = manager.get_job(job.id)
 """
 
-from ml_engine.jobs.models import Job, JobStatus, JobProgress, JobType, WorkerInfo
+from ml_engine.jobs.async_manager import (
+    AsyncJobManager,
+    close_async_job_managers,
+    get_async_job_manager,
+)
+from ml_engine.jobs.async_redis_store import AsyncRedisJobStore
 from ml_engine.jobs.manager import JobManager, get_job_manager
+from ml_engine.jobs.models import Job, JobProgress, JobStatus, JobType, WorkerInfo
 from ml_engine.jobs.redis_store import RedisJobStore
 from ml_engine.jobs.subprocess_runner import TrainingSubprocess
 
@@ -35,11 +41,16 @@ __all__ = [
     "JobProgress",
     "JobType",
     "WorkerInfo",
-    # Manager
+    # Sync manager (used by jobs/worker.py subprocess)
     "JobManager",
     "get_job_manager",
-    # Store
+    # Async manager (used by FastAPI routes, Coordinator, agent workers)
+    "AsyncJobManager",
+    "get_async_job_manager",
+    "close_async_job_managers",
+    # Stores
     "RedisJobStore",
+    "AsyncRedisJobStore",
     # Subprocess isolation
     "TrainingSubprocess",
 ]

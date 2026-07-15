@@ -12,13 +12,15 @@ from pathlib import Path
 from typing import Optional
 
 from .schemas import AdapterManifest
-from .validator import validate_bundle, validate_adapter, BUNDLE_MANIFEST_FILE
+from .validator import BUNDLE_MANIFEST_FILE, validate_adapter, validate_bundle
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ResolvedArtifacts:
     """Result of artifact resolution for a teacher_dir."""
+
     detector_adapter_dir: Optional[Path] = None
     detector_manifest: Optional[AdapterManifest] = None
     segmenter_adapter_dir: Optional[Path] = None

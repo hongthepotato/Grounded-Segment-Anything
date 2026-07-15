@@ -1,0 +1,21 @@
+# Force LF line endings for files that run inside Linux containers.
+# Without this, Git on Windows checks out CRLF which breaks bash scripts.
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.py        text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+*.toml      text eol=lf
+*.json      text eol=lf
+*.txt       text eol=lf
+
+# Binary files -- never convert
+*.pt        binary
+*.pth       binary
+*.onnx      binary
+*.jpg       binary
+*.jpeg      binary
+*.png       binary
+*.zip       binary

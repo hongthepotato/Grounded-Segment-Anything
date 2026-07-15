@@ -806,3 +806,118 @@ If you find this project helpful for your research, please consider citing the f
       primaryClass={cs.CV}
 }
 ```
+
+---
+
+## Continuous Integration
+
+This fork ships a GitHub Actions CI pipeline (`.github/workflows/ci.yml` and
+`.github/workflows/nightly.yml`). Runs on `ubuntu-24.04` CPU runners — no GPU
+required for PR-time checks.
+
+### Running the same checks locally
+
+```bash
+# The exact sequence CI runs, in the exact order
+make ci-local
+
+# Faster feedback: unit + integration + contract, skip slow + gpu
+make test
+
+# Just lint
+make lint
+
+# With coverage report (HTML at htmlcov/index.html)
+make coverage
+```
+
+### Pre-commit hooks (sub-second feedback on every commit)
+
+Pre-commit runs the same lint tools as CI, but locally against staged files
+before each `git commit`. Green here ≈ green in CI.
+
+One-time setup per machine:
+
+```bash
+# `dev` brings in pre-commit itself; `lint` brings in ruff + mypy so the
+# hooks can resolve them from .venv. `cpu` (or `gpu` if you have a GPU)
+# picks the torch variant — pre-commit hooks run `uv run --no-sync` so
+# the binaries must already be installed, not re-resolved per invocation.
+uv sync --extra dev --extra lint --extra cpu
+uv run pre-commit install    # wires up .git/hooks/pre-commit
+```
+
+After install, every `git commit` runs:
+- File hygiene: trailing whitespace, EOF newline, YAML/TOML validity, large
+  files, merge conflict markers, private key detection, stray `breakpoint()`
+- `ruff check` on staged `*.py` (no `--fix`; flags new violations only)
+- `ruff format --check` on staged `*.py`
+- `mypy` on staged files under `core/`, `ml_engine/`, `api/`
+
+Ad-hoc run against the whole repo (e.g., before opening a PR):
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Note: `ruff check --all-files` will report the ~3500-finding baseline.
+That's expected — baseline cleanup is tracked as a separate effort (see
+`TODOS.md`). Per-file cleanup happens naturally as pre-commit flags new
+violations when you touch a file.
+
+### CI jobs (runs on every push + PR into main/agentic)
+
+1. **lint** (~2 min) — `ruff check`, `ruff format --check`, `mypy`. Skips heavy deps. Fails fast.
+2. **unit** (~5 min warm / ~10 min cold) — `pytest tests/unit -n 4 --dist=loadscope`, coverage artifact.
+3. **contract** (~4 min warm) — `pytest tests/integration tests/contract`, coverage artifact.
+4. **coverage-gate** (~1 min) — combines coverage artifacts; fails if below `COVERAGE_MIN` env var in `ci.yml`.
+
+### Nightly (scheduled 06:00 UTC)
+
+- Full slow-test run (still CPU-only).
+- Docker smoke build (real CUDA arch list) via `docker buildx build --target=builder`. **No GPU required** — `nvcc` in the CUDA toolkit image compiles without one; the nightly catches extension-build regressions that PR CI skips.
+
+### Branch protection (admin action, one-time)
+
+Configure in repo Settings → Branches → Add rule:
+- Target branches: `main`, `agentic`
+- Require status checks to pass: **lint**, **unit**, **contract**, **coverage-gate** (all 4)
+- Require branches to be up to date before merging
+
+### Coverage ratchet
+
+`COVERAGE_MIN` is committed as a workflow-level env var in `ci.yml`. Starts at `0` on first green run (initialize by reading the measured value, committing it). Ratchets up via PR edits as coverage improves, targeting 70% over 4–8 weeks. A CI step enforces monotonic non-decrease between commits.
+
+### Torch variant selection: `--extra cpu` or `--extra gpu`
+
+`pyproject.toml` defines two mutually-exclusive extras that control which
+torch wheel gets installed:
+
+```bash
+# For GPU development (training, inference, everything that uses CUDA)
+uv sync --frozen --extra test --extra gpu
+
+# For CPU-only development (linting, fast iteration, laptop coding)
+uv sync --frozen --extra test --extra cpu
+```
+
+CI uses `--extra cpu`. The Dockerfile builder uses `--extra gpu`. Pick one
+or the other — uv enforces mutual exclusion via a `[tool.uv] conflicts`
+block, so trying to activate both simultaneously errors out cleanly.
+
+### Local CUDA toolchain caveat (GPU dev only)
+
+If your dev box has multiple CUDA toolkits installed (common when the apt `nvidia-cuda-toolkit` package coexists with `/usr/local/cuda-*` versions), `uv sync --extra gpu` can fail during GroundingDINO's extension compile with a version mismatch. Fix:
+
+```bash
+export CUDA_HOME=/usr/local/cuda-12.4
+export PATH=/usr/local/cuda-12.4/bin:$PATH
+uv sync --frozen --extra test --extra gpu
+```
+
+CI runners don't hit this — they have no CUDA at all, and they use `--extra cpu` so GroundingDINO's `setup.py` naturally takes the no-CUDA branch and the pure-PyTorch fallback in `ms_deform_attn.py` handles forward passes.
+
+### Test markers
+
+- `@pytest.mark.gpu` — test requires CUDA. Auto-skipped in CI by `tests/conftest.py` when `torch.cuda.is_available()` is False.
+- `@pytest.mark.slow` — slow test, excluded from PR CI, included in nightly.

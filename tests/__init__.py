@@ -10,6 +10,6 @@ Test organization:
 - conftest.py: Shared fixtures and test utilities
 """
 
-__version__ = '0.1.0'
+__version__ = "0.1.0"
 
 __all__ = []

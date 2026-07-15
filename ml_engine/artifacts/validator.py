@@ -10,8 +10,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from .errors import ArtifactNotFoundError, ArtifactCorruptedError, BaseAdapterMismatch
-from .schemas import AdapterManifest, BundleManifest, BaseModelRef
+from .errors import ArtifactCorruptedError, ArtifactNotFoundError, BaseAdapterMismatch
+from .schemas import AdapterManifest, BaseModelRef, BundleManifest
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +47,20 @@ def validate_adapter(
 
     if expected_base:
         if manifest_file.base_model.checkpoint_path != expected_base.checkpoint_path:
-            raise BaseAdapterMismatch(adapter_path, expected_base.checkpoint_path, manifest_file.base_model.checkpoint_path)
+            raise BaseAdapterMismatch(
+                adapter_path,
+                expected_base.checkpoint_path,
+                manifest_file.base_model.checkpoint_path,
+            )
         if manifest_file.base_model.model_type != expected_base.model_type:
-            raise BaseAdapterMismatch(adapter_path, expected_base.model_type, manifest_file.base_model.model_type)
+            raise BaseAdapterMismatch(
+                adapter_path, expected_base.model_type, manifest_file.base_model.model_type
+            )
         # if manifest_file.base_model.sha256 != expected_base.sha256:
         #     raise BaseAdapterMismatch(adapter_path, expected_base.sha256, manifest_file.base_model.sha256)
 
     return manifest_file
+
 
 def validate_bundle(bundle_path: Path) -> BundleManifest:
     """Validate a complete teacher training job production"""
@@ -76,8 +83,9 @@ def validate_bundle(bundle_path: Path) -> BundleManifest:
             abs_path = bundle_path / rel_path
             if not abs_path.exists():
                 raise ArtifactNotFoundError(abs_path)
-    
+
     return manifest_file
+
 
 def _compute_sha256(file_path: Path) -> str:
     """Compute SHA-256 hex digest of a file"""

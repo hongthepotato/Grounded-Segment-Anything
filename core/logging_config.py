@@ -11,11 +11,11 @@ Usage:
     # At entry points (API startup, CLI main, subprocess entry):
     from core.logging_config import configure_logging
     configure_logging()
-    
+
     # In any module:
     from core.logging_config import get_logger
     logger = get_logger(__name__)
-    
+
     # For training subprocesses (logs saved to experiment dir):
     from core.logging_config import get_job_logger
     logger = get_job_logger(job_id, output_dir)
@@ -33,13 +33,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from core.logging_formatters import TextFormatter, JSONFormatter, ColoredTextFormatter
-from core.constants import (
-    DEFAULT_LOG_LEVEL,
-    FORMAT_TYPE_TEXT,
-    FORMAT_TYPE_JSON,
-    DATE_FORMAT_STRING
-)
+from core.constants import DATE_FORMAT_STRING, DEFAULT_LOG_LEVEL, FORMAT_TYPE_JSON, FORMAT_TYPE_TEXT
+from core.logging_formatters import ColoredTextFormatter, JSONFormatter, TextFormatter
 
 # Track if logging has been configured
 _configured = False
@@ -49,33 +44,33 @@ def configure_logging(
     level: Optional[str] = None,
     format_type: Optional[str] = None,
     log_file: Optional[str] = None,
-    force: bool = False
+    force: bool = False,
 ) -> None:
     """
     Configure the root logger for the application.
-    
+
     Should be called once at application entry points:
     - API startup (lifespan)
     - CLI script main()
     - Subprocess entry point
-    
+
     Args:
-        level: Log level (DEBUG, INFO, WARNING, ERROR). 
+        level: Log level (DEBUG, INFO, WARNING, ERROR).
                Defaults to LOG_LEVEL env var or "INFO".
         format_type: Output format ("text" or "json").
                     Defaults to LOG_FORMAT env var or "text".
-        log_file: Optional path to log file. 
+        log_file: Optional path to log file.
                  Defaults to LOG_FILE env var.
         force: If True, reconfigure even if already configured.
                Useful for testing.
-    
+
     Example:
         # Basic usage (reads from environment):
         configure_logging()
-        
+
         # Override specific settings:
         configure_logging(level="DEBUG", format_type="json")
-        
+
         # With file output:
         configure_logging(log_file="logs/app.log")
     """
@@ -103,7 +98,11 @@ def configure_logging(
     if format_type.lower() == FORMAT_TYPE_JSON:
         formatter = JSONFormatter()
     else:
-        # Use colored formatter for console if TTY detected
+        # `console_formatter` is annotated as the base `logging.Formatter` so
+        # mypy doesn't narrow the type to whichever branch's class is assigned
+        # first (ColoredTextFormatter and TextFormatter are sibling subclasses
+        # of logging.Formatter, not in a subclass relationship to each other).
+        console_formatter: logging.Formatter
         if sys.stdout.isatty():
             console_formatter = ColoredTextFormatter()
         else:
@@ -125,7 +124,7 @@ def configure_logging(
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
-        file_handler = logging.FileHandler(log_path, encoding='utf-8')
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
         file_handler.setLevel(numeric_level)
         if format_type.lower() == FORMAT_TYPE_JSON:
             file_handler.setFormatter(formatter)
@@ -137,25 +136,24 @@ def configure_logging(
 
     # Log configuration (only at DEBUG level to avoid noise)
     root_logger.debug(
-        "Logging configured: level=%s, format=%s, file=%s",
-        level, format_type, log_file or "(none)"
+        "Logging configured: level=%s, format=%s, file=%s", level, format_type, log_file or "(none)"
     )
 
 
 def get_logger(name: str) -> logging.Logger:
     """
     Get a logger instance by name.
-    
+
     This is a thin wrapper around logging.getLogger() that ensures
     the logging system is configured. Safe to call before or after
     configure_logging().
-    
+
     Args:
         name: Logger name (typically __name__ from the calling module)
-    
+
     Returns:
         logging.Logger instance
-    
+
     Example:
         from core.logging_config import get_logger
         logger = get_logger(__name__)
@@ -164,31 +162,27 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-def get_job_logger(
-    job_id: str,
-    output_dir: str,
-    name: str = "training"
-) -> logging.Logger:
+def get_job_logger(job_id: str, output_dir: str, name: str = "training") -> logging.Logger:
     """
     Get a logger for a specific training job that persists to the experiment directory.
-    
+
     Job logs are written ONLY to the experiment directory, not to console/worker logs.
     This ensures all job-related artifacts (configs, checkpoints, logs) are co-located.
-    
+
     Creates a logger that writes to:
     - File: {output_dir}/logs/{name}_{timestamp}.log
-    
+
     Note: Console output is intentionally excluded to avoid polluting worker system logs.
     Use `tail -f {output_dir}/logs/*.log` to monitor training in real-time.
-    
+
     Args:
         job_id: Unique job identifier (used in log messages)
         output_dir: Experiment output directory (required)
         name: Logger name (default: "training")
-    
+
     Returns:
         Configured logger with file handler
-    
+
     Example:
         # In subprocess_runner.py:
         logger = get_job_logger(job_id, output_dir)
@@ -219,7 +213,10 @@ def get_job_logger(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"{name}_{timestamp}.log"
 
-    # Create formatter with job context
+    # Create formatter with job context. Annotated as the base `logging.Formatter`
+    # so mypy accepts both branch assignments (JSONFormatter vs TextFormatter are
+    # sibling subclasses, not in a subclass relationship).
+    formatter: logging.Formatter
     if format_type.lower() == FORMAT_TYPE_JSON:
         formatter = JSONFormatter(extra_fields={"job_id": job_id})
     else:
@@ -228,7 +225,7 @@ def get_job_logger(
         formatter = TextFormatter(fmt=custom_format, datefmt=DATE_FORMAT_STRING)
 
     # File handler - ONLY write to experiment directory
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setLevel(numeric_level)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -241,7 +238,7 @@ def get_job_logger(
 def reset_logging() -> None:
     """
     Reset logging configuration.
-    
+
     Useful for testing to ensure clean state between tests.
     """
     global _configured

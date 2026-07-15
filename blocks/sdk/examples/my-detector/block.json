@@ -1,0 +1,52 @@
+{
+  "id": "my-detector",
+  "version": "1.0.0",
+  "display_name": "My Detector",
+  "category": "detection",
+  "icon": "detection",
+  "dockerfile": "./Dockerfile",
+  "requires_gpu": false,
+  "ports": {
+    "input": [
+      {
+        "id": "image_in",
+        "alias": "image_frame",
+        "ros2_type": "sensor_msgs/Image",
+        "label": "Camera Input"
+      }
+    ],
+    "output": [
+      {
+        "id": "detections_out",
+        "alias": "detections",
+        "ros2_type": "vision_msgs/Detection2DArray",
+        "label": "Detections"
+      },
+      {
+        "id": "annotated_out",
+        "alias": "annotated_image",
+        "ros2_type": "sensor_msgs/Image",
+        "label": "Annotated View",
+        "optional": true
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "confidence",
+      "type": "float",
+      "label": "Confidence threshold",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 1.0
+    }
+  ],
+  "engineer_params": [
+    {
+      "id": "model_path",
+      "type": "string",
+      "label": "Model file path",
+      "default": "/models/best.pt"
+    }
+  ]
+}

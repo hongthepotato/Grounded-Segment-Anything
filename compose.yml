@@ -3,7 +3,7 @@ services:
     image: redis:8.6.1-alpine
     container_name: training-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
@@ -26,6 +26,24 @@ services:
       MODEL_MANIFEST_PATH: configs/model_urls.json
       MODEL_ROOT_DIR: data/models/pretrained
       TOKENIZERS_PARALLELISM: "false"
+      # --- Agent Coordinator LLM (DeepSeek via OpenAI-compat) ---
+      LLM_PROVIDER: openai
+      LLM_BASE_URL: https://api.deepseek.com/v1
+      LLM_API_KEY_ENV: DEEPSEEK_API_KEY
+      LLM_MODEL: deepseek-chat
+      LLM_TIMEOUT: "60"
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # --- ROS2 container builder + edge deploy ---
+      # buildx runs via the host Docker daemon (socket mount below).
+      # The daemon resolves host-gateway as the host, where port 5000 is mapped.
+      # Do NOT change this to "localhost:5000" — inside the container, localhost
+      # is the container itself, not the host.
+      REGISTRY_PUSH_URL: host-gateway:5000
+      # Required: set to the hostname/IP edge devices use to reach this machine.
+      # There is no safe default — wrong value = edge pulls fail with no clear error.
+      # Example: REGISTRY_EXTERNAL_URL=192.168.1.10:5000
+      REGISTRY_EXTERNAL_URL: ${REGISTRY_EXTERNAL_URL:?REGISTRY_EXTERNAL_URL must be set (e.g. export REGISTRY_EXTERNAL_URL=workstation:5000)}
+      DEPLOY_WEBHOOK_URL: ${DEPLOY_WEBHOOK_URL:-}
     depends_on:
       redis:
         condition: service_healthy
@@ -35,10 +53,67 @@ services:
       - ./logs:/app/logs
       - ./experiments:/app/experiments
       - /srv/shared:/srv/shared
+      # SECURITY NOTE: mounting the Docker socket gives training-app root-equivalent
+      # access to the host (can start privileged containers, mount host filesystems).
+      # This is an accepted risk for a single-tenant internal workstation.
+      # If this machine is shared or the API is internet-exposed, remove this mount
+      # and use a Kaniko sidecar for container builds instead.
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      # Makes "host-gateway" resolve to the host IP inside the container,
+      # so buildx can push to the registry at host port 5000.
+      - "host-gateway:host-gateway"
     gpus: all
     shm_size: "16gb"
     command: bash startup.bash
     restart: unless-stopped
 
+  # Model registry — HTTP only, no auth, LAN-only use.
+  # SECURITY: port 5000 is open to anyone on the network. Add firewall rules
+  # (ufw, iptables, or cloud security groups) if this machine is not isolated.
+  # TLS and auth can be added via distribution's config.yml when needed.
+  # DISK: registry-data grows with every push. Run GC periodically:
+  #   docker exec model-registry registry garbage-collect /etc/distribution/config.yml
+  # GPU+BUILD: building large images while training contends for disk I/O.
+  # Consider scheduling builds after training jobs complete.
+  registry:
+    image: distribution/distribution:2.8.3
+    container_name: model-registry
+    ports:
+      - "5000:5000"
+    environment:
+      # Enable the GC/delete API so layers can be cleaned up
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - registry-data:/var/lib/registry
+    restart: unless-stopped
+
+  # Low-code robotics composition platform.
+  # Supervisors access via browser: http://<workstation>:8000
+  # Engineers use the same URL with their engineer PIN for block install features.
+  # First run: navigate to /api/auth/first-run — the UI shows a setup wizard.
+  platform:
+    build:
+      context: .
+      dockerfile: composer/Dockerfile
+    container_name: ros2-platform
+    ports:
+      - "8000:8000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      # Bind-mount graphs and auth so they survive container restarts
+      - ./graphs:/app/graphs
+      - ./data/platform:/data
+      # Docker socket: platform generates and runs docker-compose stacks for pipelines.
+      # Same security note as training-app above.
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host-gateway:host-gateway"
+    depends_on:
+      - registry
+    restart: unless-stopped
+
 volumes:
   redis-data:
+  registry-data:

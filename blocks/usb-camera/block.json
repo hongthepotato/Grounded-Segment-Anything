@@ -1,0 +1,60 @@
+{
+  "id": "usb-camera",
+  "version": "1.0.0",
+  "display_name": "USB Camera",
+  "category": "sensor",
+  "hardware_family": "camera",
+  "icon": "camera",
+  "hardware_detection_hint": "usb_cam",
+  "ports": {
+    "output": [
+      {
+        "id": "image_out",
+        "alias": "image_frame",
+        "ros2_type": "sensor_msgs/Image",
+        "label": "Color Camera"
+      }
+    ]
+  },
+  "supervisor_params": [
+    {
+      "id": "device_index",
+      "type": "int",
+      "label": "Camera device",
+      "default": 0,
+      "min": 0,
+      "max": 9
+    },
+    {
+      "id": "resolution",
+      "type": "enum",
+      "label": "Resolution",
+      "default": "640x480",
+      "options": ["320x240", "640x480", "1280x720", "1920x1080"]
+    },
+    {
+      "id": "fps",
+      "type": "int",
+      "label": "Frame rate",
+      "default": 30,
+      "min": 1,
+      "max": 120,
+      "units": "fps"
+    }
+  ],
+  "engineer_params": [
+    {
+      "id": "pixel_format",
+      "type": "enum",
+      "label": "Pixel format",
+      "default": "mjpeg",
+      "options": ["mjpeg", "yuyv", "rgb8"]
+    },
+    {
+      "id": "camera_info_url",
+      "type": "string",
+      "label": "Camera calibration YAML URL",
+      "default": ""
+    }
+  ]
+}

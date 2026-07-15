@@ -11,22 +11,22 @@ Tests:
 """
 
 import copy
+
 import pytest
 
-
 from ml_engine.data.validators import (
-    validate_coco_format,
-    compute_bbox_from_mask,
-    compute_area_from_mask,
-    normalize_coco_annotations,
     check_data_quality,
+    compute_area_from_mask,
+    compute_bbox_from_mask,
+    normalize_coco_annotations,
     split_dataset,
+    validate_coco_format,
 )
-
 
 # =============================================================================
 # validate_coco_format Tests
 # =============================================================================
+
 
 class TestValidateCOCOFormat:
     """Tests for validate_coco_format function."""
@@ -116,11 +116,9 @@ class TestValidateBboxFormat:
     def test_valid_bbox(self):
         """Valid bbox [x, y, w, h] passes."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [100, 100, 50, 50]}
-            ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [{"id": 0, "image_id": 0, "category_id": 0, "bbox": [100, 100, 50, 50]}],
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is True
@@ -128,11 +126,9 @@ class TestValidateBboxFormat:
     def test_bbox_with_floats(self):
         """Bbox with float values is valid."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [100.5, 100.5, 50.5, 50.5]}
-            ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [{"id": 0, "image_id": 0, "category_id": 0, "bbox": [100.5, 100.5, 50.5, 50.5]}],
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is True
@@ -140,11 +136,11 @@ class TestValidateBboxFormat:
     def test_bbox_wrong_length(self):
         """Bbox with wrong number of elements fails."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [100, 100, 50]}  # Only 3 elements
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0, "bbox": [100, 100, 50]}  # Only 3 elements
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert any("must have 4 elements" in e.lower() for e in errors)
@@ -153,11 +149,9 @@ class TestValidateBboxFormat:
     def test_bbox_negative_width(self):
         """Bbox with negative width fails."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': [100, 100, -50, 50]}
-            ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [{"id": 0, "image_id": 0, "category_id": 0, "bbox": [100, 100, -50, 50]}],
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
@@ -166,15 +160,17 @@ class TestValidateBboxFormat:
     def test_bbox_none_with_valid_segmentation(self):
         """None bbox with valid segmentation is allowed."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0, 
-                    'bbox': None,
-                    'segmentation': [[100, 100, 150, 100, 150, 150, 100, 150]]
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "bbox": None,
+                    "segmentation": [[100, 100, 150, 100, 150, 150, 100, 150]],
                 }
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is True
@@ -182,15 +178,11 @@ class TestValidateBboxFormat:
     def test_bbox_none_with_invalid_segmentation(self):
         """None bbox with invalid segmentation fails."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
-                {
-                    'id': 0, 'image_id': 0, 'category_id': 0, 
-                    'bbox': None,
-                    'segmentation': ["invalid"]
-                }
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0, "bbox": None, "segmentation": ["invalid"]}
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
@@ -203,11 +195,9 @@ class TestValidateSegmentationFormat:
     def test_valid_polygon(self, polygon_segmentation):
         """Valid polygon segmentation passes."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'segmentation': polygon_segmentation}
-            ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [{"id": 0, "image_id": 0, "category_id": 0, "segmentation": polygon_segmentation}],
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is True
@@ -215,11 +205,11 @@ class TestValidateSegmentationFormat:
     def test_valid_multi_polygon(self, multi_polygon_segmentation):
         """Multiple polygons in segmentation passes."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'segmentation': multi_polygon_segmentation}
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0, "segmentation": multi_polygon_segmentation}
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is True
@@ -227,14 +217,16 @@ class TestValidateSegmentationFormat:
     def test_valid_rle_format(self):
         """RLE segmentation format passes."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0,
-                    'segmentation': {'counts': [1, 2, 3], 'size': [480, 640]}
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "segmentation": {"counts": [1, 2, 3], "size": [480, 640]},
                 }
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is True
@@ -242,14 +234,16 @@ class TestValidateSegmentationFormat:
     def test_polygon_too_few_points(self):
         """Polygon with fewer than 3 points (6 coords) fails."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0,
-                    'segmentation': [[100, 100, 150, 150]]  # Only 2 points
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "segmentation": [[100, 100, 150, 150]],  # Only 2 points
                 }
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
@@ -258,14 +252,16 @@ class TestValidateSegmentationFormat:
     def test_polygon_odd_coordinates(self):
         """Polygon with odd number of coordinates fails."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 640, 'height': 480}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 640, "height": 480}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0,
-                    'segmentation': [[100, 100, 150, 100, 150, 150, 100]]  # 7 coords
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "segmentation": [[100, 100, 150, 100, 150, 150, 100]],  # 7 coords
                 }
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
@@ -275,6 +271,7 @@ class TestValidateSegmentationFormat:
 # =============================================================================
 # compute_bbox_from_mask Tests
 # =============================================================================
+
 
 class TestComputeBboxFromMask:
     """Tests for compute_bbox_from_mask function."""
@@ -298,7 +295,7 @@ class TestComputeBboxFromMask:
     def test_multi_polygon(self, multi_polygon_segmentation):
         """
         Compute ONE bbox that encompasses all polygons (COCO semantics).
-        
+
         Per COCO spec: multiple polygons in one annotation = one object with
         disconnected parts. The bbox must cover the entire object.
         """
@@ -335,9 +332,14 @@ class TestComputeBboxFromMask:
         assert bbox[1] + bbox[3] <= 480
 
     def test_empty_polygon_raises_error(self):
-        """Empty polygon should raise an exception."""
-        # pycocotools raises Exception for invalid input types
-        with pytest.raises(Exception):
+        """Empty polygon should raise a specific ValueError.
+
+        Pre-fix, ``mask_utils.frPyObjects([[]], ...)`` raised base
+        ``Exception("input type is not supported.")`` from pycocotools, which
+        is unpinnable. ``_normalize_to_rle`` now rejects empty polygon lists
+        upstream with a stable ValueError, so the test pins that contract.
+        """
+        with pytest.raises(ValueError, match=r"polygon segmentation must be a non-empty list of non-empty"):
             compute_bbox_from_mask([[]], height=480, width=640)
 
     # -------------------------------------------------------------------------
@@ -391,11 +393,11 @@ class TestComputeBboxFromMask:
 
     def test_uncompressed_rle_format(self):
         """Compute bbox from uncompressed RLE format (list of counts)."""
-        from pycocotools import mask as mask_utils
         import numpy as np
+        from pycocotools import mask as mask_utils
 
         # Create binary mask
-        binary_mask = np.zeros((200, 200), dtype=np.uint8, order='F')
+        binary_mask = np.zeros((200, 200), dtype=np.uint8, order="F")
         binary_mask[100:110, 100:110] = 1
 
         # Encode to RLE
@@ -411,15 +413,15 @@ class TestComputeBboxFromMask:
 
     def test_rle_complex_shape(self):
         """Compute bbox from RLE of complex (non-rectangular) shape."""
-        from pycocotools import mask as mask_utils
         import numpy as np
+        from pycocotools import mask as mask_utils
 
         # Create a circle-ish shape
-        binary_mask = np.zeros((100, 100), dtype=np.uint8, order='F')
+        binary_mask = np.zeros((100, 100), dtype=np.uint8, order="F")
         y, x = np.ogrid[:100, :100]
         center = (50, 50)
         radius = 30
-        circle_mask = (x - center[0])**2 + (y - center[1])**2 <= radius**2
+        circle_mask = (x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2
         binary_mask[circle_mask] = 1
 
         rle = mask_utils.encode(binary_mask)
@@ -435,6 +437,7 @@ class TestComputeBboxFromMask:
 # =============================================================================
 # compute_area_from_mask Tests
 # =============================================================================
+
 
 class TestComputeAreaFromMask:
     """Tests for compute_area_from_mask function."""
@@ -496,10 +499,10 @@ class TestComputeAreaFromMask:
 
     def test_rle_area(self):
         """Compute area from RLE format."""
-        from pycocotools import mask as mask_utils
         import numpy as np
+        from pycocotools import mask as mask_utils
 
-        binary_mask = np.zeros((200, 200), dtype=np.uint8, order='F')
+        binary_mask = np.zeros((200, 200), dtype=np.uint8, order="F")
         binary_mask[50:100, 50:100] = 1
 
         rle = mask_utils.encode(binary_mask)
@@ -509,26 +512,27 @@ class TestComputeAreaFromMask:
 
     def test_rle_circle_area(self):
         """Compute area from RLE of circular shape."""
-        from pycocotools import mask as mask_utils
         import numpy as np
+        from pycocotools import mask as mask_utils
 
-        binary_mask = np.zeros((100, 100), dtype=np.uint8, order='F')
+        binary_mask = np.zeros((100, 100), dtype=np.uint8, order="F")
         y, x = np.ogrid[:100, :100]
         center = (50, 50)
         radius = 20
-        circle_mask = (x - center[0])**2 + (y - center[1])**2 <= radius**2
+        circle_mask = (x - center[0]) ** 2 + (y - center[1]) ** 2 <= radius**2
         binary_mask[circle_mask] = 1
 
         rle = mask_utils.encode(binary_mask)
         area = compute_area_from_mask(rle, height=100, width=100)
 
-        expected_area = 3.14159 * (radius ** 2)
+        expected_area = 3.14159 * (radius**2)
         assert area == pytest.approx(expected_area, rel=0.1)
 
 
 # =============================================================================
 # normalize_coco_annotations Tests
 # =============================================================================
+
 
 class TestNormalizeCOCOAnnotations:
     """Tests for normalize_coco_annotations function."""
@@ -537,14 +541,14 @@ class TestNormalizeCOCOAnnotations:
         """Normalizing adds bbox when only mask is present."""
         data = copy.deepcopy(valid_coco_data_masks_only)
 
-        assert 'bbox' not in data['annotations'][0] or data['annotations'][0].get('bbox') in [None, []]
+        assert "bbox" not in data["annotations"][0] or data["annotations"][0].get("bbox") in [None, []]
 
         normalized = normalize_coco_annotations(data, in_place=False)
 
-        for ann in normalized['annotations']:
-            assert 'bbox' in ann
-            assert len(ann['bbox']) == 4
-            assert all(isinstance(x, float) for x in ann['bbox'])
+        for ann in normalized["annotations"]:
+            assert "bbox" in ann
+            assert len(ann["bbox"]) == 4
+            assert all(isinstance(x, float) for x in ann["bbox"])
 
     def test_adds_area_from_mask(self, valid_coco_data_masks_only):
         """Normalizing adds area when only mask is present."""
@@ -552,17 +556,17 @@ class TestNormalizeCOCOAnnotations:
 
         normalized = normalize_coco_annotations(data, in_place=False)
 
-        for ann in normalized['annotations']:
-            assert 'area' in ann
-            assert ann['area'] > 0
+        for ann in normalized["annotations"]:
+            assert "area" in ann
+            assert ann["area"] > 0
 
     def test_preserves_existing_bbox(self, valid_coco_data_combined):
         """Normalizing preserves existing valid bbox."""
         data = copy.deepcopy(valid_coco_data_combined)
-        original_bbox = data['annotations'][0]['bbox'].copy()
+        original_bbox = data["annotations"][0]["bbox"].copy()
 
         normalized = normalize_coco_annotations(data, in_place=False)
-        assert normalized['annotations'][0]['bbox'] == original_bbox
+        assert normalized["annotations"][0]["bbox"] == original_bbox
 
     def test_in_place_modification(self, valid_coco_data_masks_only):
         """in_place=True modifies original data."""
@@ -573,7 +577,7 @@ class TestNormalizeCOCOAnnotations:
 
         # Should be same object
         assert id(result) == original_id
-        bbox = result['annotations'][0]['bbox']
+        bbox = result["annotations"][0]["bbox"]
         assert isinstance(bbox, list)
         assert len(bbox) == 4
         assert bbox[0] == pytest.approx(100.0, abs=2)
@@ -593,22 +597,23 @@ class TestNormalizeCOCOAnnotations:
         """Normalizing converts polygon to compressed RLE."""
         data = copy.deepcopy(valid_coco_data_masks_only)
 
-        assert isinstance(data['annotations'][0]['segmentation'], list)
-        assert isinstance(data['annotations'][0]['segmentation'][0], list)
+        assert isinstance(data["annotations"][0]["segmentation"], list)
+        assert isinstance(data["annotations"][0]["segmentation"][0], list)
 
         normalized = normalize_coco_annotations(data, in_place=False)
 
         # Should be converted to RLE dict with bytes counts
-        seg = normalized['annotations'][0]['segmentation']
+        seg = normalized["annotations"][0]["segmentation"]
         assert isinstance(seg, dict)
-        assert 'counts' in seg
-        assert 'size' in seg
-        assert isinstance(seg['counts'], bytes)
+        assert "counts" in seg
+        assert "size" in seg
+        assert isinstance(seg["counts"], bytes)
 
 
 # =============================================================================
 # check_data_quality Tests
 # =============================================================================
+
 
 class TestCheckDataQuality:
     """Tests for check_data_quality function."""
@@ -618,9 +623,14 @@ class TestCheckDataQuality:
         report = check_data_quality(valid_coco_data_combined)
 
         expected_keys = [
-            'total_images', 'total_annotations',
-            'images_without_annotations', 'small_objects', 'large_objects',
-            'samples_per_class', 'class_distribution', 'warnings'
+            "total_images",
+            "total_annotations",
+            "images_without_annotations",
+            "small_objects",
+            "large_objects",
+            "samples_per_class",
+            "class_distribution",
+            "warnings",
         ]
         for key in expected_keys:
             assert key in report
@@ -628,54 +638,55 @@ class TestCheckDataQuality:
     def test_counts_total_images(self, valid_coco_data_combined):
         """Correctly counts total images."""
         report = check_data_quality(valid_coco_data_combined)
-        assert report['total_images'] == len(valid_coco_data_combined['images'])
+        assert report["total_images"] == len(valid_coco_data_combined["images"])
 
     def test_counts_total_annotations(self, valid_coco_data_combined):
         """Correctly counts total annotations."""
         report = check_data_quality(valid_coco_data_combined)
-        assert report['total_annotations'] == len(valid_coco_data_combined['annotations'])
+        assert report["total_annotations"] == len(valid_coco_data_combined["annotations"])
 
     def test_detects_images_without_annotations(self, coco_data_with_quality_issues):
         """Detects images that have no annotations."""
         report = check_data_quality(coco_data_with_quality_issues)
-        assert report['images_without_annotations'] == 1
+        assert report["images_without_annotations"] == 1
 
     def test_detects_small_objects(self, coco_data_with_quality_issues):
         """Detects very small objects."""
         report = check_data_quality(coco_data_with_quality_issues)
-        assert report['small_objects'] == 12
+        assert report["small_objects"] == 12
 
     def test_detects_large_objects(self, coco_data_with_quality_issues):
         """Detects very large objects."""
         report = check_data_quality(coco_data_with_quality_issues)
-        assert report['large_objects'] == 1
+        assert report["large_objects"] == 1
 
     def test_class_distribution(self, valid_coco_data_combined):
         """Correctly computes class distribution."""
         report = check_data_quality(valid_coco_data_combined)
 
         # Should have counts for each class
-        assert len(report['class_distribution']) == 2
+        assert len(report["class_distribution"]) == 2
         # Total should match annotation count
-        total = sum(report['class_distribution'].values())
-        assert total == report['total_annotations']
+        total = sum(report["class_distribution"].values())
+        assert total == report["total_annotations"]
 
     def test_warnings_is_list(self, valid_coco_data_combined):
         """Warnings field is always a list."""
         report = check_data_quality(valid_coco_data_combined)
-        assert isinstance(report['warnings'], list)
+        assert isinstance(report["warnings"], list)
 
     def test_detects_class_imbalance(self, coco_data_with_quality_issues):
         """Detects high class imbalance."""
         report = check_data_quality(coco_data_with_quality_issues)
-        
+
         # Should have warning about class imbalance
-        assert any('imbalance' in w.lower() for w in report['warnings'])
+        assert any("imbalance" in w.lower() for w in report["warnings"])
 
 
 # =============================================================================
 # split_dataset Tests
 # =============================================================================
+
 
 class TestSplitDataset:
     """Tests for split_dataset function."""
@@ -683,31 +694,28 @@ class TestSplitDataset:
     def test_incorrect_ratio_raises(self, coco_data_for_splitting):
         """Incorrect split ratios raise error."""
         with pytest.raises(ValueError, match="Split ratios must sum to 1.0"):
-            split_dataset(coco_data_for_splitting, splits={'train': 0.6, 'val': 0.2, 'test': 0.1})
+            split_dataset(coco_data_for_splitting, splits={"train": 0.6, "val": 0.2, "test": 0.1})
         with pytest.raises(ValueError, match="Split ratios must sum to 1.0"):
-            split_dataset(coco_data_for_splitting, splits={'train': 0.9, 'val': 0.2, 'test': 0.1})
+            split_dataset(coco_data_for_splitting, splits={"train": 0.9, "val": 0.2, "test": 0.1})
         with pytest.raises(ValueError, match="Split ratios must be greater than 0"):
-            split_dataset(coco_data_for_splitting, splits={'train': 0.9, 'val': 0.2, 'test': -0.1})
+            split_dataset(coco_data_for_splitting, splits={"train": 0.9, "val": 0.2, "test": -0.1})
 
     def test_default_splits(self, coco_data_for_splitting):
         """Default 70/15/15 split works correctly."""
         splits = split_dataset(coco_data_for_splitting)
 
-        assert 'train' in splits
-        assert 'val' in splits
-        assert 'test' in splits
+        assert "train" in splits
+        assert "val" in splits
+        assert "test" in splits
 
     def test_custom_splits(self, coco_data_for_splitting):
         """Custom split ratios work correctly."""
-        splits = split_dataset(
-            coco_data_for_splitting,
-            splits={'train': 0.8, 'val': 0.1, 'test': 0.1}
-        )
+        splits = split_dataset(coco_data_for_splitting, splits={"train": 0.8, "val": 0.1, "test": 0.1})
 
-        total_images = len(coco_data_for_splitting['images'])
-        train_count = len(splits['train']['images'])
-        val_count = len(splits['val']['images'])
-        test_count = len(splits['test']['images'])
+        total_images = len(coco_data_for_splitting["images"])
+        train_count = len(splits["train"]["images"])
+        val_count = len(splits["val"]["images"])
+        test_count = len(splits["test"]["images"])
 
         # Train should be approximately 80%
         assert train_count == pytest.approx(total_images * 0.8, abs=1)
@@ -719,17 +727,17 @@ class TestSplitDataset:
         splits = split_dataset(coco_data_for_splitting)
 
         for split_name, split_data in splits.items():
-            assert 'images' in split_data
-            assert 'annotations' in split_data
-            assert 'categories' in split_data
+            assert "images" in split_data
+            assert "annotations" in split_data
+            assert "categories" in split_data
 
     def test_no_image_overlap(self, coco_data_for_splitting):
         """No images appear in multiple splits."""
         splits = split_dataset(coco_data_for_splitting)
 
-        train_ids = {img['id'] for img in splits['train']['images']}
-        val_ids = {img['id'] for img in splits['val']['images']}
-        test_ids = {img['id'] for img in splits['test']['images']}
+        train_ids = {img["id"] for img in splits["train"]["images"]}
+        val_ids = {img["id"] for img in splits["val"]["images"]}
+        test_ids = {img["id"] for img in splits["test"]["images"]}
 
         assert len(train_ids & val_ids) == 0
         assert len(train_ids & test_ids) == 0
@@ -741,16 +749,15 @@ class TestSplitDataset:
 
         all_split_ids = set()
         for split_data in splits.values():
-            for img in split_data['images']:
-                all_split_ids.add(img['id'])
+            for img in split_data["images"]:
+                all_split_ids.add(img["id"])
 
         # Get IDs of images that have annotations
         image_to_anns = {}
-        for ann in coco_data_for_splitting['annotations']:
-            image_to_anns[ann['image_id']] = True
+        for ann in coco_data_for_splitting["annotations"]:
+            image_to_anns[ann["image_id"]] = True
 
-        annotated_ids = {img['id'] for img in coco_data_for_splitting['images']
-                        if img['id'] in image_to_anns}
+        annotated_ids = {img["id"] for img in coco_data_for_splitting["images"] if img["id"] in image_to_anns}
 
         assert all_split_ids == annotated_ids
 
@@ -759,19 +766,20 @@ class TestSplitDataset:
         splits = split_dataset(coco_data_for_splitting)
 
         for split_name, split_data in splits.items():
-            image_ids = {img['id'] for img in split_data['images']}
+            image_ids = {img["id"] for img in split_data["images"]}
 
-            for ann in split_data['annotations']:
-                assert ann['image_id'] in image_ids, \
+            for ann in split_data["annotations"]:
+                assert ann["image_id"] in image_ids, (
                     f"Annotation {ann['id']} in {split_name} references image not in split"
+                )
 
     def test_categories_preserved_in_all_splits(self, coco_data_for_splitting):
         """All original categories are preserved in each split."""
-        original_categories = coco_data_for_splitting['categories']
+        original_categories = coco_data_for_splitting["categories"]
         splits = split_dataset(coco_data_for_splitting)
 
         for split_name, split_data in splits.items():
-            assert split_data['categories'] == original_categories
+            assert split_data["categories"] == original_categories
 
     def test_reproducible_with_seed(self, coco_data_for_splitting):
         """Same random seed produces same splits."""
@@ -779,9 +787,9 @@ class TestSplitDataset:
         splits2 = split_dataset(coco_data_for_splitting, random_seed=42)
 
         # Should have same images in each split
-        for split_name in ['train', 'val', 'test']:
-            ids1 = {img['id'] for img in splits1[split_name]['images']}
-            ids2 = {img['id'] for img in splits2[split_name]['images']}
+        for split_name in ["train", "val", "test"]:
+            ids1 = {img["id"] for img in splits1[split_name]["images"]}
+            ids2 = {img["id"] for img in splits2[split_name]["images"]}
             assert ids1 == ids2
 
     def test_different_seed_different_splits(self, coco_data_for_splitting):
@@ -789,49 +797,45 @@ class TestSplitDataset:
         splits1 = split_dataset(coco_data_for_splitting, random_seed=42)
         splits2 = split_dataset(coco_data_for_splitting, random_seed=123)
 
-        train_ids1 = {img['id'] for img in splits1['train']['images']}
-        train_ids2 = {img['id'] for img in splits2['train']['images']}
+        train_ids1 = {img["id"] for img in splits1["train"]["images"]}
+        train_ids2 = {img["id"] for img in splits2["train"]["images"]}
 
-        assert train_ids1 != train_ids2 or len(coco_data_for_splitting['images']) < 5
+        assert train_ids1 != train_ids2 or len(coco_data_for_splitting["images"]) < 5
 
     def test_stratified_split(self, coco_data_for_splitting):
         """Stratified split maintains class distribution."""
-        splits = split_dataset(
-            coco_data_for_splitting,
-            stratify=True,
-            random_seed=42
-        )
+        splits = split_dataset(coco_data_for_splitting, stratify=True, random_seed=42)
 
         # Each non-empty split should have some annotations
         for split_name, split_data in splits.items():
-            if split_data['images']:  # If split has images
+            if split_data["images"]:  # If split has images
                 # Should also have annotations
-                assert len(split_data['annotations']) > 0
+                assert len(split_data["annotations"]) > 0
 
     def test_small_dataset_fallback(self):
         """Very small datasets fall back to random split."""
         small_data = {
-            'images': [
-                {'id': i, 'file_name': f'img_{i}.jpg', 'width': 640, 'height': 480}
+            "images": [
+                {"id": i, "file_name": f"img_{i}.jpg", "width": 640, "height": 480}
                 for i in range(4)  # Only 4 images
             ],
-            'annotations': [
-                {'id': i, 'image_id': i, 'category_id': 0, 'bbox': [0, 0, 50, 50]}
-                for i in range(4)
+            "annotations": [
+                {"id": i, "image_id": i, "category_id": 0, "bbox": [0, 0, 50, 50]} for i in range(4)
             ],
-            'categories': [{'id': 0, 'name': 'class_a'}]
+            "categories": [{"id": 0, "name": "class_a"}],
         }
 
         # Should not raise, should fall back to random split
         splits = split_dataset(small_data, stratify=True)
 
         # Should still produce valid splits
-        assert 'train' in splits or 'all' in splits
+        assert "train" in splits or "all" in splits
 
 
 # =============================================================================
 # Imperfect COCO Data Edge Cases
 # =============================================================================
+
 
 class TestImperfectCOCOData:
     """Tests for handling imperfect/malformed COCO data from real annotation tools."""
@@ -839,25 +843,25 @@ class TestImperfectCOCOData:
     def test_empty_nested_segmentation_list_with_valid_bbox(self):
         """Segmentation as [[]] with valid bbox should fail (invalid seg format)."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'segmentation': [[]], 'bbox': [10, 10, 20, 20]},
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0, "segmentation": [[]], "bbox": [10, 10, 20, 20]},
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         # [[]] is invalid segmentation format (empty polygon)
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
-        assert any('polygon' in e.lower() or 'empty' in e.lower() for e in errors)
+        assert any("polygon" in e.lower() or "empty" in e.lower() for e in errors)
 
     def test_bbox_none_with_empty_nested_segmentation(self):
         """bbox=None with segmentation=[[]] should fail (no valid annotation)."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': None, 'segmentation': [[]]},
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0, "bbox": None, "segmentation": [[]]},
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         # Both bbox and segmentation are invalid
         is_valid, errors = validate_coco_format(data)
@@ -868,11 +872,11 @@ class TestImperfectCOCOData:
     def test_bbox_none_with_too_few_coords_segmentation(self):
         """bbox=None with segmentation=[[10, 20]] (too few coords) should fail."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'bbox': None, 'segmentation': [[10, 20]]},
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0, "bbox": None, "segmentation": [[10, 20]]},
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         # [[10, 20]] has only 2 coords, needs 6 minimum
         is_valid, errors = validate_coco_format(data)
@@ -881,11 +885,11 @@ class TestImperfectCOCOData:
     def test_missing_both_bbox_and_segmentation(self):
         """Annotations missing both bbox and segmentation should fail."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0},  # No bbox, no segmentation
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0},  # No bbox, no segmentation
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
@@ -894,13 +898,13 @@ class TestImperfectCOCOData:
     def test_bbox_none_segmentation_empty_list(self):
         """bbox=None and segmentation=[] should fail."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0},
-                {'id': 1, 'image_id': 0, 'category_id': 0, 'bbox': None},
-                {'id': 2, 'image_id': 0, 'category_id': 0, 'segmentation': []},
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0},
+                {"id": 1, "image_id": 0, "category_id": 0, "bbox": None},
+                {"id": 2, "image_id": 0, "category_id": 0, "segmentation": []},
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
@@ -910,14 +914,14 @@ class TestImperfectCOCOData:
     def test_bbox_empty_list(self):
         """bbox=[] (empty list) should fail but valid bbox should pass."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0},  # Missing both
-                {'id': 1, 'image_id': 0, 'category_id': 0, 'bbox': None},  # None bbox
-                {'id': 2, 'image_id': 0, 'category_id': 0, 'bbox': []},  # Empty list bbox
-                {'id': 3, 'image_id': 0, 'category_id': 0, 'bbox': [10, 10, 20, 20]},  # Valid
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0},  # Missing both
+                {"id": 1, "image_id": 0, "category_id": 0, "bbox": None},  # None bbox
+                {"id": 2, "image_id": 0, "category_id": 0, "bbox": []},  # Empty list bbox
+                {"id": 3, "image_id": 0, "category_id": 0, "bbox": [10, 10, 20, 20]},  # Valid
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
@@ -927,15 +931,17 @@ class TestImperfectCOCOData:
     def test_bbox_boolean_false_with_valid_segmentation(self):
         """bbox=False (wrong type) with valid segmentation should pass."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0, 
-                    'bbox': False,
-                    'segmentation': [[10, 10, 20, 10, 20, 20]]
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "bbox": False,
+                    "segmentation": [[10, 10, 20, 10, 20, 20]],
                 },
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         # Has valid segmentation, so should pass (False bbox is treated as missing)
         is_valid, errors = validate_coco_format(data)
@@ -944,15 +950,17 @@ class TestImperfectCOCOData:
     def test_bbox_integer_zero_with_valid_segmentation(self):
         """bbox=0 (wrong type) with valid segmentation should pass."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0, 
-                    'bbox': 0,
-                    'segmentation': [[10, 10, 20, 10, 20, 20]]
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "bbox": 0,
+                    "segmentation": [[10, 10, 20, 10, 20, 20]],
                 },
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         # Has valid segmentation, so should pass
         is_valid, errors = validate_coco_format(data)
@@ -961,15 +969,17 @@ class TestImperfectCOCOData:
     def test_bbox_string_with_valid_segmentation(self):
         """bbox="invalid" (wrong type) with valid segmentation should pass."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0, 
-                    'bbox': "invalid",
-                    'segmentation': [[10, 10, 20, 10, 20, 20]]
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "bbox": "invalid",
+                    "segmentation": [[10, 10, 20, 10, 20, 20]],
                 },
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         # Has valid segmentation, so should pass
         is_valid, errors = validate_coco_format(data)
@@ -978,15 +988,17 @@ class TestImperfectCOCOData:
     def test_rle_segmentation_format(self):
         """RLE format segmentation should be valid."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0,
-                    'segmentation': {'counts': [10, 20, 30], 'size': [100, 100]},
-                    'iscrowd': 1
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "segmentation": {"counts": [10, 20, 30], "size": [100, 100]},
+                    "iscrowd": 1,
                 },
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is True
@@ -995,51 +1007,55 @@ class TestImperfectCOCOData:
     def test_single_valid_among_invalids(self):
         """Dataset with mix of valid/invalid annotations fails for invalid ones."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0},  # Invalid: no bbox/seg
-                {'id': 1, 'image_id': 0, 'category_id': 0, 'bbox': [10, 10, 20, 20]},  # Valid
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0},  # Invalid: no bbox/seg
+                {"id": 1, "image_id": 0, "category_id": 0, "bbox": [10, 10, 20, 20]},  # Valid
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         is_valid, errors = validate_coco_format(data)
         assert is_valid is False
         # Should report error for annotation 0
 
     def test_normalize_handles_empty_nested_segmentation(self):
-        """normalize_coco_annotations handles [[]] segmentation gracefully."""
+        """normalize_coco_annotations preserves bbox when segmentation is [[]]
+        (empty nested list — a real-world COCO export quirk).
+
+        Pinned contract: must succeed and leave the bbox untouched. Downstream
+        training depends on the bbox surviving normalization. If a future change
+        makes this raise, callers (dataloaders) need their own guard — flip this
+        test to pytest.raises with the new exception only after auditing those
+        callers.
+        """
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
-                {'id': 0, 'image_id': 0, 'category_id': 0, 'segmentation': [[]], 'bbox': [10, 10, 20, 20]},
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
+                {"id": 0, "image_id": 0, "category_id": 0, "segmentation": [[]], "bbox": [10, 10, 20, 20]},
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
-        # Should not crash - either handles gracefully or raises clear error
-        try:
-            result = normalize_coco_annotations(data, in_place=False)
-            # If it succeeds, bbox should be preserved
-            assert result['annotations'][0]['bbox'] == [10, 10, 20, 20]
-        except (ValueError, Exception) as e:
-            # If it fails, should have clear error message
-            assert 'segmentation' in str(e).lower() or 'empty' in str(e).lower()
+        result = normalize_coco_annotations(data, in_place=False)
+        assert result["annotations"][0]["bbox"] == [10, 10, 20, 20]
 
     def test_normalize_handles_wrong_type_bbox(self):
         """normalize_coco_annotations handles wrong-type bbox with valid segmentation."""
         data = {
-            'images': [{'id': 0, 'file_name': 'img.jpg', 'width': 100, 'height': 100}],
-            'annotations': [
+            "images": [{"id": 0, "file_name": "img.jpg", "width": 100, "height": 100}],
+            "annotations": [
                 {
-                    'id': 0, 'image_id': 0, 'category_id': 0, 
-                    'bbox': "invalid",
-                    'segmentation': [[10, 10, 50, 10, 50, 50, 10, 50]]
+                    "id": 0,
+                    "image_id": 0,
+                    "category_id": 0,
+                    "bbox": "invalid",
+                    "segmentation": [[10, 10, 50, 10, 50, 50, 10, 50]],
                 },
             ],
-            'categories': [{'id': 0, 'name': 'cat'}]
+            "categories": [{"id": 0, "name": "cat"}],
         }
         # Should generate bbox from segmentation
         result = normalize_coco_annotations(data, in_place=False)
         # Bbox should be computed from segmentation
-        bbox = result['annotations'][0]['bbox']
+        bbox = result["annotations"][0]["bbox"]
         assert isinstance(bbox, list)
         assert len(bbox) == 4

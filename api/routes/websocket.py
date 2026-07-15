@@ -1,26 +1,26 @@
 """
-WebSocket endpoints for real-time job updates.
+WebSocket endpoints for job state inspection.
 
 Provides:
-- /ws/jobs/{job_id} - Subscribe to job events
+- /ws/jobs/{job_id} - Get current job state, then close
 
-Events sent to client:
-- job_started: Job began execution
-- progress: Training progress update
-- job_completed: Job finished successfully
-- job_failed: Job failed with error
-- job_cancelled: Job was cancelled
-- cancel_requested: Cancellation was requested
+Currently a degraded surface: the underlying live-event subscription
+mechanism (`AsyncJobManager.subscribe_to_job_async`) was removed in
+commit bfdff7f and never replaced. The route is preserved so existing
+clients connecting to this URL get a clean state dump + clear error
+instead of a 500 from an undefined-method crash. Live tailing during
+training requires the new mechanism — tracked in TODOS.md item 15.
+
+Until item 15 ships, clients that need progress updates should poll
+GET /api/jobs/{job_id} on a sensible cadence (e.g., every 2-5 s).
 """
 
-import asyncio
 import logging
 import os
-import threading
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket
 
-from ml_engine.jobs import get_job_manager
+from ml_engine.jobs import get_async_job_manager
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,21 @@ router = APIRouter(tags=["websocket"])
 @router.websocket("/ws/jobs/{job_id}")
 async def job_stream(websocket: WebSocket, job_id: str):
     """
-    WebSocket endpoint for real-time job updates.
-    
-    Connects to Redis pub/sub and forwards events to the client.
-    Automatically closes when job reaches terminal state.
-    
+    WebSocket endpoint that returns the current job state and closes.
+
+    Originally designed to forward live Redis pub/sub events for the job's
+    lifetime, but the subscription mechanism was removed (commit bfdff7f).
+    This degraded version still serves a useful read of current state, so
+    callers don't have to reconnect via REST just to see status — but it
+    does NOT live-tail. For live progress, poll GET /api/jobs/{job_id}.
+
+    Frames sent (then connection closes):
+    - `error`: job not found (close code 4004)
+    - `job_state`: current snapshot (status + progress)
+    - `job_<terminal-state>`: terminal payload (only if job already done)
+    - `subscription_unavailable`: live tailing not implemented (only if
+        job is non-terminal — see TODOS.md item 15)
+
     Example (JavaScript):
         const ws = new WebSocket('ws://localhost:8000/ws/jobs/a1b2c3d4-...');
         ws.onmessage = (event) => {
@@ -45,21 +55,16 @@ async def job_stream(websocket: WebSocket, job_id: str):
     await websocket.accept()
     logger.info("WebSocket connected for job %s", job_id[:8])
 
-    # Get manager
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    manager = get_job_manager(redis_url)
+    manager = get_async_job_manager(redis_url)
 
-    # Check if job exists
-    job = manager.get_job(job_id)
+    job = await manager.get_job(job_id)
     if job is None:
-        await websocket.send_json({
-            "type": "error",
-            "message": f"Job {job_id} not found"
-        })
+        await websocket.send_json({"type": "error", "message": f"Job {job_id} not found"})
         await websocket.close(code=4004)
         return
 
-    # Send initial job state
+    # Send initial job state.
     initial_state = {
         "type": "job_state",
         "job_id": job_id,
@@ -68,87 +73,30 @@ async def job_stream(websocket: WebSocket, job_id: str):
     }
     await websocket.send_json(initial_state)
 
-    # If job is already terminal, send final state and close
+    # If already terminal, send the terminal payload and close cleanly.
     if job.is_terminal:
-        await websocket.send_json({
-            "type": f"job_{job.status.value}",
-            "job_id": job_id,
-            "output_dir": job.output_dir,
-            "error_message": job.error_message,
-        })
+        await websocket.send_json(
+            {
+                "type": f"job_{job.status.value}",
+                "job_id": job_id,
+                "output_dir": job.output_dir,
+                "error_message": job.error_message,
+            }
+        )
         await websocket.close()
         return
 
-    # Event queue for async handling
-    event_queue: asyncio.Queue = asyncio.Queue()
-    stop_event = threading.Event()
-
-    def on_event(event: dict):
-        """Callback from Redis pub/sub (runs in background thread)."""
-        try:
-            # Put event in async queue
-            asyncio.run_coroutine_threadsafe(
-                event_queue.put(event),
-                asyncio.get_event_loop()
-            )
-        except Exception as e:
-            logger.warning("Error queuing event: %s", e)
-
-    # Start subscription in background thread
-    sub_thread = manager.subscribe_to_job_async(job_id, on_event)
-
-    try:
-        while True:
-            # Check for events with timeout
-            try:
-                event = await asyncio.wait_for(
-                    event_queue.get(),
-                    timeout=1.0
-                )
-
-                # Forward event to client
-                await websocket.send_json(event)
-
-                # Check for terminal events
-                if event.get("type") in ["job_completed", "job_failed", "job_cancelled"]:
-                    logger.info("Job %s reached terminal state: %s",
-                              job_id[:8], event.get("type"))
-                    break
-
-            except asyncio.TimeoutError:
-                # Periodic check: is job still active?
-                job = manager.get_job(job_id)
-                if job and job.is_terminal:
-                    # Job finished but we missed the event
-                    await websocket.send_json({
-                        "type": f"job_{job.status.value}",
-                        "job_id": job_id,
-                        "output_dir": job.output_dir,
-                        "error_message": job.error_message,
-                    })
-                    break
-
-                # Send ping to keep connection alive
-                try:
-                    await websocket.send_json({"type": "ping"})
-                except Exception:
-                    # Connection closed
-                    break
-
-    except WebSocketDisconnect:
-        logger.info("WebSocket disconnected for job %s", job_id[:8])
-
-    except Exception as e:
-        logger.error("WebSocket error for job %s: %s", job_id[:8], e)
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e)
-            })
-        except Exception:
-            pass
-
-    finally:
-        # Stop subscription
-        stop_event.set()
-        logger.info("WebSocket closed for job %s", job_id[:8])
+    # Non-terminal: live tailing isn't implemented (see TODOS.md item 15).
+    # Tell the client explicitly so they fall back to polling instead of
+    # holding a connection that will never see another frame.
+    await websocket.send_json(
+        {
+            "type": "subscription_unavailable",
+            "job_id": job_id,
+            "message": (
+                "Live event tailing is not implemented in this build. "
+                "Poll GET /api/jobs/{job_id} for status updates."
+            ),
+        }
+    )
+    await websocket.close()

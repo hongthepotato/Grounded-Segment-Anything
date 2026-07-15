@@ -5,33 +5,30 @@ Provides:
 - POST /api/distillation - Submit student distillation job
 """
 
-import os
 import logging
-from typing import Dict, Any
+import os
+from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
+from api.routes.jobs import job_to_response, validate_job_config
 from api.schemas import DistillationRequest, success_response
-from api.routes.jobs import validate_job_config, job_to_response
-from ml_engine.jobs import JobManager, get_job_manager
+from ml_engine.jobs import AsyncJobManager, get_async_job_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/distillation", tags=["distillation"])
 
 
-def get_manager() -> JobManager:
-    """Dependency to get JobManager instance."""
+def get_manager() -> AsyncJobManager:
+    """Dependency to get AsyncJobManager instance."""
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    return get_job_manager(redis_url)
+    return get_async_job_manager(redis_url)
 
 
 @router.post("", status_code=200)
-async def submit_distillation(
-    request: DistillationRequest,
-    manager: JobManager = Depends(get_manager)
-):
+async def submit_distillation(request: DistillationRequest, manager: AsyncJobManager = Depends(get_manager)):
     """
     Submit a student distillation job.
 
@@ -58,12 +55,11 @@ async def submit_distillation(
     validation_errors = validate_job_config("student_distillation", config)
     if validation_errors:
         raise HTTPException(
-            status_code=422,
-            detail=f"Invalid distillation config: {'; '.join(validation_errors)}"
+            status_code=422, detail=f"Invalid distillation config: {'; '.join(validation_errors)}"
         )
 
     try:
-        job = manager.submit_job(
+        job = await manager.submit_job(
             job_type="student_distillation",
             config=config,
             priority=request.priority,
@@ -73,10 +69,7 @@ async def submit_distillation(
         logger.info("Submitted distillation job %s", job.id[:8])
         return JSONResponse(
             status_code=200,
-            content=success_response(
-                data={"jobs": [job_to_response(job).model_dump(mode='json')]},
-                code=200
-            )
+            content=success_response(data=job_to_response(job).model_dump(mode="json"), code=200),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

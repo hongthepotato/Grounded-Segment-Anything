@@ -6,9 +6,10 @@ Tests custom logging formatters for text and JSON output.
 
 import json
 import logging
+
 import pytest
 
-from core.logging_formatters import TextFormatter, JSONFormatter, ColoredTextFormatter
+from core.logging_formatters import ColoredTextFormatter, JSONFormatter, TextFormatter
 
 
 @pytest.fixture
@@ -21,7 +22,7 @@ def log_record():
         lineno=42,
         msg="Test message: %s",
         args=("value",),
-        exc_info=None
+        exc_info=None,
     )
     return record
 
@@ -33,8 +34,9 @@ def log_record_with_exception():
         raise ValueError("Test error")
     except ValueError:
         import sys
+
         exc_info = sys.exc_info()
-    
+
     record = logging.LogRecord(
         name="test.module",
         level=logging.ERROR,
@@ -42,7 +44,7 @@ def log_record_with_exception():
         lineno=42,
         msg="Error occurred",
         args=(),
-        exc_info=exc_info
+        exc_info=exc_info,
     )
     return record
 
@@ -171,6 +173,7 @@ class TestJSONFormatter:
 
     def test_format_non_serializable_extra(self, log_record):
         """Test handling of non-JSON-serializable extra fields."""
+
         class NonSerializable:
             def __str__(self):
                 return "NonSerializable object"
@@ -225,7 +228,7 @@ class TestColoredTextFormatter:
         formatter = ColoredTextFormatter()
 
         # Mock sys.stdout.isatty() to simulate TTY environment
-        with patch('sys.stdout.isatty', return_value=True):
+        with patch("sys.stdout.isatty", return_value=True):
             output = formatter.format(log_record)
 
         # Should have color code and reset
@@ -239,7 +242,7 @@ class TestColoredTextFormatter:
         formatter = ColoredTextFormatter()
 
         # Mock sys.stdout.isatty() to simulate TTY environment
-        with patch('sys.stdout.isatty', return_value=True):
+        with patch("sys.stdout.isatty", return_value=True):
             # INFO level
             log_record.levelname = "INFO"
             output = formatter.format(log_record)
@@ -257,7 +260,7 @@ class TestColoredTextFormatter:
         formatter = ColoredTextFormatter()
 
         # Mock sys.stdout.isatty() to simulate non-TTY environment (e.g., file redirect)
-        with patch('sys.stdout.isatty', return_value=False):
+        with patch("sys.stdout.isatty", return_value=False):
             output = formatter.format(log_record)
 
         # Should NOT have color codes
@@ -278,6 +281,7 @@ class TestFormatterIntegration:
         logger.handlers = []
 
         import sys
+
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(TextFormatter())
         logger.addHandler(handler)
@@ -295,6 +299,7 @@ class TestFormatterIntegration:
         logger.handlers = []
 
         import sys
+
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(JSONFormatter())
         logger.addHandler(handler)

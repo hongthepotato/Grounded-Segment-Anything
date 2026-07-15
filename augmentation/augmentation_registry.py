@@ -6,9 +6,8 @@ Provide single entry point for both legacy domain-based and new characteristic-b
 import logging
 from typing import Any, Dict, List, Optional
 
-
-from .characteristic_translator import CharacteristicTranslator
 from .augmentation_factory import ConfigurableAugmentationPipeline
+from .characteristic_translator import CharacteristicTranslator
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +23,7 @@ class AugmentationRegistry:
         valid_intensities = {"low", "medium", "high"}
         if intensity not in valid_intensities:
             raise ValueError(
-                f"Invalid intensity '{intensity}'. "
-                f"Must be one of: {', '.join(sorted(valid_intensities))}"
+                f"Invalid intensity '{intensity}'. Must be one of: {', '.join(sorted(valid_intensities))}"
             )
 
     def __init__(self):
@@ -40,11 +38,11 @@ class AugmentationRegistry:
         self,
         characteristics: List[str],
         environment: Optional[Dict[str, str]] = None,
-        intensity: str = "medium"
+        intensity: str = "medium",
     ) -> ConfigurableAugmentationPipeline:
         """
         Get augmentation pipeline using characteristic-based approach
-        
+
         Usage:
             pipeline = registry.get_pipeline(
                 characteristics=["changes_shape", "reflective_surface"],
@@ -89,15 +87,15 @@ class AugmentationRegistry:
 
         # Generate configuration
         config = self.translator.translate_from_characteristics(
-            characteristics=characteristics,
-            environment=environment,
-            intensity=intensity
+            characteristics=characteristics, environment=environment, intensity=intensity
         )
 
-        logger.info("Generated config: %d augmentations from %d rules",
-            len(config['augmentations']),
-            len(config['metadata']['applied_rules']))
-        return ConfigurableAugmentationPipeline(config['augmentations'])
+        logger.info(
+            "Generated config: %d augmentations from %d rules",
+            len(config["augmentations"]),
+            len(config["metadata"]["applied_rules"]),
+        )
+        return ConfigurableAugmentationPipeline(config["augmentations"])
 
     def get_available_characteristics(self) -> List[str]:
         """Get all available characteristics for GUI selection"""
@@ -107,28 +105,25 @@ class AugmentationRegistry:
         """Get all available environment options for GUI"""
         return self.translator.get_available_environments()
 
-
     def get_pipeline_info(
         self,
         characteristics: List[str],
         environment: Optional[Dict[str, str]] = None,
-        intensity: str = "medium"
+        intensity: str = "medium",
     ) -> Dict[str, Any]:
         """
         Get information about what pipeline would be generated (without creating it)
         Useful for GUI preview and debugging
-        
+
         Args:
             characteristics: Characteristics to analyze (required)
             environment: Environment conditions (optional)
             intensity: Intensity level
-            
+
         Returns:
             Pipeline information without creating actual pipeline
         """
-        config = self.translator.translate_from_characteristics(
-            characteristics, environment, intensity
-        )
+        config = self.translator.translate_from_characteristics(characteristics, environment, intensity)
 
         # Extract pipeline information
         augmentation_types = list(config["augmentations"].keys())
@@ -140,16 +135,18 @@ class AugmentationRegistry:
             "intensity": config["intensity"],
             "characteristics": config["characteristics"],
             "environment": config["environment"],
-            "applied_rules": config["metadata"]["applied_rules"]
+            "applied_rules": config["metadata"]["applied_rules"],
         }
+
 
 # Global registry instance (singleton pattern for performance)
 _registry_instance: Optional[AugmentationRegistry] = None
 
+
 def get_augmentation_registry() -> AugmentationRegistry:
     """
     Get global augmentation registry instance (singleton)
-    
+
     Returns:
         Shared AugmentationRegistry instance
     """
