@@ -144,7 +144,11 @@ class AutoLabeler:
             image_bgr = cv2.imread(image_path)
             if image_bgr is None:
                 logger.warning("Could not load image: %s", image_path)
-                results.append(self._empty_result(image_path))
+                # Report the ORIGINAL path (image_paths[i]), matching the success
+                # path's file_name below. Passing the transformed path here — then
+                # basename-ing it in _empty_result — made a failed image get a
+                # different file_name than a loaded one.
+                results.append(self._empty_result(image_paths[i]))
                 continue
 
             height, width = image_bgr.shape[:2]
@@ -206,11 +210,17 @@ class AutoLabeler:
         return results
 
     def _empty_result(self, image_path: str) -> Dict[str, Any]:
-        """Create empty result for failed image."""
+        """Create empty result for a failed image.
+
+        file_name uses the path as given. The caller passes the ORIGINAL,
+        untransformed path so this matches the success-path file_name exactly
+        (both are image_paths[i]) — a failed image must not get a different
+        file_name than a loaded one.
+        """
         result = {
             "class_ids": [],
             "scores": [],
-            "image_info": {"file_name": os.path.basename(image_path), "width": 0, "height": 0},
+            "image_info": {"file_name": image_path, "width": 0, "height": 0},
         }
         if self.config.output_mode in (OUTPUT_BOXES_ONLY, OUTPUT_BOTH):
             result["boxes"] = []
