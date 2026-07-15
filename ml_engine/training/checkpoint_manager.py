@@ -65,6 +65,8 @@ class CheckpointManager:
         early_cfg = self.config.get("early_stopping", {})
         self.early_stopping_enabled = early_cfg.get("enabled", False)
         self.patience = early_cfg.get("patience", 15)
+        # prefer early_stopping.min_delta, fall back to top-level min_delta, then 0.001
+        self.min_delta = early_cfg.get("min_delta", self.config.get("min_delta", 0.001))
         self.patience_counter = 0
         self.should_stop = False
 
@@ -116,8 +118,8 @@ class CheckpointManager:
             "model_state_dict": model_state,
             "optimizer_state_dict": optimizer.state_dict(),
             "metrics": metrics,
-            "best_metric": self.best_metric,
-            "best_epoch": self.best_epoch,
+            # best_metric / best_epoch are written after the _is_best update below
+            # (lines further down), so they reflect this epoch's decision.
             "timestamp": datetime.now().isoformat(),
             "trainable_only": self.save_trainable_only,
         }
@@ -137,8 +139,28 @@ class CheckpointManager:
         if extra_info:
             checkpoint["extra_info"] = extra_info
 
-        # Check if best
-        is_best = self._is_best(metrics)
+        # Determine improvement and update early stopping state BEFORE writing
+        # files so every saved checkpoint captures the fully up-to-date
+        # best_metric, best_epoch, and patience_counter (including the tick
+        # that _check_early_stopping would add for this epoch).
+        #
+        # If the monitored metric is absent this epoch (e.g. validation skipped),
+        # treat it as neither an improvement nor a miss: do NOT consume a patience
+        # tick. _check_early_stopping now takes a plain bool, so guard here.
+        if self.monitor_metric in metrics:
+            is_best = self._is_best(metrics)
+            self._check_early_stopping(is_best)
+        else:
+            logger.warning(
+                "monitor_metric '%s' not in metrics — skipping best/early-stopping update this epoch",
+                self.monitor_metric,
+            )
+            is_best = False
+
+        checkpoint["best_metric"] = self.best_metric
+        checkpoint["best_epoch"] = self.best_epoch
+        checkpoint["patience_counter"] = self.patience_counter
+        checkpoint["should_stop"] = self.should_stop
         saved_path = None
 
         # Save periodic checkpoint
@@ -163,9 +185,6 @@ class CheckpointManager:
         # Cleanup old checkpoints
         self._cleanup()
 
-        # Check early stopping
-        self._check_early_stopping(metrics)
-
         return saved_path
 
     def _is_best(self, metrics: Dict[str, float]) -> bool:
@@ -174,12 +193,11 @@ class CheckpointManager:
             return False
 
         current = metrics[self.monitor_metric]
-        min_delta = 0.001
 
         if self.mode == "max":
-            is_better = current > (self.best_metric + min_delta)
+            is_better = current > (self.best_metric + self.min_delta)
         else:
-            is_better = current < (self.best_metric - min_delta)
+            is_better = current < (self.best_metric - self.min_delta)
 
         if is_better:
             self.best_metric = current
@@ -192,22 +210,19 @@ class CheckpointManager:
 
         return False
 
-    def _check_early_stopping(self, metrics: Dict[str, float]) -> None:
-        """Check if training should stop early."""
+    def _check_early_stopping(self, is_best: bool) -> None:
+        """Check if training should stop early.
+
+        Receives the already-computed improvement decision from _is_best so
+        both codepaths use the same min_delta threshold and the same
+        best_metric reference point.  Re-deriving improvement here would
+        compare against the already-updated self.best_metric, always yielding
+        False and incorrectly consuming a patience tick on every epoch.
+        """
         if not self.early_stopping_enabled:
             return
 
-        if self.monitor_metric not in metrics:
-            return
-
-        # If we didn't improve, increment patience counter
-        current = metrics[self.monitor_metric]
-        if self.mode == "max":
-            improved = current > self.best_metric
-        else:
-            improved = current < self.best_metric
-
-        if not improved:
+        if not is_best:
             self.patience_counter += 1
             logger.info(f"No improvement for {self.patience_counter}/{self.patience} epochs")
 
@@ -258,7 +273,19 @@ class CheckpointManager:
         elif checkpoint_path == "last":
             path = self.output_dir / "last.pth"
         else:
-            path = Path(checkpoint_path)
+            path = Path(checkpoint_path).resolve()
+            # Path traversal is a RELATIVE-path concern: a relative checkpoint_path
+            # must not escape output_dir via `..`. Absolute paths come from
+            # application-controlled experiment directories (e.g. cross-experiment
+            # resume in Trainer._resume_from_checkpoint, which loads another
+            # experiment's <root>/<model>/best.pth) and are trusted. Confining
+            # absolute paths to output_dir would break that resume feature.
+            # RCE from a malicious checkpoint is defended separately by
+            # torch.load(weights_only=True) below.
+            if not Path(checkpoint_path).is_absolute():
+                safe_root = self.output_dir.resolve()
+                if not path.is_relative_to(safe_root):
+                    raise ValueError(f"Checkpoint path {path} is outside output_dir {safe_root}")
 
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {path}")
@@ -266,7 +293,7 @@ class CheckpointManager:
         logger.info(f"Loading checkpoint: {path}")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        checkpoint = torch.load(path, map_location=device)
+        checkpoint = torch.load(path, map_location=device, weights_only=True)
 
         # Load model (handle trainable-only)
         trainable_only = checkpoint.get("trainable_only", False)
@@ -308,6 +335,8 @@ class CheckpointManager:
         # Restore tracking state
         self.best_metric = checkpoint.get("best_metric", self.best_metric)
         self.best_epoch = checkpoint.get("best_epoch", -1)
+        self.patience_counter = checkpoint.get("patience_counter", self.patience_counter)
+        self.should_stop = checkpoint.get("should_stop", self.should_stop)
 
         return checkpoint
 

@@ -35,6 +35,7 @@ env/
 *~
 .DS_Store
 .claude
+.claude.json
 *.md
 !README.md
 !**/README.md
