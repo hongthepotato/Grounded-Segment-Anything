@@ -172,9 +172,13 @@ class JobManager:
             return False
 
         if job.status == JobStatus.PENDING:
-            # Job is in queue - mark as cancelled directly
+            # Mark cancelled, then LREM the ID from the pending-queue LIST so no
+            # worker can dequeue it. update_job maintains the status index but does
+            # NOT touch the queue list; remove_from_queue exists for exactly this
+            # (the docstring promises "Removes from queue"). The worker's
+            # post-dequeue status check stays as a backstop.
             self.store.update_job(job_id, status=JobStatus.CANCELLED, finished_at=datetime.now(timezone.utc))
-            # Note: Job will be skipped when worker tries to execute it
+            self.store.remove_from_queue(job_id)
             logger.info("Cancelled pending job %s", job_id[:8])
 
         elif job.status == JobStatus.RUNNING:
