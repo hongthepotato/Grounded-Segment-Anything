@@ -104,6 +104,14 @@ class ModelReportGenerator:
             report["simple_metrics"]["coverage_rate"] = simple_metrics.get("coverage_rate", 0)
             report["simple_metrics"]["quality_rate"] = simple_metrics.get("quality_rate", 0)
 
+        # Propagate evaluation_mode (e.g. "oracle_gt_prompts") from the evaluation
+        # results. generate_summary_text gates the oracle-mode caveat on
+        # report["evaluation_mode"]; without copying it here that caveat could
+        # never fire, silently hiding that oracle-mode mIoU is optimistic.
+        evaluation_mode = evaluation_results.get("evaluation_mode")
+        if evaluation_mode:
+            report["evaluation_mode"] = evaluation_mode
+
         # Add extra info if provided
         if extra_info:
             report["extra_info"] = extra_info
@@ -214,6 +222,14 @@ class ModelReportGenerator:
                 recommendations.append(
                     "Very good performance! For further improvement, "
                     "focus on edge cases and difficult examples."
+                )
+            elif overall_score >= 70:
+                # Without this arm, scores in [70, 80) produced NO recommendation
+                # at all: not < 70 (no "average" advice) and not >= 80 (no "very
+                # good" praise). A decent model got zero guidance.
+                recommendations.append(
+                    "Good performance. Solid results; focus on the weakest classes "
+                    "and difficult examples to push the score higher."
                 )
 
         return recommendations
