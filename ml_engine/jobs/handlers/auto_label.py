@@ -67,13 +67,20 @@ class AutoLabelHandler(JobHandler):
         if not classes:
             raise ValueError("classes required in job config")
 
-        # Transform paths
-        image_paths = []
+        # Validate against the RESOLVED filesystem path, but hand the RAW path to
+        # the labeler. AutoLabeler transforms internally for reading and reports the
+        # path it was given as the COCO file_name, so passing the transformed path
+        # here leaked absolute filesystem paths into annotations.json: a consumer
+        # doing os.path.join(image_dir, file_name) got a broken path, and the JSON
+        # stopped being portable between machines.
+        image_paths = []  # logical/original -> becomes COCO file_name
+        resolved_paths = []  # filesystem -> used for reading + visualization
         for raw_path in raw_image_paths:
             actual_path = transform_image_path(raw_path)
             if not Path(actual_path).exists():
                 raise ValueError(f"Image path not found: {raw_path} -> {actual_path}")
-            image_paths.append(actual_path)
+            image_paths.append(raw_path)
+            resolved_paths.append(actual_path)
 
         sub_logger.info("Transformed %d image paths", len(image_paths))
 
@@ -150,8 +157,8 @@ class AutoLabelHandler(JobHandler):
         for result in results:
             annotation_count += len(result.get("class_ids", []))
 
-        # Generate visualizations
-        for image_path, result in zip(image_paths, results):
+        # Generate visualizations (needs the FILESYSTEM path to read the image)
+        for image_path, result in zip(resolved_paths, results):
             try:
                 viz_filename = Path(image_path).stem + "_viz.jpg"
                 viz_path = str(viz_dir / viz_filename)
