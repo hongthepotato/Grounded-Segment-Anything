@@ -6,6 +6,12 @@ machine, the delete guard, and status-filter handling. Bug-hunting, not padding:
 several assertions would fail if a transition were wrong (e.g. cancelling a
 RUNNING job must set CANCELLING, NOT CANCELLED; deleting a non-terminal job must
 be refused — deleting a running job would be data loss).
+
+The mock is a deliberate limit, not a claim of coverage: against a MagicMock,
+"the job was enqueued" can only ever mean "a method was called" — these tests
+would still pass if enqueue_job wrote nothing at all. That submit_job really
+reaches Redis is asserted one tier up, against a genuine RedisJobStore over
+fakeredis, in tests/integration/test_job_store_worker.py (Scenario 5).
 """
 
 from __future__ import annotations
@@ -42,9 +48,12 @@ def _job(status=JobStatus.PENDING, **kw):
 
 
 class TestSubmitJob:
-    def test_valid_job_is_enqueued(self, manager, store):
+    def test_valid_job_is_handed_to_the_store_exactly_once(self, manager, store):
         job = manager.submit_job(job_type="teacher_training", config={"a": 1}, priority=2, tags=["x"])
         store.enqueue_job.assert_called_once_with(job)
+
+    def test_submitted_job_carries_the_requested_fields(self, manager):
+        job = manager.submit_job(job_type="teacher_training", config={"a": 1}, priority=2, tags=["x"])
         assert job.type == "teacher_training"
         assert job.status == JobStatus.PENDING
         assert job.config == {"a": 1}
@@ -56,7 +65,7 @@ class TestSubmitJob:
             manager.submit_job(job_type="not_a_real_type", config={})
         store.enqueue_job.assert_not_called()
 
-    def test_none_tags_becomes_empty_list(self, manager, store):
+    def test_none_tags_becomes_empty_list(self, manager):
         job = manager.submit_job(job_type="teacher_training", config={})
         assert job.tags == []
 
@@ -167,9 +176,23 @@ class TestListAndCount:
         assert any("Invalid status filter" in r.message for r in caplog.records)
         assert store.list_jobs.call_args.kwargs["status"] is None
 
-    def test_get_job_count_counts_returned_jobs(self, manager, store):
-        store.list_jobs.return_value = [_job(), _job(), _job()]
-        assert manager.get_job_count("running") == 3
+    def test_get_job_count_delegates_to_uncapped_store_count(self, manager, store):
+        # TRAP for the old implementation: get_job_count used to be
+        # len(self.list_jobs(status=..., limit=10000)), which reported 10000 for any
+        # status with more than 10000 jobs. Asserting list_jobs is never touched
+        # proves the cap is structurally gone, not merely raised.
+        store.count_jobs.return_value = 12345
+        assert manager.get_job_count("running") == 12345
+        store.count_jobs.assert_called_once_with(status=JobStatus.RUNNING)
+        store.list_jobs.assert_not_called()
+
+    def test_get_job_count_invalid_status_matches_list_jobs_behaviour(self, manager, store):
+        # Same documented gap as list_jobs above: both route through _parse_status,
+        # so a typo'd status counts EVERYTHING rather than erroring. Kept in parity
+        # deliberately — if that changes, it should change for both.
+        store.count_jobs.return_value = 0
+        manager.get_job_count("bogus")
+        assert store.count_jobs.call_args.kwargs["status"] is None
 
 
 # --------------------------------------------------------------------------- #
@@ -181,11 +204,14 @@ class TestQueueAndDelegation:
     def test_get_queue_status_structure(self, manager, store):
         store.get_queue_length.return_value = 4
         store.list_workers.return_value = []
-        store.list_jobs.return_value = []
+        store.count_jobs.return_value = 0
         status = manager.get_queue_status()
         assert status["queue_length"] == 4
         assert status["workers"] == []
         assert set(status["job_counts"]) == {"pending", "running", "completed", "failed", "cancelled"}
+        # One count per status, and none of them page through jobs.
+        assert store.count_jobs.call_count == 5
+        store.list_jobs.assert_not_called()
 
     def test_simple_delegations(self, manager, store):
         manager.get_queue_length()

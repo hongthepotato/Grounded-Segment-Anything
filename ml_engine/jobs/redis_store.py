@@ -117,7 +117,9 @@ class RedisJobStore:
         pipe = self.redis.pipeline()
         try:
             # Store job state (to_dict() already returns Redis-compatible strings)
+            # Build job_key -> job.to_dict() (str -> str) mapping, redis HASH
             pipe.hset(job_key, mapping=job.to_dict())
+            pipe.sadd(self._status_key(job.status), job.id)
 
             if job.priority > 0:
                 pipe.lpush(self.JOB_QUEUE_KEY, job.id)
@@ -178,7 +180,10 @@ class RedisJobStore:
         """
         job_key = f"{self.JOB_PREFIX}{job.id}"
         try:
-            self.redis.hset(job_key, mapping=job.to_dict())
+            pipe = self.redis.pipeline()
+            pipe.hset(job_key, mapping=job.to_dict())
+            pipe.sadd(self._status_key(job.status), job.id)
+            pipe.execute()
             logger.debug("Stored job %s (not yet queued)", job.id[:8])
         except RedisError as e:
             logger.error("Failed to store job %s: %s", job.id[:8], e)
@@ -409,6 +414,68 @@ class RedisJobStore:
             logger.error("Failed to list jobs: %s", e)
             return []
 
+    def count_jobs(self, status: Optional[JobStatus] = None) -> int:
+        """
+        Count jobs, optionally filtered by status.
+
+        Signature deliberately mirrors AsyncRedisJobStore.count_jobs. An earlier
+        draft also took a ``job_type`` filter, which no caller used and which the
+        async store does not accept — that is the exact sync/async drift this
+        module has already been bitten by twice, so the unused parameter is gone.
+        If counting by type is ever needed, add it to BOTH stores.
+
+        Only the ``status`` field is read per key, and those reads are PIPELINED
+        per SCAN batch — roughly one round-trip per batch instead of one per job.
+
+        Memory is O(number of job keys) because SCAN only guarantees
+        at-least-once delivery (it may return the same key twice when the
+        keyspace is rehashed mid-iteration), so keys must be de-duplicated to
+        avoid over-counting. That is still far cheaper than list_jobs, which
+        holds a fully constructed Job per key.
+
+        Args:
+            status: Optional status filter
+
+        Returns:
+            Number of matching jobs (0 on Redis error)
+        """
+        want_status = status.value if isinstance(status, JobStatus) else status
+
+        try:
+            count = 0
+            seen: set = set()
+            cursor = 0
+            while True:
+                cursor, keys = self.redis.scan(cursor=cursor, match=f"{self.JOB_PREFIX}*", count=100)
+                # The key IS the identity (job:{id}), so de-duping needs no extra read.
+                fresh = [k for k in keys if k not in seen]
+                seen.update(fresh)
+                if fresh:
+                    # transaction=False: plain pipelining. These are independent
+                    # reads with no atomicity requirement, so MULTI/EXEC would
+                    # only add two commands per batch.
+                    pipe = self.redis.pipeline(transaction=False)
+                    for key in fresh:
+                        pipe.hget(key, "status")
+                    for raw_status in pipe.execute():
+                        # None => the key was deleted between SCAN and read, or the
+                        # hash has no status field (corrupt: every Job.to_dict writes
+                        # one). Neither is a countable job.
+                        if raw_status is None:
+                            continue
+                        if want_status is not None:
+                            value = raw_status.decode() if isinstance(raw_status, bytes) else raw_status
+                            if value != want_status:
+                                continue
+                        count += 1
+                if cursor == 0:
+                    break
+            return count
+
+        except RedisError as e:
+            logger.error("Failed to count jobs: %s", e)
+            return 0
+
     def delete_job(self, job_id: str) -> bool:
         """
         Delete job from store.
@@ -421,7 +488,17 @@ class RedisJobStore:
         """
         job_key = f"{self.JOB_PREFIX}{job_id}"
         try:
-            result = self.redis.delete(job_key)
+            # Drop the status-index entry too, or the ID outlives the job it
+            # points at and the index over-counts forever (SCARD has no way to
+            # notice the hash is gone). Mirrors async delete_job.
+            raw = self.redis.hget(job_key, "status")
+            status_val = raw.decode() if isinstance(raw, bytes) else raw
+            pipe = self.redis.pipeline()
+            pipe.delete(job_key)
+            if status_val:
+                pipe.srem(self._status_key(status_val), job_id)
+            results = pipe.execute()
+            result = results[0] if results else 0
             if result:
                 logger.info("Deleted job %s", job_id[:8])
             return result > 0

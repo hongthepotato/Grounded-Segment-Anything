@@ -65,11 +65,12 @@ class TestIssue001StatusIndexMaintainedOnUpdate:
         job = Job(type=JobType.TEACHER_TRAINING.value, config={"x": 1})
         store.enqueue_job(job)
 
-        # Before transition: nothing in status indices.
-        pending_set = fake_redis.smembers("jobs:by_status:pending")
-        running_set = fake_redis.smembers("jobs:by_status:running")
-        assert pending_set == set()
-        assert running_set == set()
+        # Before transition: indexed under its creation status, and only there.
+        # This assertion used to read `pending_set == set()`, which documented a
+        # DIFFERENT gap rather than an invariant — enqueue_job did not maintain
+        # the index at all, so "empty" was the bug, not the contract.
+        assert fake_redis.smembers("jobs:by_status:pending") == {job.id.encode()}
+        assert fake_redis.smembers("jobs:by_status:running") == set()
 
         # Transition to RUNNING via update_job (the code path the sync worker uses).
         store.update_job(job.id, status=JobStatus.RUNNING)
@@ -78,6 +79,9 @@ class TestIssue001StatusIndexMaintainedOnUpdate:
         assert job.id.encode() in running_set, (
             "update_job did not add job to jobs:by_status:running. "
             "ISSUE-001 regression — filtered job queries will silently return empty."
+        )
+        assert fake_redis.smembers("jobs:by_status:pending") == set(), (
+            "update_job left the job in jobs:by_status:pending after moving it to running."
         )
 
     def test_status_index_removes_from_old_on_transition(self, store: RedisJobStore, fake_redis) -> None:

@@ -7,11 +7,14 @@ Coverage:
   Scenario 3 -- status index consistency: store, transition, list_jobs / count_jobs.
   Scenario 4 -- PEL drain after ACK: fully-ACKed stream leaves PEL at zero;
                a second AgentLoop finds nothing and does not re-process.
+  Scenario 5 -- the SYNC submit path: JobManager.submit_job against a real
+               RedisJobStore, mirroring Scenario 1 for the worker-side manager.
 
 Read before editing:
   ml_engine/jobs/async_manager.py      -- AsyncJobManager.submit_job(), cancel_job()
   ml_engine/jobs/async_redis_store.py  -- AsyncRedisJobStore, enqueue_job, store_job,
                                           update_job, remove_from_queue (LREM), list_jobs
+  ml_engine/jobs/manager.py            -- JobManager.submit_job() (sync, Scenario 5)
   ml_engine/jobs/models.py             -- Job, JobStatus, JobType
   ml_engine/agent/loop.py              -- AgentLoop (used for PEL test; StreamConsumer is ABC)
 
@@ -28,7 +31,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict
+from unittest.mock import MagicMock, patch
 
+import fakeredis
 import pytest
 import pytest_asyncio
 
@@ -36,6 +41,7 @@ from ml_engine.agent.loop import AgentLoop, apublish_event, ensure_consumer_grou
 from ml_engine.agent.stream_consumer import stream_key
 from ml_engine.jobs.async_manager import AsyncJobManager
 from ml_engine.jobs.async_redis_store import AsyncRedisJobStore
+from ml_engine.jobs.manager import JobManager
 from ml_engine.jobs.models import Job, JobStatus, JobType
 
 # ---------------------------------------------------------------------------
@@ -541,3 +547,89 @@ async def test_pel_clean_for_new_consumer_name(run_id: str, redis_async: Any) ->
 
     assert len(processed_1) == 1, "coordinator-1 must receive the new event, not coordinator-0's ACKed events"
     assert processed_1[0].get("type") == "new_task", "coordinator-1 must see new_task, not replayed heartbeat"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 5 -- the SYNC submit path (JobManager, not AsyncJobManager)
+#
+# Everything above drives AsyncJobManager. JobManager is separate code on the
+# worker side of the system, and its unit tests
+# (tests/unit/ml_engine/test_job_manager.py) mock the store away entirely --
+# there "the job was enqueued" means only that a method was called on a
+# MagicMock, which stays true even if enqueue_job writes nothing. These tests
+# close that gap for the one path where it matters: a submitted job that never
+# reaches Redis is a job that never runs.
+#
+# Deliberately NOT re-asserted here: priority LPUSH/RPUSH ordering and status
+# index membership. Those are store-level facts, already covered against the
+# sync store in tests/unit/ml_engine/test_redis_job_store.py and locked across
+# both stores by tests/contract/test_store_parity.py. What is unique to this
+# tier is the seam -- JobManager.submit_job actually landing in the keyspace.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sync_manager(fake_server: fakeredis.FakeServer):
+    """JobManager on a real RedisJobStore, sharing this test's FakeServer.
+
+    AsyncJobManager takes an injected client (redis_client=...), so the async
+    tests above just hand it the fixture. The sync JobManager builds its own
+    RedisJobStore from a URL instead, so the connection has to be patched at
+    construction. That asymmetry is a DI gap in the sync manager, not a
+    property worth asserting -- if JobManager ever grows a client parameter,
+    this fixture collapses to one line.
+    """
+    fake = fakeredis.FakeRedis(server=fake_server, decode_responses=False)
+    with (
+        patch("ml_engine.jobs.redis_store.redis.ConnectionPool") as pool_cls,
+        patch("ml_engine.jobs.redis_store.redis.Redis") as redis_cls,
+    ):
+        pool_cls.from_url.return_value = MagicMock()
+        redis_cls.return_value = fake
+        manager = JobManager("redis://localhost:6379")
+    try:
+        yield manager
+    finally:
+        manager.close()
+
+
+@pytest.mark.integration
+def test_sync_submit_job_is_readable_back_from_redis(sync_manager: Any) -> None:
+    """submit_job → the job is actually retrievable, with its config intact.
+    Catches: a submit path that returns a Job the keyspace never received."""
+    job = sync_manager.submit_job(
+        job_type=JobType.TEACHER_TRAINING.value,
+        config={"epochs": 50, "model": {"name": "resnet"}},
+        tags=["production"],
+    )
+
+    fetched = sync_manager.get_job(job.id)
+    assert fetched is not None, "submit_job returned a Job that Redis never received"
+    assert fetched.id == job.id
+    assert fetched.status == JobStatus.PENDING
+    assert fetched.config == {"epochs": 50, "model": {"name": "resnet"}}
+    assert fetched.tags == ["production"]
+
+
+@pytest.mark.integration
+def test_sync_submit_job_id_lands_in_the_shared_queue(sync_manager: Any, redis_sync: Any) -> None:
+    """The id is queued under the SAME key the async side reads (_QUEUE is the
+    async store's constant, asserted through an independent client).
+    Catches: hash stored but never queued -- PENDING forever, no worker ever sees it."""
+    job = sync_manager.submit_job(job_type=JobType.TEACHER_TRAINING.value, config={})
+
+    queued = [_decode(i) for i in redis_sync.lrange(_QUEUE, 0, -1)]
+    assert queued == [job.id]
+    assert sync_manager.get_queue_length() == 1
+
+
+@pytest.mark.integration
+def test_sync_submit_invalid_job_type_writes_nothing(sync_manager: Any, redis_sync: Any) -> None:
+    """Invalid job_type raises before any Redis write -- the sync mirror of
+    test_submit_invalid_job_type_raises_no_queue_entry.
+    Catches: validation placed after the enqueue, leaving an orphan hash or queue entry."""
+    with pytest.raises(ValueError, match="Invalid job type"):
+        sync_manager.submit_job(job_type="not_a_real_type", config={})
+
+    assert redis_sync.llen(_QUEUE) == 0, "invalid submit must not touch queue"
+    assert redis_sync.keys("job:*") == [], "invalid submit must not leave orphan hash"

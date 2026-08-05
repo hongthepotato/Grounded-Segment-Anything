@@ -237,15 +237,20 @@ class JobManager:
         Returns:
             List of Job objects (sorted by created_at, newest first)
         """
-        # Convert status string to enum
-        status_enum = None
-        if status:
-            try:
-                status_enum = JobStatus(status)
-            except ValueError:
-                logger.warning("Invalid status filter: %s", status)
+        return self.store.list_jobs(
+            status=self._parse_status(status), job_type=job_type, limit=limit, offset=offset
+        )
 
-        return self.store.list_jobs(status=status_enum, job_type=job_type, limit=limit, offset=offset)
+    @staticmethod
+    def _parse_status(status: Optional[str]) -> Optional[JobStatus]:
+        """Convert a status string to JobStatus; None (= no filter) if absent or invalid."""
+        if not status:
+            return None
+        try:
+            return JobStatus(status)
+        except ValueError:
+            logger.warning("Invalid status filter: %s", status)
+            return None
 
     def get_job_count(self, status: Optional[str] = None) -> int:
         """
@@ -257,8 +262,13 @@ class JobManager:
         Returns:
             Number of jobs
         """
-        jobs = self.list_jobs(status=status, limit=10000)
-        return len(jobs)
+        # Counts in the store, which applies NO limit. This used to be
+        # len(self.list_jobs(status=status, limit=10000)), which silently reported
+        # 10000 once a status exceeded that cap -- so a dashboard built on
+        # get_queue_status froze at 10000 and stopped reflecting the real backlog.
+        # It also materialized (and sorted) up to 10000 Job objects per call, five
+        # times per get_queue_status, only to take len().
+        return self.store.count_jobs(status=self._parse_status(status))
 
     def delete_job(self, job_id: str) -> bool:
         """
