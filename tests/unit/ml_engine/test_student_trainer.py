@@ -247,3 +247,32 @@ class TestBestPtPath:
         best_pt_path, _ = _run_train_mocked(tmp_path, {"metrics/mAP50(B)": 0.6})
         assert Path(best_pt_path).is_absolute()
         assert best_pt_path.endswith("best.pt")
+
+
+# ---------------------------------------------------------------------------
+# scheduler.type -> ultralytics cos_lr
+#
+# configs/defaults/distillation.yaml ships `scheduler.type: "cosine"`, but
+# _build_train_args never reads `type`. ultralytics defaults cos_lr=False
+# (linear decay), so every student trains on a schedule the config says it is
+# not using -- a silently ignored knob, not a crash.
+# ---------------------------------------------------------------------------
+
+
+class TestSchedulerType:
+    def test_cosine_scheduler_type_enables_cos_lr(self, tmp_path):
+        args = _make_trainer(tmp_path, {"scheduler": {"type": "cosine"}})._build_train_args()
+        assert args.get("cos_lr") is True
+
+    def test_linear_scheduler_type_leaves_cos_lr_off(self, tmp_path):
+        args = _make_trainer(tmp_path, {"scheduler": {"type": "linear"}})._build_train_args()
+        assert args.get("cos_lr") is False
+
+    def test_absent_scheduler_type_defaults_to_linear(self, tmp_path):
+        """No scheduler block -> ultralytics' own default (linear) must stand."""
+        args = _make_trainer(tmp_path, {})._build_train_args()
+        assert args.get("cos_lr") is False
+
+    def test_cosine_scheduler_type_is_case_insensitive(self, tmp_path):
+        args = _make_trainer(tmp_path, {"scheduler": {"type": "Cosine"}})._build_train_args()
+        assert args.get("cos_lr") is True

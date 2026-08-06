@@ -142,12 +142,28 @@ def _create_readme(
 
     training_info = training_info or {}
 
+    def _field(key: str, default: str = "N/A") -> str:
+        """
+        Render a training_info field, treating present-but-None as missing.
+
+        dict.get(key, default) substitutes only when the key is ABSENT, but
+        callers build this dict with plain .get() lookups of their own config
+        (trainer.py: {"epochs": self.config.get("epochs"), ...}), so a missing
+        setting arrives here present with value None. Without this, "{epochs}"
+        rendered the literal word "None" into the customer-facing README, and
+        an unwrapped None reached str.replace() as its second argument and
+        raised TypeError -- aborting the whole export so the user silently got
+        no package at all.
+        """
+        value = training_info.get(key)
+        return default if value is None else str(value)
+
     replacements = {
         "{model_name}": model_name,
         "{class_names}": ", ".join(class_names),
         "{num_classes}": str(len(class_names)),
-        "{training_date}": training_info.get("training_date", "N/A"),
-        "{epochs}": str(training_info.get("epochs", "N/A")),
+        "{training_date}": _field("training_date"),
+        "{epochs}": _field("epochs"),
         # Use `is not None` instead of truthiness so a genuinely-zero metric
         # (catastrophic training failure: mAP50=0.0) renders as "0.0%" instead
         # of being silently misrepresented as "N/A". Same fix for mIoU.

@@ -402,3 +402,76 @@ class TestLoadMergedModel:
         target = _TinyModel()
         with pytest.raises(RuntimeError, match=r"(?i)malformed|unknown"):
             load_merged_model(out, target)
+
+
+# ===========================================================================
+# Cross-branch namespace consistency
+#
+# merge_lora_weights has two ways of returning a "merged" model:
+#   branch A (nested PEFT)  -> returns model.model.merge_and_unload(), the INNER module
+#   branch C (no PEFT)      -> returns the model it was handed, unchanged
+#
+# For a WRAPPER whose .model was already merged (exactly what
+# GroundingDINOLoRA.from_lora_checkpoint(merge=True) leaves behind: PEFT's
+# merge_and_unload is consumed and the attribute is gone), branch C returns the
+# wrapper itself. Its state_dict keys are then prefixed with "model." while
+# branch A's are not -- so the same logical model exports under two
+# incompatible key namespaces depending on how it was loaded.
+# ===========================================================================
+
+
+class _AlreadyMergedWrapper(nn.Module):
+    """
+    The post-merge shape of GroundingDINOLoRA: `.model` holds a plain merged
+    module (PEFT's merge_and_unload already consumed and removed), and the
+    wrapper itself never exposed merge_and_unload.
+    """
+
+    def __init__(self, inner: nn.Module) -> None:
+        super().__init__()
+        self.model = inner
+
+
+class TestMergedNamespaceConsistency:
+    def test_already_merged_wrapper_yields_same_key_namespace_as_lora_path(self):
+        """
+        A model exported straight after LoRA training and the SAME model
+        exported after being reloaded-and-merged must produce the same
+        state_dict key namespace. Otherwise one checkpoint silently cannot be
+        loaded by the code that loads the other.
+        """
+        lora_path = merge_lora_weights(_GroundingDINOLoRAStub(_TinyModel()))
+        already_merged = merge_lora_weights(_AlreadyMergedWrapper(_TinyModel()))
+
+        assert set(already_merged.state_dict()) == set(lora_path.state_dict())
+
+    def test_already_merged_wrapper_checkpoint_loads_strictly(self, tmp_path: Path):
+        """
+        Round-trip: the checkpoint written for an already-merged wrapper must
+        load into the inner model class with strict=True. Today the keys carry
+        a "model." prefix the inner model has never heard of.
+        """
+        inner = _TinyModel()
+        merged = merge_lora_weights(_AlreadyMergedWrapper(inner))
+        ckpt = save_merged_model(merged, tmp_path / "merged.pth")
+
+        load_merged_model(ckpt, _TinyModel(), strict=True)
+
+    def test_already_merged_checkpoint_does_not_silently_load_nothing(self, tmp_path: Path):
+        """
+        The dangerous half of the same bug. With strict=False -- the setting
+        used whenever a caller wants tolerant loading -- a fully mismatched key
+        namespace raises NOTHING and transfers NO weights: every key lands in
+        missing_keys/unexpected_keys and the target keeps its freshly
+        initialised values. The result is a confidently-served random model.
+        """
+        inner = _TinyModel()
+        merged = merge_lora_weights(_AlreadyMergedWrapper(inner))
+        ckpt = save_merged_model(merged, tmp_path / "merged.pth")
+
+        target = _TinyModel()
+        load_merged_model(ckpt, target, strict=False)
+
+        assert torch.equal(target.linear.weight, inner.linear.weight), (
+            "strict=False silently loaded no weights -- the 'merged' model is untrained"
+        )

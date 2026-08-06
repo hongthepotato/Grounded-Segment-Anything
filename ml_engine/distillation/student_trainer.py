@@ -61,6 +61,11 @@ class StudentTrainer:
             "workers": training.get("num_workers", 4),
             "warmup_epochs": scheduler.get("warmup_epochs", 3),
             "lrf": min(1.0, scheduler.get("min_lr", 1e-5) / max(training.get("learning_rate", 1e-3), 1e-8)),
+            # distillation.yaml ships scheduler.type: "cosine", but ultralytics
+            # defaults cos_lr=False (linear decay). Without this mapping the key
+            # was read by nobody, so every student trained on a schedule its own
+            # config said it was not using -- silent, and invisible in the logs.
+            "cos_lr": str(scheduler.get("type", "linear")).lower() == "cosine",
             "val": True,
             "save": True,
             "save_period": evaluation.get("interval", 10),

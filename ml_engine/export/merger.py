@@ -59,6 +59,23 @@ def merge_lora_weights(model: nn.Module) -> nn.Module:
         logger.info("LoRA weights merged successfully")
         return merged_model
 
+    # No adapters anywhere. If this is a WRAPPER around an inner module (the
+    # shape from_lora_checkpoint(merge=True) leaves behind once PEFT's
+    # merge_and_unload has been consumed), return the inner module rather than
+    # the wrapper. The merged-LoRA branch above returns the inner module, so
+    # returning the wrapper here would export the same logical model under
+    # "model."-prefixed state_dict keys -- a namespace load_merged_model
+    # rejects outright with strict=True and, far worse, silently ignores with
+    # strict=False, leaving the target at its initialisation values.
+    inner = getattr(model, "model", None)
+    if isinstance(inner, nn.Module):
+        logger.warning(
+            "No LoRA adapters found on %s; exporting its inner .model so the "
+            "state_dict keys match the merged-LoRA path (already-merged model?).",
+            type(model).__name__,
+        )
+        return inner
+
     logger.warning("Model does not have LoRA adapters, returning as-is")
     return model
 

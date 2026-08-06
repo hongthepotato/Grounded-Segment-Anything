@@ -412,3 +412,52 @@ class TestCreateExportPackage:
 
         # No exports/ directory should have been created
         assert not (tmp_path / "experiment" / "exports").exists()
+
+
+# ===========================================================================
+# Present-but-None training_info values
+#
+# trainer.py builds training_info with plain .get() lookups:
+#     {"epochs": self.config.get("epochs"), "batch_size": ..., ...}
+# so a key absent from the training config arrives here PRESENT with value
+# None. dict.get(key, "N/A") only substitutes its default when the key is
+# MISSING, so None flows into str() and the customer-facing README renders the
+# literal word "None".
+# ===========================================================================
+
+
+class TestReadmeNoneValuedTrainingInfo:
+    def test_present_but_none_epochs_renders_na(self, tmp_path: Path, monkeypatch):
+        templates = tmp_path / "tpl"
+        templates.mkdir()
+        (templates / "README_template.md").write_text("Epochs: {epochs}")
+        monkeypatch.setattr(packager, "TEMPLATES_DIR", templates)
+
+        out = tmp_path / "README.md"
+        # Exactly the dict trainer.py builds when 'epochs' is absent from config.
+        _create_readme(out, class_names=["cat"], training_info={"epochs": None})
+
+        assert out.read_text() == "Epochs: N/A"
+
+    def test_present_but_none_training_date_renders_na(self, tmp_path: Path, monkeypatch):
+        templates = tmp_path / "tpl"
+        templates.mkdir()
+        (templates / "README_template.md").write_text("Trained: {training_date}")
+        monkeypatch.setattr(packager, "TEMPLATES_DIR", templates)
+
+        out = tmp_path / "README.md"
+        _create_readme(out, class_names=["cat"], training_info={"training_date": None})
+
+        assert out.read_text() == "Trained: N/A"
+
+    def test_zero_epochs_still_renders_zero_not_na(self, tmp_path: Path, monkeypatch):
+        """Guard the fix from over-reaching: 0 is a real value, not a missing one."""
+        templates = tmp_path / "tpl"
+        templates.mkdir()
+        (templates / "README_template.md").write_text("Epochs: {epochs}")
+        monkeypatch.setattr(packager, "TEMPLATES_DIR", templates)
+
+        out = tmp_path / "README.md"
+        _create_readme(out, class_names=["cat"], training_info={"epochs": 0})
+
+        assert out.read_text() == "Epochs: 0"
