@@ -66,6 +66,54 @@ class InferenceModelFactory:
 
         raise ValueError(f"Unknown segmenter backend: {spec.backend}")
 
+    @staticmethod
+    def _merge_inputs_newer_than(merged_ckpt: Path, spec: GroundingDINOModelSpec) -> bool:
+        """
+        True if the base checkpoint or any adapter file is newer than the cache.
+
+        Standard derived-artifact staleness test (same rule as make/ninja):
+        re-derive when any input outdates the output. mtime is a proxy, not
+        proof — it misses backdated swaps — but the exact alternative (hashing
+        gigabytes of weights per resolve) would defeat the cache's purpose.
+        """
+        try:
+            cache_mtime = merged_ckpt.stat().st_mtime
+        except OSError as e:
+            logger.info("Merged cache %s unreadable (%s); re-merging.", merged_ckpt, e)
+            return True
+
+        newest = 0.0
+        try:
+            base = Path(spec.base_checkpoint) if spec.base_checkpoint else None
+            if base is not None and base.is_file():
+                newest = base.stat().st_mtime
+        except OSError as e:
+            logger.info(
+                "Cannot stat base checkpoint %s (%s); it contributes no staleness evidence.",
+                spec.base_checkpoint,
+                e,
+            )
+        try:
+            adapter_dir = Path(spec.lora_adapter_path) if spec.lora_adapter_path else None
+            if adapter_dir is not None and adapter_dir.is_dir():
+                for f in adapter_dir.rglob("*"):
+                    # Just ignore the hidden files
+                    if f.name.startswith("."):
+                        continue
+                    try:
+                        if f.is_file():
+                            newest = max(newest, f.stat().st_mtime)
+                    except OSError:
+                        # Per-file: one unreadable stray must not blind the
+                        # check to every OTHER file's mtime.
+                        continue
+        except OSError:
+            pass
+        stale = newest > cache_mtime
+        if stale:
+            logger.info("Merged cache %s is older than its inputs; re-merging.", merged_ckpt)
+        return stale
+
     def _resolve_dino_checkpoint(self, spec: GroundingDINOModelSpec) -> str:
         """Resolve detector checkpoint path from source policy."""
         if spec.source == DETECTOR_SOURCE_CHECKPOINT:
@@ -87,7 +135,8 @@ class InferenceModelFactory:
             cache_path = str(Path(spec.lora_adapter_path).parent / "_merged_for_inference.pth")
         merged_ckpt = Path(cache_path)
         if merged_ckpt.exists():
-            return str(merged_ckpt)
+            if not self._merge_inputs_newer_than(merged_ckpt, spec):
+                return str(merged_ckpt)
 
         logger.info("Merging GroundingDINO base + LoRA for inference...")
         from ml_engine.models.teacher.grounding_dino_lora import load_grounding_dino_with_lora
